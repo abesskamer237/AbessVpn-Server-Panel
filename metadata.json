@@ -1,0 +1,6 @@
+{
+  "name": "Abess VIP Docker Deployer",
+  "description": "Portail d'analyse, déploiement et configuration client pour l'image Docker abess237/abess-vip (Xray VLESS WebSocket).",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
