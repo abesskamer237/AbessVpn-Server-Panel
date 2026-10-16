@@ -134,6 +134,9 @@ jobs:
           set -euo pipefail
           command -v docker >/dev/null 2>&1 || { echo "Docker is not installed on the VPS." >&2; exit 1; }
           docker compose version >/dev/null 2>&1 || { echo "Docker Compose plugin is missing." >&2; exit 1; }
+          command -v rsync >/dev/null 2>&1 || { echo "rsync is not installed on the VPS." >&2; exit 1; }
+          command -v ss >/dev/null 2>&1 || { echo "iproute2/ss is not installed on the VPS." >&2; exit 1; }
+          command -v curl >/dev/null 2>&1 || { echo "curl is not installed on the VPS." >&2; exit 1; }
           docker info >/dev/null 2>&1 || { echo "SSH user must be able to run Docker non-interactively." >&2; exit 1; }
           mkdir -p "$HOME/abessvpn-server"
           test -w "$HOME/abessvpn-server" || { echo "Cannot write to ~/abessvpn-server." >&2; exit 1; }
@@ -170,6 +173,7 @@ jobs:
             --exclude '.deploy.env' \
             ./ "$DEST:abessvpn-server/"
           scp -P "$VPS_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes .deploy.env "$DEST:abessvpn-server/.env.new"
+          ssh -p "$VPS_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes "$DEST" 'chmod 600 "$HOME/abessvpn-server/.env.new"'
 
       - name: Build and start services, then verify public HTTPS
         shell: bash
