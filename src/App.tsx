@@ -137,13 +137,8 @@ export default function App() {
   const [qrModalToken, setQrModalToken] = useState<ClientToken | null>(null);
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState<string>('');
 
-  // Server Logs
-  const [systemLogs, setSystemLogs] = useState<string[]>([
-    '[SYSTEM BOOT] AbessVpn Master Server v2026.4 initialisé avec succès.',
-    '[AUTH CORE] Super Admin configuré sur rigomanga4@gmail.com.',
-    '[TUNNEL GATE] Moteur WebSocket VLESS actif sur /@abess237.',
-    '[RESELLER ISOLATION] Masquage cryptographique des hôtes et SNI activé.',
-  ]);
+  // Server logs are populated by real actions; do not seed simulated startup status.
+  const [systemLogs, setSystemLogs] = useState<string[]>([]);
 
   const addLog = (msg: string) => {
     const time = new Date().toLocaleTimeString();
