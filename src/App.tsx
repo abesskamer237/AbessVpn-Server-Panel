@@ -1133,6 +1133,36 @@ export default function App() {
                   <p id="master-sni-help" className="mt-2 text-sm text-slate-300">Le SNI ne remplace pas l’adresse du serveur ni le Host HTTP. Pour cette configuration TLS via Caddy, utilise un nom correspondant à un certificat chargé par Caddy.</p>
                 </div>
 
+
+
+                <div className="md:col-span-2 rounded-xl border border-emerald-700/70 bg-emerald-950/20 p-4">
+                  <div className="mb-2 text-xs font-black uppercase tracking-wider text-emerald-300">Sécurité du transport — TLS</div>
+                  {["ws", "grpc", "httpupgrade", "xhttp"].includes(masterConfig.transport) ? (
+                    <>
+                      <div className="flex items-center gap-2 text-emerald-300 font-bold">
+                        <span className="inline-block w-2 h-2 rounded-full bg-emerald-400" />
+                        TLS activé · HTTPS sur TCP 443
+                      </div>
+                      <p className="mt-2 text-sm text-slate-300">
+                        Les profils VLESS/WS/TLS, gRPC/TLS, HTTPUpgrade/TLS et XHTTP/TLS utilisent le certificat HTTPS géré et renouvelé automatiquement par Caddy. Xray reçoit le trafic après terminaison TLS côté serveur.
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <div className="flex items-center gap-2 text-amber-300 font-bold">
+                        <span className="inline-block w-2 h-2 rounded-full bg-amber-400" />
+                        TLS non utilisé pour ce transport direct
+                      </div>
+                      <p className="mt-2 text-sm text-slate-300">
+                        {masterConfig.transport === "native"
+                          ? "Shadowsocks natif transporte TCP et UDP sur son port dédié."
+                          : masterConfig.transport === "kcp"
+                            ? "VMess mKCP transporte les paquets sur UDP ; la sécurité dépend du protocole VMess."
+                            : "VMess RAW/TCP utilise son port dédié et ne passe pas par le proxy HTTPS Caddy."}
+                      </p>
+                    </>
+                  )}
+                </div>
                 <div className="md:col-span-2">
                   <label className="block text-slate-300 font-semibold mb-1">UUID Principal Xray / VLESS</label>
                   <input
