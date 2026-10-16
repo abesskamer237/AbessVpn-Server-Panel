@@ -5,7 +5,7 @@ ABESS VPN combines a Node.js/Express control plane, a React administration panel
 ## Status and architecture
 
 - **Control plane:** authentication, reseller accounts, per-licence UUIDs, encrypted `abess://` links, expiry, device limits, and licence administration.
-- **Xray-core:** the API writes `data/xray-config.json` from active licences. Managed profiles include VLESS, VMess, Trojan and Shadowsocks AEAD over WebSocket, gRPC, HTTPUpgrade and XHTTP. A separate native Shadowsocks TCP/UDP listener is available on port 10050.
+- **Xray-core:** the API writes `data/xray-config.json` from active licences. Managed profiles include VLESS, VMess, Trojan and Shadowsocks AEAD over WebSocket, gRPC, HTTPUpgrade and XHTTP through TLS 443; VMess also supports RAW/TCP and mKCP/UDP, while Shadowsocks supports RAW/TCP and native TCP/UDP. Native listeners are published on dedicated ports.
 - **Quota enforcement:** the API reads Xray's real user counters and disables a licence in Xray when it expires or exhausts its quota. Client-submitted byte counts are not treated as authoritative.
 - **HTTPS:** Caddy automatically obtains and renews the certificate for `VPN_DOMAIN`. TLS terminates at Caddy on TCP 443; path routes forward supported profile traffic to private Xray inbounds. Native Shadowsocks TCP/UDP is separately published on port 10050.
 - **No sample production credentials:** the first boot requires an administrator email/password in environment variables. The admin password is stored with scrypt hashing. The master encryption secret must remain stable or previously issued encrypted links can no longer be decrypted.
@@ -108,10 +108,10 @@ Licence issuance stays in the authenticated administration/reseller panel. Publi
 
 ## Multi-protocol Xray profiles
 
-The panel supports **VLESS, VMess, Trojan and Shadowsocks AEAD** with **WebSocket, gRPC, HTTPUpgrade and XHTTP** transports. Caddy terminates TLS on public TCP 443 and routes each HTTP-based profile to a private Xray inbound.
+The panel supports **VLESS, VMess, Trojan and Shadowsocks AEAD** with **WebSocket, gRPC, HTTPUpgrade and XHTTP** through public TLS TCP 443. For direct transports, **VMess RAW/TCP** listens on TCP 10021, **Shadowsocks RAW/TCP** on TCP 10023, and **VMess mKCP/UDP** on UDP 10031. Caddy handles only HTTP-based profiles; it cannot proxy raw TCP or UDP.
 
-**Native TCP/UDP:** Shadowsocks also has a dedicated listener on port `10050` for both TCP and UDP. Permit TCP and UDP 10050 in the VPS/provider firewall when that profile is selected. This native mode does not use the public HTTPS certificate.
+**Native TCP/UDP:** Shadowsocks AEAD also has a dedicated listener on port `10050` for both TCP and UDP. Permit the relevant TCP/UDP ports in the VPS/provider firewall. Direct RAW and mKCP modes do not pass through the public HTTPS reverse proxy.
 
-mKCP, Hysteria/QUIC, WireGuard, TUN and other native UDP inbound modes are not advertised as enabled: they need separate UDP ports and protocol-specific client/server configuration. Native UDP cannot be forwarded through the ordinary HTTP reverse proxy. The Android app's local SOCKS inbound has UDP enabled, which is separate from a native public UDP listener.
+**Transport security and compatibility:** the current public profile generator intentionally limits unwrapped RAW TCP to VMess and encrypted Shadowsocks, and mKCP to VMess. VLESS/Trojan RAW require TLS or REALITY and are not enabled here in insecure `security: none` mode. The current profile generator does not yet provision separate WireGuard, Hysteria inbound, TUN, SOCKS or HTTP-proxy client profiles; those are different inbound modes with different keys, routing and client expectations. The Android app must explicitly support a selected profile/transport before that profile can be used from the ABESS app.
 
 The legacy path `/@abess237` remains for VLESS + WS. Other HTTP-carried profiles use `/@abess237/<protocol>/<transport>`. A successful compile or Xray config validation does not replace a real Android connection test for every combination.
