@@ -76,8 +76,13 @@ export interface MasterServerConfig {
 }
 
 // Master Configuration Helper
+const PUBLIC_HOST_PATTERN = /^(?=.{1,253}$)([a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)(\.([a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?))*$/;
+function isValidPublicHost(value: unknown): value is string {
+  return typeof value === 'string' && value === value.trim() && PUBLIC_HOST_PATTERN.test(value);
+}
+
 function loadMasterConfig(): MasterServerConfig {
-  const vpnDomain = (process.env.VPN_DOMAIN || 'localhost').trim().toLowerCase();
+  const vpnDomain = (process.env.VPN_DOMAIN || '').trim().toLowerCase();
   const defaults: MasterServerConfig = {
     serverHost: vpnDomain,
     serverPort: Number(process.env.VPN_PORT) || 443,
@@ -97,10 +102,10 @@ function loadMasterConfig(): MasterServerConfig {
       const merged: MasterServerConfig = {
         ...defaults,
         ...stored,
-        serverHost: vpnDomain,
-        serverPort: Number(process.env.VPN_PORT) || 443,
+        serverHost: typeof stored.serverHost === 'string' ? stored.serverHost.trim() : defaults.serverHost,
+        serverPort: Number(stored.serverPort) || defaults.serverPort,
         path: '/@abess237',
-        sniHost: vpnDomain,
+        sniHost: typeof stored.sniHost === 'string' ? stored.sniHost.trim() : (typeof stored.serverHost === 'string' ? stored.serverHost.trim() : defaults.sniHost),
         secretPassphrase: process.env.MASTER_SECRET || ''
       };
       // Shadowsocks UDP uses its native socket, not an HTTP/WebSocket proxy.
@@ -112,6 +117,7 @@ function loadMasterConfig(): MasterServerConfig {
       ) {
         merged.transport = 'ws';
       }
+      merged.serverPort = xrayPublicPort(merged.protocol, merged.transport, 443);
       return merged;
     } catch {
       // Recreate from environment defaults below.
@@ -265,12 +271,13 @@ function xrayProfilePort(protocol: XrayProtocol, transport: XrayTransport): numb
   if (transportIndex < 0) throw new Error('Transport Xray non pris en charge.');
   return 10000 + XRAY_PROTOCOLS.indexOf(protocol) * 5 + transportIndex;
 }
-function xrayPublicPort(protocol: string, transport: string, fallbackPort: number): number {
+function xrayPublicPort(protocol: string, transport: string, _fallbackPort: number): number {
   if (transport === 'native' && protocol === 'shadowsocks') return 10050;
   if (protocol === 'vmess' && (transport === 'raw' || transport === 'kcp')) {
     return xrayProfilePort('vmess', transport);
   }
-  return fallbackPort;
+  // All HTTP-based transports terminate TLS at Caddy, which serves public TCP/443.
+  return 443;
 }
 function xrayStreamSettings(transport: XrayTransport, profilePath: string): Record<string, unknown> {
   switch (transport) {
@@ -959,7 +966,30 @@ async function startServer() {
       });
       return;
     }
-    const updated = { ...current, ...req.body, protocol: requestedProtocol, transport: requestedTransport, path: '/@abess237' };
+    const requestedHost = typeof req.body?.serverHost === 'string' ? req.body.serverHost.trim() : current.serverHost;
+    const requestedSni = typeof req.body?.sniHost === 'string' ? req.body.sniHost.trim() : current.sniHost;
+    if (!isValidPublicHost(requestedHost) || !isValidPublicHost(requestedSni)) {
+      res.status(400).json({
+        success: false,
+        error: 'Renseignez un hôte public et un SNI valides (nom DNS ou IPv4, sans protocole, port ni chemin). Pour les transports TLS, utilisez un domaine couvert par le certificat HTTPS.'
+      });
+      return;
+    }
+    const effectivePort = requestedTransport === 'native' ? 10050
+      : requestedTransport === 'raw' ? 10060
+      : requestedTransport === 'kcp' ? 10061
+      : 443;
+    const updated: MasterServerConfig = {
+      ...current,
+      ...req.body,
+      serverHost: requestedHost,
+      sniHost: requestedSni,
+      serverPort: effectivePort,
+      protocol: requestedProtocol,
+      transport: requestedTransport,
+      path: '/@abess237',
+      secretPassphrase: process.env.MASTER_SECRET || current.secretPassphrase
+    };
     saveMasterConfig(updated);
     syncXrayConfig();
     res.json({ success: true, config: updated });
@@ -1025,6 +1055,15 @@ async function startServer() {
     }
     if (!deviceId || deviceId.length > 128 || deviceId.includes('\r') || deviceId.includes('\n') || deviceId.includes('\0')) {
       res.status(400).json({ valid: false, error: 'Identifiant d’appareil invalide ou manquant.' });
+      return;
+    }
+
+    const masterConfig = loadMasterConfig();
+    if (!isValidPublicHost(masterConfig.serverHost) || !isValidPublicHost(masterConfig.sniHost)) {
+      res.status(503).json({
+        valid: false,
+        error: 'Le serveur VPN n’est pas configuré. Le Super Administrateur doit renseigner l’hôte et le SNI dans le panneau.'
+      });
       return;
     }
 
@@ -1099,8 +1138,7 @@ async function startServer() {
     found.lastSeenIp = clientIp;
     saveTokens(tokens);
 
-    const masterConfig = loadMasterConfig();
-    const host = masterConfig.serverHost || req.get('host') || 'abess-ops-hub-d-ploiement-docker.ai.studio';
+    const host = masterConfig.serverHost;
     const msRemaining = Math.max(0, expiryTime - now);
     const daysRemaining = Math.ceil(msRemaining / (1000 * 3600 * 24));
 
@@ -1125,6 +1163,8 @@ async function startServer() {
           : '/@abess237',
         uuid: found.clientUuid || masterConfig.uuid,
         sni: masterConfig.sniHost,
+        wsHost: host,
+        method: masterConfig.protocol === 'shadowsocks' ? 'aes-128-gcm' : undefined,
         protocol: masterConfig.protocol,
         transport: masterConfig.transport,
         security: ['native', 'raw', 'kcp'].includes(masterConfig.transport) ? 'none' : 'tls'
