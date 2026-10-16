@@ -182,6 +182,7 @@ jobs:
           assert.ok(xrayUsers.some(user => user.id === licenceB.clientUuid));
 
           // The API must never fake an HTTP/WebSocket handshake as a VPN tunnel.
+          const crlf = String.fromCharCode(13, 10);
           const websocketResponse = await new Promise((resolve, reject) => {
             const socket = net.connect(3187, '127.0.0.1', () => {
               socket.write([
@@ -193,7 +194,7 @@ jobs:
                 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==',
                 '',
                 '',
-              ].join('\\r\\n'));
+            ].join(crlf));
             });
             let response = '';
             const timeout = setTimeout(() => {
@@ -202,7 +203,7 @@ jobs:
             }, 3000);
             socket.on('data', (chunk) => {
               response += chunk.toString('utf8');
-              if (response.includes('\\r\\n\\r\\n')) {
+              if (response.includes(crlf + crlf)) {
                 clearTimeout(timeout);
                 socket.destroy();
                 resolve(response);
