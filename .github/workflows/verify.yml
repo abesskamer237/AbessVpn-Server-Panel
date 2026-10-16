@@ -219,6 +219,9 @@ jobs:
           assert.ok(vmessKcpInbound, 'VMess mKCP/UDP inbound must be generated');
           assert.equal(vmessKcpInbound.port, 10061);
           assert.equal(vmessKcpInbound.streamSettings.network, 'kcp');
+          const compose = fs.readFileSync('docker-compose.yml', 'utf8');
+          assert.ok(compose.includes('"10060:10060/tcp"'), 'VMess RAW/TCP must be published by Docker Compose');
+          assert.ok(compose.includes('"10061:10061/udp"'), 'VMess mKCP/UDP must be published by Docker Compose');
           assert.ok(!configResponse.inbounds.some(inbound => inbound.tag === 'vless-raw-in'), 'RAW must not expose VLESS without TLS');
           assert.ok(!configResponse.inbounds.some(inbound => inbound.tag === 'trojan-kcp-in'), 'mKCP must not expose Trojan without TLS');
 
