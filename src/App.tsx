@@ -1060,14 +1060,14 @@ export default function App() {
                   {/* Generated Xray profiles with TLS on TCP 443; native Shadowsocks TCP/UDP uses port 10050. */}
                 <div>
                   <label className="block text-slate-300 font-semibold mb-1">Protocole Xray</label>
-                  <select value={masterConfig.protocol} onChange={(e) => setMasterConfig({ ...masterConfig, protocol: e.target.value, transport: (e.target.value !== "shadowsocks" && masterConfig.transport === "native") || (e.target.value !== "vmess" && ["raw", "kcp"].includes(masterConfig.transport)) ? "ws" : masterConfig.transport })} className="w-full bg-[#03060e] border border-emerald-900 rounded-lg px-3 py-2 text-emerald-200">
+                  <select value={masterConfig.protocol} onChange={(e) => { const protocol = e.target.value; const transport = protocol === "shadowsocks" ? "native" : (masterConfig.transport === "native" || (protocol !== "vmess" && ["raw", "kcp"].includes(masterConfig.transport))) ? "ws" : masterConfig.transport; setMasterConfig({ ...masterConfig, protocol, transport }); }} className="w-full bg-[#03060e] border border-emerald-900 rounded-lg px-3 py-2 text-emerald-200">
                     <option value="vless">VLESS</option><option value="vmess">VMess</option><option value="trojan">Trojan</option><option value="shadowsocks">Shadowsocks AEAD</option>
                   </select>
                 </div>
                 <div>
                   <label className="block text-slate-300 font-semibold mb-1">Transport</label>
                   <select value={masterConfig.transport} onChange={(e) => setMasterConfig({ ...masterConfig, transport: e.target.value })} className="w-full bg-[#03060e] border border-emerald-900 rounded-lg px-3 py-2 text-emerald-200">
-                    <option value="ws">WebSocket (WS)</option><option value="grpc">gRPC</option><option value="httpupgrade">HTTPUpgrade</option><option value="xhttp">XHTTP</option>
+                    <option value="ws" disabled={masterConfig.protocol === "shadowsocks"}>WebSocket (WS)</option><option value="grpc" disabled={masterConfig.protocol === "shadowsocks"}>gRPC</option><option value="httpupgrade" disabled={masterConfig.protocol === "shadowsocks"}>HTTPUpgrade</option><option value="xhttp" disabled={masterConfig.protocol === "shadowsocks"}>XHTTP</option>
                     <option value="raw" disabled={masterConfig.protocol !== "vmess"}>RAW / TCP direct (VMess)</option>
                     <option value="kcp" disabled={masterConfig.protocol !== "vmess"}>mKCP / UDP (VMess)</option>
                     <option value="native" disabled={masterConfig.protocol !== "shadowsocks"}>TCP + UDP natifs (Shadowsocks)</option>
