@@ -137,6 +137,27 @@ jobs:
             'Content-Type': 'application/json',
             Authorization: `Bearer ${login.token}`,
           };
+
+          // Admin-configured Host/SNI must survive subsequent master-config reads.
+          const protocolConfigUpdate = await fetch(`${base}/api/v1/admin/server-config`, {
+            method: 'PUT',
+            headers: adminHeaders,
+            body: JSON.stringify({
+              serverHost: 'profile.example.test',
+              sniHost: 'tls.example.test',
+              serverPort: 443,
+              protocol: 'vless',
+              transport: 'ws',
+            }),
+          });
+          assert.equal(protocolConfigUpdate.status, 200);
+          const protocolConfigRead = await fetch(`${base}/api/v1/admin/server-config`, {
+            headers: { Authorization: `Bearer ${login.token}` },
+          });
+          assert.equal(protocolConfigRead.status, 200);
+          const savedProtocolConfig = await protocolConfigRead.json();
+          assert.equal(savedProtocolConfig.serverHost, 'profile.example.test');
+          assert.equal(savedProtocolConfig.sniHost, 'tls.example.test');
           const createA = await fetch(`${base}/api/v1/admin/tokens`, {
             method: 'POST',
             headers: adminHeaders,
@@ -158,6 +179,9 @@ jobs:
             assert.equal(result.valid, true);
             assert.equal(result.deviceLimit, 2);
             assert.equal(result.serverConfig.uuid, licenceA.clientUuid);
+            assert.equal(result.serverConfig.address, 'profile.example.test');
+            assert.equal(result.serverConfig.sni, 'tls.example.test');
+            assert.equal(result.serverConfig.wsHost, 'profile.example.test');
             if (stableUuid) assert.equal(result.serverConfig.uuid, stableUuid, 'the VLESS UUID for one licence must remain stable');
             stableUuid = result.serverConfig.uuid;
           }
