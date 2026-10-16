@@ -113,6 +113,6 @@ The panel supports **VLESS, VMess, Trojan and Shadowsocks AEAD** with **WebSocke
 
 **Native TCP/UDP:** Shadowsocks also has a dedicated listener on port `10050` for both TCP and UDP. Permit TCP and UDP 10050 in the VPS/provider firewall when that profile is selected. This native mode does not use the public HTTPS certificate.
 
-mKCP, Hysteria/QUIC, WireGuard, TUN and other native UDP inbound modes are not advertised as enabled: they need separate UDP ports and protocol-specific client/server configuration. Native UDP cannot be forwarded through the ordinary HTTP reverse proxy. The Android app's local SOCKS inbound has UDP enabled, which is separate from a native public UDP listener.
+mKCP is enabled only for VMess on UDP 10061, and Shadowsocks uses its native TCP+UDP listener on port 10050. Hysteria/QUIC, WireGuard and TUN are not enabled in this release because they require their own protocol-specific configuration and client compatibility. Native UDP cannot be forwarded through the ordinary HTTP reverse proxy. The Android app's local SOCKS inbound has UDP enabled, which is separate from a native public UDP listener.
 
 The legacy path `/@abess237` remains for VLESS + WS. Other HTTP-carried profiles use `/@abess237/<protocol>/<transport>`. A successful compile or Xray config validation does not replace a real Android connection test for every combination.
