@@ -224,9 +224,16 @@ function xrayUserEmail(token: ClientToken): string {
 }
 
 const XRAY_PROTOCOLS = ['vless', 'vmess', 'trojan', 'shadowsocks'] as const;
-const XRAY_TRANSPORTS = ['ws', 'grpc', 'httpupgrade', 'xhttp'] as const;
+const XRAY_WEB_TRANSPORTS = ['ws', 'grpc', 'httpupgrade', 'xhttp'] as const;
+// RAW is direct TCP; mKCP is a UDP-based transport. They are enabled for VMess,
+// whose protocol layer supplies encryption without relying on a TLS web proxy.
+const XRAY_DIRECT_TRANSPORTS = ['raw', 'kcp'] as const;
+const XRAY_TRANSPORTS: readonly (typeof XRAY_WEB_TRANSPORTS[number] | typeof XRAY_DIRECT_TRANSPORTS[number])[] = [
+  ...XRAY_WEB_TRANSPORTS, ...XRAY_DIRECT_TRANSPORTS
+];
 type XrayProtocol = typeof XRAY_PROTOCOLS[number];
-type XrayTransport = typeof XRAY_TRANSPORTS[number] | 'native';
+type XrayWebTransport = typeof XRAY_WEB_TRANSPORTS[number];
+type XrayTransport = XrayWebTransport | typeof XRAY_DIRECT_TRANSPORTS[number] | 'native';
 
 function isXrayProtocol(value: unknown): value is XrayProtocol {
   return typeof value === 'string' && (XRAY_PROTOCOLS as readonly string[]).includes(value);
@@ -240,15 +247,37 @@ function xrayProfilePath(protocol: XrayProtocol, transport: XrayTransport, custo
   if (protocol === 'vless' && transport === 'ws') return normalizedPath(customWsPath);
   return '/@abess237/' + protocol + '/' + transport;
 }
-function xrayProfilePort(protocol: XrayProtocol, transport: typeof XRAY_TRANSPORTS[number]): number {
-  return 10000 + XRAY_PROTOCOLS.indexOf(protocol) * 5 + XRAY_TRANSPORTS.indexOf(transport);
+function xrayProfilePort(protocol: XrayProtocol, transport: XrayTransport): number {
+  if (transport === 'raw') return 10060;
+  if (transport === 'kcp') return 10061;
+  if (transport === 'native') return 10050;
+  const transportIndex = XRAY_WEB_TRANSPORTS.indexOf(transport as XrayWebTransport);
+  if (transportIndex < 0) throw new Error('Transport Xray non pris en charge.');
+  return 10000 + XRAY_PROTOCOLS.indexOf(protocol) * 5 + transportIndex;
 }
-function xrayStreamSettings(transport: typeof XRAY_TRANSPORTS[number], profilePath: string): Record<string, unknown> {
+function xrayPublicPort(protocol: string, transport: string, fallbackPort: number): number {
+  if (transport === 'native' && protocol === 'shadowsocks') return 10050;
+  if (protocol === 'vmess' && (transport === 'raw' || transport === 'kcp')) {
+    return xrayProfilePort('vmess', transport);
+  }
+  return fallbackPort;
+}
+function xrayStreamSettings(transport: XrayTransport, profilePath: string): Record<string, unknown> {
   switch (transport) {
     case 'ws': return { network: 'ws', security: 'none', wsSettings: { path: profilePath } };
     case 'grpc': return { network: 'grpc', security: 'none', grpcSettings: { serviceName: profilePath.replace(/^\/+/, ''), multiMode: false } };
     case 'httpupgrade': return { network: 'httpupgrade', security: 'none', httpupgradeSettings: { path: profilePath, host: '' } };
     case 'xhttp': return { network: 'xhttp', security: 'none', xhttpSettings: { path: profilePath, mode: 'auto' } };
+    case 'raw': return { network: 'raw', security: 'none', rawSettings: { header: { type: 'none' } } };
+    case 'kcp': return {
+      network: 'kcp',
+      security: 'none',
+      kcpSettings: {
+        mtu: 1350, tti: 20, uplinkCapacity: 5, downlinkCapacity: 20,
+        congestion: false, readBufferSize: 2, writeBufferSize: 2
+      }
+    };
+    default: throw new Error('Transport non routable dans la matrice HTTP.');
   }
 }
 
@@ -261,7 +290,8 @@ function syncXrayConfig(tokens: ClientToken[] = loadTokens()): boolean {
     typeof token.clientUuid === 'string' && token.clientUuid.length > 0);
   const inbounds: Array<Record<string, unknown>> = [];
   for (const protocol of XRAY_PROTOCOLS) {
-    for (const transport of XRAY_TRANSPORTS) {
+    const transports = protocol === 'vmess' ? XRAY_TRANSPORTS : XRAY_WEB_TRANSPORTS;
+    for (const transport of transports) {
       const profilePath = xrayProfilePath(protocol, transport, masterConfig.path);
       const users = activeTokens.map(token => ({ id: token.clientUuid as string, email: xrayUserEmail(token), level: 0 }));
       let settings: Record<string, unknown>;
@@ -811,7 +841,7 @@ async function startServer() {
       bandwidthGb: requestedGb,
       expiresAt: calculatedExpiresAt,
       serverHost: masterConfig.serverHost,
-      serverPort: masterConfig.transport === 'native' && masterConfig.protocol === 'shadowsocks' ? 10050 : masterConfig.serverPort,
+      serverPort: xrayPublicPort(masterConfig.protocol, masterConfig.transport, masterConfig.serverPort),
       path: isXrayProtocol(masterConfig.protocol) && isXrayTransport(masterConfig.transport)
         ? xrayProfilePath(masterConfig.protocol, masterConfig.transport, masterConfig.path)
         : '/@abess237',
@@ -906,8 +936,16 @@ async function startServer() {
     const current = loadMasterConfig();
     const requestedProtocol = req.body?.protocol ?? current.protocol;
     const requestedTransport = req.body?.transport ?? current.transport;
-    if (!isXrayProtocol(requestedProtocol) || !isXrayTransport(requestedTransport) || (requestedTransport === 'native' && requestedProtocol !== 'shadowsocks')) {
-      res.status(400).json({ success: false, error: 'Profils autorisés : VLESS, VMess, Trojan, Shadowsocks ; transports WS, gRPC, HTTPUpgrade, XHTTP. TCP/UDP natif est disponible pour Shadowsocks.' });
+    if (
+      !isXrayProtocol(requestedProtocol) ||
+      !isXrayTransport(requestedTransport) ||
+      (requestedTransport === 'native' && requestedProtocol !== 'shadowsocks') ||
+      ((requestedTransport === 'raw' || requestedTransport === 'kcp') && requestedProtocol !== 'vmess')
+    ) {
+      res.status(400).json({
+        success: false,
+        error: 'VLESS, VMess, Trojan et Shadowsocks sont disponibles en WS/gRPC/HTTPUpgrade/XHTTP. VMess prend aussi en charge RAW/TCP et mKCP/UDP ; Shadowsocks natif prend en charge TCP + UDP.'
+      });
       return;
     }
     const updated = { ...current, ...req.body, protocol: requestedProtocol, transport: requestedTransport, path: '/@abess237' };
@@ -1070,7 +1108,7 @@ async function startServer() {
       status: found.status,
       serverConfig: {
         address: host,
-        port: masterConfig.transport === 'native' && masterConfig.protocol === 'shadowsocks' ? 10050 : masterConfig.serverPort,
+        port: xrayPublicPort(masterConfig.protocol, masterConfig.transport, masterConfig.serverPort),
         path: isXrayProtocol(masterConfig.protocol) && isXrayTransport(masterConfig.transport)
           ? xrayProfilePath(masterConfig.protocol, masterConfig.transport, masterConfig.path)
           : '/@abess237',
@@ -1078,7 +1116,7 @@ async function startServer() {
         sni: masterConfig.sniHost,
         protocol: masterConfig.protocol,
         transport: masterConfig.transport,
-        security: masterConfig.transport === 'native' ? 'none' : 'tls'
+        security: ['native', 'raw', 'kcp'].includes(masterConfig.transport) ? 'none' : 'tls'
       }
     });
   };

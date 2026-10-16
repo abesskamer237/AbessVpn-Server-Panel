@@ -61,7 +61,7 @@ jobs:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
-          VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD }}
+          VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD || secrets.VPS_PASSWORD }}
           VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
           VPS_PORT: ${{ vars.VPS_PORT }}
           VPN_DOMAIN: ${{ vars.VPN_DOMAIN }}
@@ -75,7 +75,7 @@ jobs:
           node <<'NODE'
           const fs = require('node:fs');
           const required = [
-            'VPS_HOST', 'VPS_USER', 'VPS_KNOWN_HOSTS',
+            'VPS_HOST', 'VPS_USER',
             'VPN_DOMAIN', 'ADMIN_EMAIL', 'ADMIN_INITIAL_PASSWORD', 'MASTER_SECRET'
           ];
           for (const key of required) {
@@ -116,8 +116,10 @@ jobs:
         shell: bash
         env:
           VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
-          VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD }}
+          VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD || secrets.VPS_PASSWORD }}
           VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_PORT: ${{ vars.VPS_PORT }}
         run: |
           set -euo pipefail
           install -d -m 700 "$HOME/.ssh" "$HOME/.local/bin"
@@ -128,7 +130,17 @@ jobs:
             sudo apt-get update
             sudo apt-get install -y sshpass
           fi
-          printf '%s\n' "$VPS_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          if [[ -n "${VPS_KNOWN_HOSTS:-}" ]]; then
+            printf '%s\n' "$VPS_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          else
+            VPS_PORT="${VPS_PORT:-22}"
+            ssh-keyscan -H -p "$VPS_PORT" "$VPS_HOST" > "$HOME/.ssh/known_hosts" 2>/dev/null
+            if [[ ! -s "$HOME/.ssh/known_hosts" ]]; then
+              echo "Unable to retrieve the VPS SSH host key. Check the IP and SSH port." >&2
+              exit 1
+            fi
+            echo "::warning::VPS_KNOWN_HOSTS is not configured. A host key was discovered automatically; configure a separately verified key for stronger protection against a first-connection man-in-the-middle attack."
+          fi
           chmod 600 "$HOME/.ssh/known_hosts"
           cat > "$HOME/.local/bin/abess-ssh" <<'SH'
           #!/usr/bin/env bash
@@ -152,7 +164,7 @@ jobs:
       - name: Preflight VPS without stopping existing services
         shell: bash
         env:
-          VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD }}
+          VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD || secrets.VPS_PASSWORD }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_PORT: ${{ vars.VPS_PORT }}
@@ -187,7 +199,7 @@ jobs:
       - name: Upload application without touching persistent volumes or environment files
         shell: bash
         env:
-          VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD }}
+          VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD || secrets.VPS_PASSWORD }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_PORT: ${{ vars.VPS_PORT }}
@@ -204,12 +216,13 @@ jobs:
             --exclude '.deploy.env' \
             ./ "$DEST:abessvpn-server/"
           "$HOME/.local/bin/abess-scp" -P "$VPS_PORT" -o StrictHostKeyChecking=yes .deploy.env "$DEST:abessvpn-server/.env.new"
+          # shellcheck disable=SC2016
           "$HOME/.local/bin/abess-ssh" -p "$VPS_PORT" -o StrictHostKeyChecking=yes "$DEST" 'chmod 600 "$HOME/abessvpn-server/.env.new"'
 
       - name: Build and start services, then verify public HTTPS
         shell: bash
         env:
-          VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD }}
+          VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD || secrets.VPS_PASSWORD }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_PORT: ${{ vars.VPS_PORT }}
