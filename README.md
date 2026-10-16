@@ -33,7 +33,7 @@ The repository includes `.github/workflows/deploy-vps.yml`. It first type-checks
 
 Use Ubuntu 24.04 or 22.04, install Docker Engine and the Docker Compose plugin using Docker's official Ubuntu instructions, and verify `docker info` and `docker compose version` work for your deployment user. Install `rsync` and `openssh-server` as well.
 
-The deployment SSH user must have permission to run Docker without an interactive sudo prompt. Docker group access is effectively root-equivalent; use a dedicated deployment account and a dedicated SSH key. Do not remove existing containers or Docker volumes as part of the setup.
+The deployment SSH user must have permission to run Docker without an interactive sudo prompt. Docker group access is effectively root-equivalent, so use a dedicated deployment account if possible. The workflow supports either a dedicated SSH key (`VPS_SSH_KEY`) or password authentication (`VPS_SSH_PASSWORD` or `VPS_PASSWORD`) stored as a GitHub Actions secret; a key is preferable, but is not mandatory. Never put the VPS password in the repository or in chat. Do not remove existing containers or Docker volumes as part of the setup.
 
 Ensure incoming TCP ports **80 and 443** are available for Caddy and allowed through the VPS/provider firewall. To use every exposed transport, also allow **TCP 10050**, **UDP 10050**, **TCP 10060**, and **UDP 10061**. Port 22 (or your custom SSH port) must be reachable from GitHub-hosted runners. If an existing Nginx, Caddy, x-ui, or other service already owns 80/443, this workflow intentionally aborts; move that service to another port or arrange an explicit reverse-proxy integration before deploying.
 
