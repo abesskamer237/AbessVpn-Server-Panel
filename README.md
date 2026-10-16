@@ -43,7 +43,7 @@ Create an `A` record for a dedicated hostname such as `vpn.example.com` pointing
 
 ### 3. Configure GitHub Actions secrets and variables
 
-Important: `VPN_DOMAIN` is the public hostname used by Caddy and the API; it is **not** copied automatically into the VPN profile Host or SNI. After the first deployment, sign in to the Super Admin panel and configure the selected protocol's **public host** and **TLS SNI** in the infrastructure tab before issuing licences. With the current single-site Caddy configuration, the profile host must normally be the same hostname as `VPN_DOMAIN`, and DNS must point to this VPS; the SNI must be covered by the certificate Caddy serves. If you need a different public hostname, configure its DNS and add it to Caddy's site/certificate configuration too. Old temporary development hosts are cleared from the saved master configuration and are not accepted.
+Important: `VPN_DOMAIN` is the public hostname used by Caddy and the API; it is **not** copied automatically into the VPN profile Host or SNI. After the first deployment, sign in to the Super Admin panel and configure the selected protocol's **public host** and **TLS SNI** in the infrastructure tab before issuing licences. With the current single-site Caddy configuration, the profile host must normally be the same hostname as `VPN_DOMAIN`, and DNS must point to this VPS; the SNI must be covered by the certificate Caddy serves. If you need a different public hostname, configure its DNS and add it to Caddy's site/certificate configuration too. The VPN profile Host and SNI start empty and are not populated from any demo or development address; set them explicitly in the infrastructure panel.
 
 Open **Settings → Secrets and variables → Actions** in this repository.
 
