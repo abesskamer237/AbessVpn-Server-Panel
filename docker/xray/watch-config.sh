@@ -46,17 +46,34 @@ while :; do
     CHILD_PID=$!
     printf '%s\n' "$CHILD_PID" > "$PID_FILE.tmp"
     mv "$PID_FILE.tmp" "$PID_FILE"
-    sleep 1
+    API_READY=0
+    ATTEMPT=0
+    while [ "$ATTEMPT" -lt 10 ]; do
+      if ! kill -0 "$CHILD_PID" 2>/dev/null; then
+        break
+      fi
+      if SNAPSHOT="$(/usr/local/bin/xray api statsquery --server=127.0.0.1:10085 -pattern 'user>>>' 2>/dev/null)" \
+        && printf '%s' "$SNAPSHOT" | jq -e 'type == "object"' >/dev/null 2>&1; then
+        API_READY=1
+        break
+      fi
+      ATTEMPT=$((ATTEMPT + 1))
+      sleep 1
+    done
 
-    if kill -0 "$CHILD_PID" 2>/dev/null; then
+    if [ "$API_READY" -eq 1 ] && kill -0 "$CHILD_PID" 2>/dev/null; then
       RANDOM_SUFFIX="$(head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')"
       GENERATION="$(date +%s)-$$-$RANDOM_SUFFIX"
       printf '%s\n' "$GENERATION" > "$READY.tmp"
       mv "$READY.tmp" "$READY"
       LAST_CHECKSUM="$CHECKSUM"
-      echo "[xray-watch] Xray-core is running (generation $GENERATION)."
+      echo "[xray-watch] Xray-core and its local stats API are ready (generation $GENERATION)."
     else
-      echo "[xray-watch] Xray-core exited during startup; retrying." >&2
+      echo "[xray-watch] Xray-core or its local stats API failed startup; retrying." >&2
+      if kill -0 "$CHILD_PID" 2>/dev/null; then
+        kill -TERM "$CHILD_PID" 2>/dev/null || true
+        wait "$CHILD_PID" 2>/dev/null || true
+      fi
       CHILD_PID=
       LAST_CHECKSUM=
       rm -f "$READY" "$PID_FILE"
