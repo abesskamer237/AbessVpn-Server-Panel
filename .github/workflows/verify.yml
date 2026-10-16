@@ -147,6 +147,13 @@ jobs:
           assert.equal(initialMasterConfig.serverHost, '', 'the VPN profile host must be configured explicitly in the panel');
           assert.equal(initialMasterConfig.sniHost, '', 'the VPN profile SNI must be configured explicitly in the panel');
 
+          const prematureLicenceResponse = await fetch(`${base}/api/v1/admin/tokens`, {
+            method: 'POST',
+            headers: adminHeaders,
+            body: JSON.stringify({ plan: 'Should not be issued', bandwidthGb: 1, days: 1, deviceLimit: 1 }),
+          });
+          assert.equal(prematureLicenceResponse.status, 409, 'licences must not be issued before Host/SNI are configured');
+
           // Admin-configured Host/SNI must survive subsequent master-config reads.
           const protocolConfigUpdate = await fetch(`${base}/api/v1/admin/server-config`, {
             method: 'PUT',
