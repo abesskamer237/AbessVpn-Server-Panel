@@ -56,8 +56,8 @@ Create these **repository secrets**:
 | `VPS_SSH_KEY` | Optional; recommended private half of a dedicated SSH key |
 | `VPS_PASSWORD` or `VPS_SSH_PASSWORD` | Password for the SSH deployment user; either name is accepted |
 | `VPS_KNOWN_HOSTS` | Optional but recommended: verified SSH host-key line for the VPS (not an unchecked fingerprint) |
-| `ADMIN_INITIAL_PASSWORD` | New strong administrator password, 16+ characters |
-| `MASTER_SECRET` | Random stable secret, 32+ characters |
+| `ADMIN_INITIAL_PASSWORD` | Optional. If omitted, the workflow generates a strong password and places it in a protected credentials file on the VPS after first deployment. |
+| `MASTER_SECRET` | Optional. If omitted, the workflow generates a random 32-byte secret and stores it in the VPS `.env` file. |
 
 Create these **repository variables**:
 
@@ -69,9 +69,9 @@ Create these **repository variables**:
 | `ADMIN_NAME` | Optional administrator display name |
 | `VPS_PORT` | Optional SSH port; defaults to `22` |
 
-Generate secrets locally; do not paste them into a chat, source code, workflow file, or commit. For example, `openssl rand -hex 32` can generate a 32-byte random master secret. For password-based access, save the existing SSH login password as the GitHub secret `VPS_PASSWORD` (or `VPS_SSH_PASSWORD`). The workflow installs `sshpass` on the temporary GitHub runner and uses the password without putting it in the SSH command line. A dedicated Ed25519 key in `VPS_SSH_KEY` is still the safer option. If `VPS_KNOWN_HOSTS` is absent, the workflow discovers the host key using `ssh-keyscan`; this is convenient but weaker against a man-in-the-middle attack on the first connection. For stronger protection, fetch the key yourself, verify its fingerprint using the Contabo console/provider support, and save the verified line as `VPS_KNOWN_HOSTS`.
+Do not paste secrets into chat, source code, workflow files, or commits. For password-based VPS access, save your existing SSH login password as the GitHub secret `VPS_PASSWORD` or `VPS_SSH_PASSWORD`; the workflow already supports this, so an SSH key is not mandatory (a dedicated Ed25519 key is safer). If `VPS_KNOWN_HOSTS` is absent, the workflow discovers the SSH host key using `ssh-keyscan`; for stronger first-connection protection, verify its fingerprint through the Contabo console/provider support and set `VPS_KNOWN_HOSTS`.
 
-The administrator password is used only when the persistent user store is first created; changing the GitHub secret later does not reset the existing admin password. Keep `MASTER_SECRET` stable after issuing encrypted links—rotating it requires a planned migration of existing links.
+The `ADMIN_INITIAL_PASSWORD` and `MASTER_SECRET` secrets are optional. If they are absent, the workflow generates them with cryptographically secure randomness. On a **first deployment**, the generated administrator email/password is saved in `~/abessvpn-server/INITIAL_ADMIN_CREDENTIALS.txt` on the VPS with owner-only permissions; after the successful deployment, connect to the VPS and read that file, then save the password in a password manager and delete the file. The generated master secret is saved in `~/abessvpn-server/.env` with mode `600`. The workflow preserves both values across later deployments, so existing accounts and encrypted `abess://` links continue to work. Back up `.env securely and do not rotate `MASTER_SECRET` after links have been issued. Changing `ADMIN_INITIAL_PASSWORD` later does not reset an administrator already stored in the persistent user database.
 
 **Configure the Android build too:** in `abesskamer237/AbessVpn-Cyber`, add the repository variable `VPN_DOMAIN` with the same control-plane hostname (for example `panneau.pagnol.xyz`). The build compiles `ABESS_API_BASE_URL=https://VPN_DOMAIN`; if the variable is missing, the workflow stops instead of using obsolete demo hosts. Then run **Actions → Build APK Release (68MB Universal) → Run workflow** to build an APK bound to this server.
 
