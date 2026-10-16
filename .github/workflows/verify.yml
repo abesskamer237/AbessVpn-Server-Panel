@@ -26,6 +26,24 @@ jobs:
       - name: Build admin panel
         run: npm run build
 
+
+      - name: Validate Xray watcher shell syntax
+        run: sh -n docker/xray/watch-config.sh
+
+      - name: Build API Docker image
+        run: docker build --pull -f Dockerfile -t abessvpn-api:ci .
+
+      - name: Build official Xray-core sidecar image
+        run: docker build --pull -f docker/xray/Dockerfile -t abessvpn-xray:ci ./docker/xray
+
+      - name: Validate Docker Compose configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp .env.example .env
+          docker compose config -q
+          rm -f .env
+
       - name: Start API and verify mobile contract
         shell: bash
         env:
@@ -174,6 +192,9 @@ jobs:
           });
           assert.equal(createdTokenValidation.status, 200);
           const configResponse = JSON.parse(fs.readFileSync(`${dataDir}/xray-config.json`, 'utf8'));
+          assert.equal(configResponse.outbounds[0].tag, 'direct', 'default VPN traffic must egress through the direct outbound');
+          assert.ok(configResponse.outbounds.some(outbound => outbound.tag === 'api'), 'Xray control API outbound must exist');
+          assert.equal(configResponse.routing.rules[0].outboundTag, 'api');
           assert.equal(configResponse.inbounds[0].protocol, 'vless');
           assert.equal(configResponse.inbounds[0].streamSettings.network, 'ws');
           assert.equal(configResponse.inbounds[0].streamSettings.security, 'none', 'TLS is terminated by Caddy');
