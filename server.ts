@@ -279,9 +279,10 @@ function syncXrayConfig(tokens: ClientToken[] = loadTokens()): boolean {
       }
     ],
     outbounds: [
+      // The first outbound is the default for ordinary VLESS client traffic.
+      { tag: 'direct', protocol: 'freedom', settings: {} },
       // Xray's local control API requires a dedicated outbound tag named "api".
       { tag: 'api', protocol: 'freedom', settings: {} },
-      { tag: 'direct', protocol: 'freedom', settings: {} },
       { tag: 'block', protocol: 'blackhole', settings: {} }
     ],
     routing: {
