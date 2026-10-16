@@ -633,7 +633,6 @@ async function startServer() {
       id: 'tok_' + Math.random().toString(36).substring(2, 9),
       token: finalToken,
       clientUuid,
-      deviceIds: [],
       resellerId: user.id,
       resellerName: user.name,
       plan: plan || `${requestedGb} GO CYBER VIP`,
