@@ -1,6 +1,8 @@
 name: Deploy ABESS VPN to VPS
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -235,6 +237,8 @@ jobs:
             --exclude '.env' \
             --exclude '.deploy.env' \
             --exclude '.deploy.credentials' \
+            --exclude '.initial-admin-credentials.new' \
+            --exclude 'INITIAL_ADMIN_CREDENTIALS.txt' \
             ./ "$DEST:abessvpn-server/"
           "$HOME/.local/bin/abess-scp" -P "$VPS_PORT" -o StrictHostKeyChecking=yes .deploy.env "$DEST:abessvpn-server/.env.new"
           if [[ -f .deploy.credentials ]]; then
