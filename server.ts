@@ -274,8 +274,7 @@ function xrayStreamSettings(transport: XrayTransport, profilePath: string): Reco
       security: 'none',
       kcpSettings: {
         mtu: 1350, tti: 20, uplinkCapacity: 5, downlinkCapacity: 20,
-        congestion: false, readBufferSize: 2, writeBufferSize: 2,
-        header: { type: 'none' }
+        congestion: false, readBufferSize: 2, writeBufferSize: 2
       }
     };
     default: throw new Error('Transport non routable dans la matrice HTTP.');
