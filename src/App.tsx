@@ -91,8 +91,8 @@ export default function App() {
   // Session State
   const [currentUser, setCurrentUser] = useState<UserSession | null>(null);
   const [authToken, setAuthToken] = useState<string>('');
-  const [loginEmail, setLoginEmail] = useState<string>('rigomanga4@gmail.com');
-  const [loginPassword, setLoginPassword] = useState<string>('abess237');
+  const [loginEmail, setLoginEmail] = useState<string>('');
+  const [loginPassword, setLoginPassword] = useState<string>('');
   const [loginLoading, setLoginLoading] = useState<boolean>(false);
   const [loginError, setLoginError] = useState<string | null>(null);
   const [showPassword, setShowPassword] = useState<boolean>(false);
