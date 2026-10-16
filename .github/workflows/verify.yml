@@ -219,4 +219,11 @@ jobs:
           NODE
 
       - name: Validate generated configuration with official Xray-core
-        run: docker run --rm -v "${{ runner.temp }}/abessvpn-data:/shared:ro" ghcr.io/xtls/xray-core:26.7.28 run -test -c /shared/xray-config.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp "${{ runner.temp }}/abessvpn-data/xray-config.json" "${{ runner.temp }}/xray-config-test.json"
+          chmod 644 "${{ runner.temp }}/xray-config-test.json"
+          docker run --rm \
+            -v "${{ runner.temp }}/xray-config-test.json:/tmp/xray-config.json:ro" \
+            ghcr.io/xtls/xray-core:26.7.28 run -test -c /tmp/xray-config.json
