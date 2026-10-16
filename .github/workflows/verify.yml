@@ -43,6 +43,7 @@ jobs:
 
           node --input-type=module <<'NODE'
           import assert from 'node:assert/strict';
+          import net from 'node:net';
 
           const base = 'http://127.0.0.1:3187';
 
@@ -85,5 +86,61 @@ jobs:
           });
           assert.equal(telemetryResponse.status, 400, 'telemetry must reject a missing token');
 
-          console.log('Mobile route contract smoke tests passed.');
+          // The seeded test token must validate, and its device limit must be enforced.
+          const token = 'ABESS-VIP-ROOT-2026';
+          for (const deviceId of ['CI-DEVICE-ONE', 'CI-DEVICE-TWO']) {
+            const response = await fetch(`${base}/api/v1/auth/token`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ token, deviceId }),
+            });
+            assert.equal(response.status, 200, `registered device ${deviceId} should validate`);
+            const result = await response.json();
+            assert.equal(result.valid, true);
+            assert.equal(result.deviceLimit, 2);
+            assert.ok(result.serverConfig.address);
+            assert.equal(result.serverConfig.transport, 'ws');
+          }
+          const thirdDevice = await fetch(`${base}/api/v1/auth/token`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token, deviceId: 'CI-DEVICE-THREE' }),
+          });
+          assert.equal(thirdDevice.status, 403, 'token device limit must be enforced');
+
+          // Do not send a fake VLESS handshake while no Xray data plane is configured.
+          const websocketStatus = await new Promise((resolve, reject) => {
+            const socket = net.connect(3187, '127.0.0.1', () => {
+              socket.write([
+                'GET /@abess237 HTTP/1.1',
+                'Host: 127.0.0.1:3187',
+                'Connection: Upgrade',
+                'Upgrade: websocket',
+                'Sec-WebSocket-Version: 13',
+                'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==',
+                '',
+                '',
+              ].join('\\r\\n'));
+            });
+            let response = '';
+            const timeout = setTimeout(() => {
+              socket.destroy();
+              reject(new Error('WebSocket fail-closed probe timed out'));
+            }, 3000);
+            socket.on('data', (chunk) => {
+              response += chunk.toString('utf8');
+              if (response.includes('\\r\\n\\r\\n')) {
+                clearTimeout(timeout);
+                socket.destroy();
+                resolve(response);
+              }
+            });
+            socket.on('error', (error) => {
+              clearTimeout(timeout);
+              reject(error);
+            });
+          });
+          assert.match(websocketStatus, /^HTTP\\/1\\.1 503 Service Unavailable/m);
+
+          console.log('Mobile route, token/device-limit, and fail-closed WebSocket smoke tests passed.');
           NODE
