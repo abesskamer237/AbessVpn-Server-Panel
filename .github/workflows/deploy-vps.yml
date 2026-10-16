@@ -181,6 +181,15 @@ jobs:
             echo "$busy" >&2
             exit 1
           fi
+
+          # Check the dedicated direct-protocol ports too; never silently stop x-ui/Xray or another service.
+          busy_native_tcp="$(ss -ltnH 2>/dev/null | awk '$4 ~ /:(10021|10023|10050)$/ {print $4}' || true)"
+          busy_native_udp="$(ss -lunH 2>/dev/null | awk '$4 ~ /:(10031|10050)$/ {print $4}' || true)"
+          if { [ -n "$busy_native_tcp" ] || [ -n "$busy_native_udp" ]; } && [ -z "$existing_caddy" ]; then
+            echo "A direct TCP/UDP profile port is already occupied. Deployment stopped to protect existing services." >&2
+            printf 'TCP: %s\nUDP: %s\n' "$busy_native_tcp" "$busy_native_udp" >&2
+            exit 1
+          fi
           echo "VPS preflight passed."
           REMOTE
 
