@@ -120,7 +120,7 @@ jobs:
           assert.equal(loginResponse.status, 200, 'seeded admin should log in in the isolated CI test');
           const login = await loginResponse.json();
 
-          const createTokenResponse = await fetch(`${base}/api/v1/admin/tokens`, {
+          const adminCreateTokenResponse = await fetch(`${base}/api/v1/admin/tokens`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -128,8 +128,8 @@ jobs:
             },
             body: JSON.stringify({ plan: 'CI UUID TEST', bandwidthGb: 2, days: 1, deviceLimit: 1 }),
           });
-          assert.equal(createTokenResponse.status, 201, 'authenticated admin should be able to create a licence');
-          const createdLicence = await createTokenResponse.json();
+          assert.equal(adminCreateTokenResponse.status, 201, 'authenticated admin should be able to create a licence');
+          const createdLicence = await adminCreateTokenResponse.json();
           assert.match(createdLicence.clientUuid, /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
           assert.notEqual(createdLicence.clientUuid, seededLicenceUuid, 'licences must not share the same VLESS UUID');
 
