@@ -1,4 +1,4 @@
-name: Verify ABESS VPN Server Panel
+name: Verify ABESS VPN Server Panel and Xray
 
 on:
   push:
@@ -26,16 +26,25 @@ jobs:
       - name: Build admin panel
         run: npm run build
 
-      - name: Start API and smoke-test mobile routes
+      - name: Start API and verify mobile contract
         shell: bash
+        env:
+          DATA_DIR: ${{ runner.temp }}/abessvpn-data
+          PORT: "3187"
+          NODE_ENV: production
+          VPN_DOMAIN: vpn.example.test
+          ADMIN_EMAIL: ci-admin@example.test
+          ADMIN_INITIAL_PASSWORD: ci-only-password-please-ignore-123
+          MASTER_SECRET: ci-only-master-secret-0123456789abcdef0123456789abcdef
         run: |
           set -euo pipefail
-          PORT=3187 NODE_ENV=production npm run start > /tmp/abessvpn-server.log 2>&1 &
+          mkdir -p "$DATA_DIR"
+          PORT="$PORT" DATA_DIR="$DATA_DIR" NODE_ENV="$NODE_ENV" VPN_DOMAIN="$VPN_DOMAIN" ADMIN_EMAIL="$ADMIN_EMAIL" ADMIN_INITIAL_PASSWORD="$ADMIN_INITIAL_PASSWORD" MASTER_SECRET="$MASTER_SECRET" npm run start > "$RUNNER_TEMP/abessvpn-server.log" 2>&1 &
           server_pid=$!
           trap 'kill "$server_pid" 2>/dev/null || true' EXIT
 
           for attempt in $(seq 1 30); do
-            if curl --silent --fail http://127.0.0.1:3187/api/v1/ping > /tmp/abess-ping.json; then
+            if curl --silent --fail http://127.0.0.1:3187/api/v1/ping > "$RUNNER_TEMP/abess-ping.json"; then
               break
             fi
             sleep 1
@@ -43,15 +52,17 @@ jobs:
 
           node --input-type=module <<'NODE'
           import assert from 'node:assert/strict';
+          import fs from 'node:fs';
           import net from 'node:net';
 
           const base = 'http://127.0.0.1:3187';
+          const dataDir = process.env.DATA_DIR;
 
           const pingResponse = await fetch(`${base}/api/v1/ping`);
           assert.equal(pingResponse.status, 200, 'ping route must return HTTP 200');
           const ping = await pingResponse.json();
           assert.equal(ping.ok, true);
-          assert.equal(ping.dataPlane, 'not-ready', 'do not claim the tunnel is ready until a real data plane exists');
+          assert.equal(ping.dataPlane, 'not-ready', 'the control plane must not claim Xray is ready without its sidecar');
 
           const downloadResponse = await fetch(`${base}/api/v1/speedtest/download?bytes=1048576`);
           assert.equal(downloadResponse.status, 200);
@@ -65,19 +76,19 @@ jobs:
           assert.equal(uploadResponse.status, 200);
           assert.equal((await uploadResponse.json()).receivedBytes, 4096);
 
-          const createTokenResponse = await fetch(`${base}/api/v1/client/create-token`, {
+          const publicCreateToken = await fetch(`${base}/api/v1/client/create-token`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ token: 'SHOULD_NOT_BE_CREATED', bandwidthGb: 100 }),
           });
-          assert.equal(createTokenResponse.status, 403, 'unauthenticated mobile token creation must be denied');
+          assert.equal(publicCreateToken.status, 403, 'unauthenticated token creation must be denied');
 
           const trialResponse = await fetch(`${base}/api/v1/client/claim-free-trial`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ deviceId: 'TEST-DEVICE-123456' }),
           });
-          assert.equal(trialResponse.status, 503, 'do not issue a trial until the tunnel data plane is real');
+          assert.equal(trialResponse.status, 503, 'trial issuance must stay disabled until a real data plane is running');
 
           const telemetryResponse = await fetch(`${base}/api/v1/client/telemetry`, {
             method: 'POST',
@@ -86,81 +97,92 @@ jobs:
           });
           assert.equal(telemetryResponse.status, 400, 'telemetry must reject a missing token');
 
-          // The seeded test token must validate, and its device limit must be enforced.
-          const token = 'ABESS-VIP-ROOT-2026';
-          let seededLicenceUuid;
+          const loginResponse = await fetch(`${base}/api/v1/auth/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: 'ci-admin@example.test', password: 'ci-only-password-please-ignore-123' }),
+          });
+          assert.equal(loginResponse.status, 200, 'environment-provisioned admin should be able to log in');
+          const login = await loginResponse.json();
+          assert.ok(login.token);
+
+          const adminHeaders = {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${login.token}`,
+          };
+          const createA = await fetch(`${base}/api/v1/admin/tokens`, {
+            method: 'POST',
+            headers: adminHeaders,
+            body: JSON.stringify({ plan: 'CI Xray UUID A', bandwidthGb: 2, days: 1, deviceLimit: 2 }),
+          });
+          assert.equal(createA.status, 201);
+          const licenceA = await createA.json();
+          assert.match(licenceA.clientUuid, /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+
+          let stableUuid;
           for (const deviceId of ['CI-DEVICE-ONE', 'CI-DEVICE-TWO']) {
             const response = await fetch(`${base}/api/v1/auth/token`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ token, deviceId }),
+              body: JSON.stringify({ token: licenceA.token, deviceId }),
             });
-            assert.equal(response.status, 200, `registered device ${deviceId} should validate`);
+            assert.equal(response.status, 200);
             const result = await response.json();
             assert.equal(result.valid, true);
             assert.equal(result.deviceLimit, 2);
-            assert.ok(result.serverConfig.address);
-            assert.equal(result.serverConfig.transport, 'ws');
-            assert.match(result.serverConfig.uuid, /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
-            if (seededLicenceUuid) assert.equal(result.serverConfig.uuid, seededLicenceUuid, 'one licence must keep a stable VLESS UUID');
-            seededLicenceUuid = result.serverConfig.uuid;
+            assert.equal(result.serverConfig.uuid, licenceA.clientUuid);
+            if (stableUuid) assert.equal(result.serverConfig.uuid, stableUuid, 'the VLESS UUID for one licence must remain stable');
+            stableUuid = result.serverConfig.uuid;
           }
+
           const thirdDevice = await fetch(`${base}/api/v1/auth/token`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ token, deviceId: 'CI-DEVICE-THREE' }),
+            body: JSON.stringify({ token: licenceA.token, deviceId: 'CI-DEVICE-THREE' }),
           });
-          assert.equal(thirdDevice.status, 403, 'token device limit must be enforced');
+          assert.equal(thirdDevice.status, 403, 'the configured device limit must be enforced');
 
-          const loginResponse = await fetch(`${base}/api/v1/auth/login`, {
+          const importLinkResponse = await fetch(`${base}/api/v1/auth/import-link`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email: 'rigomanga4@gmail.com', password: 'abess237' }),
+            body: JSON.stringify({ link: licenceA.encryptedLink, deviceId: 'CI-DEVICE-ONE' }),
           });
-          assert.equal(loginResponse.status, 200, 'seeded admin should log in in the isolated CI test');
-          const login = await loginResponse.json();
+          assert.equal(importLinkResponse.status, 200, 'encrypted panel links must validate through the mobile API');
+          const importedLink = await importLinkResponse.json();
+          assert.equal(importedLink.serverConfig.uuid, licenceA.clientUuid);
 
-          const adminCreateTokenResponse = await fetch(`${base}/api/v1/admin/tokens`, {
+          const badLinkResponse = await fetch(`${base}/api/v1/auth/import-link`, {
             method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${login.token}`,
-            },
-            body: JSON.stringify({ plan: 'CI UUID TEST', bandwidthGb: 2, days: 1, deviceLimit: 1 }),
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ link: 'abess://invalid', deviceId: 'CI-BAD-LINK' }),
           });
-          assert.equal(adminCreateTokenResponse.status, 201, 'authenticated admin should be able to create a licence');
-          const createdLicence = await adminCreateTokenResponse.json();
-          assert.match(createdLicence.clientUuid, /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
-          assert.notEqual(createdLicence.clientUuid, seededLicenceUuid, 'licences must not share the same VLESS UUID');
+          assert.equal(badLinkResponse.status, 400, 'invalid encrypted links must be rejected');
+
+          const createB = await fetch(`${base}/api/v1/admin/tokens`, {
+            method: 'POST',
+            headers: adminHeaders,
+            body: JSON.stringify({ plan: 'CI Xray UUID B', bandwidthGb: 2, days: 1, deviceLimit: 1 }),
+          });
+          assert.equal(createB.status, 201);
+          const licenceB = await createB.json();
+          assert.notEqual(licenceB.clientUuid, licenceA.clientUuid, 'licences must have distinct Xray user IDs');
 
           const createdTokenValidation = await fetch(`${base}/api/v1/auth/token`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ token: createdLicence.token, deviceId: 'CI-NEW-DEVICE' }),
+            body: JSON.stringify({ token: licenceB.token, deviceId: 'CI-B-DEVICE' }),
           });
           assert.equal(createdTokenValidation.status, 200);
-          const createdTokenData = await createdTokenValidation.json();
-          assert.equal(createdTokenData.serverConfig.uuid, createdLicence.clientUuid, 'mobile auth must return the UUID assigned at token creation');
+          const configResponse = JSON.parse(fs.readFileSync(`${dataDir}/xray-config.json`, 'utf8'));
+          assert.equal(configResponse.inbounds[0].protocol, 'vless');
+          assert.equal(configResponse.inbounds[0].streamSettings.network, 'ws');
+          assert.equal(configResponse.inbounds[0].streamSettings.security, 'none', 'TLS is terminated by Caddy');
+          const xrayUsers = configResponse.inbounds[0].settings.users;
+          assert.ok(xrayUsers.some(user => user.id === licenceA.clientUuid));
+          assert.ok(xrayUsers.some(user => user.id === licenceB.clientUuid));
 
-          const importLinkValidation = await fetch(`${base}/api/v1/auth/import-link`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ link: createdLicence.encryptedLink, deviceId: 'CI-NEW-DEVICE' }),
-          });
-          assert.equal(importLinkValidation.status, 200, 'panel-issued encrypted links must validate through the mobile API');
-          const importedLinkData = await importLinkValidation.json();
-          assert.equal(importedLinkData.valid, true);
-          assert.equal(importedLinkData.serverConfig.uuid, createdLicence.clientUuid);
-
-          const invalidLink = await fetch(`${base}/api/v1/auth/import-link`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ link: 'abess://invalid', deviceId: 'CI-INVALID-DEVICE' }),
-          });
-          assert.equal(invalidLink.status, 400, 'invalid encrypted links must be rejected');
-
-          // Do not send a fake VLESS handshake while no Xray data plane is configured.
-          const websocketStatus = await new Promise((resolve, reject) => {
+          // The API must never fake an HTTP/WebSocket handshake as a VPN tunnel.
+          const websocketResponse = await new Promise((resolve, reject) => {
             const socket = net.connect(3187, '127.0.0.1', () => {
               socket.write([
                 'GET /@abess237 HTTP/1.1',
@@ -171,7 +193,7 @@ jobs:
                 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==',
                 '',
                 '',
-              ].join('\r\n'));
+              ].join('\\r\\n'));
             });
             let response = '';
             const timeout = setTimeout(() => {
@@ -180,7 +202,7 @@ jobs:
             }, 3000);
             socket.on('data', (chunk) => {
               response += chunk.toString('utf8');
-              if (response.includes('\r\n\r\n')) {
+              if (response.includes('\\r\\n\\r\\n')) {
                 clearTimeout(timeout);
                 socket.destroy();
                 resolve(response);
@@ -191,7 +213,9 @@ jobs:
               reject(error);
             });
           });
-          assert.ok(String(websocketStatus).includes('HTTP/1.1 503 Service Unavailable'));
-
-          console.log('Mobile route, token/device-limit, and fail-closed WebSocket smoke tests passed.');
+          assert.ok(String(websocketResponse).includes('HTTP/1.1 503 Service Unavailable'));
+          console.log('API, licensing, encrypted import and Xray config tests passed.');
           NODE
+
+      - name: Validate generated configuration with official Xray-core
+        run: docker run --rm -v "${{ runner.temp }}/abessvpn-data:/shared:ro" ghcr.io/xtls/xray-core:26.7.28 run -test -c /shared/xray-config.json
