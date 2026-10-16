@@ -144,7 +144,8 @@ jobs:
           });
           assert.equal(initialMasterConfigResponse.status, 200);
           const initialMasterConfig = await initialMasterConfigResponse.json();
-          assert.equal(initialMasterConfig.serverHost, '', 'the VPN profile host must be configured explicitly in the panel');
+          assert.equal(initialMasterConfig.serverHost, '', 'the VPN profile endpoint must be configured explicitly in the panel');
+          assert.equal(initialMasterConfig.wsHost, '', 'the HTTP Host header must be configured separately from the endpoint');
           assert.equal(initialMasterConfig.sniHost, '', 'the VPN profile SNI must be configured explicitly in the panel');
 
           const prematureLicenceResponse = await fetch(`${base}/api/v1/admin/tokens`, {
@@ -160,6 +161,7 @@ jobs:
             headers: adminHeaders,
             body: JSON.stringify({
               serverHost: 'profile.example.test',
+              wsHost: 'http-header.example.test',
               sniHost: 'tls.example.test',
               serverPort: 443,
               protocol: 'vless',
@@ -173,6 +175,7 @@ jobs:
           assert.equal(protocolConfigRead.status, 200);
           const savedProtocolConfig = await protocolConfigRead.json();
           assert.equal(savedProtocolConfig.serverHost, 'profile.example.test');
+          assert.equal(savedProtocolConfig.wsHost, 'http-header.example.test');
           assert.equal(savedProtocolConfig.sniHost, 'tls.example.test');
           const createA = await fetch(`${base}/api/v1/admin/tokens`, {
             method: 'POST',
@@ -197,7 +200,7 @@ jobs:
             assert.equal(result.serverConfig.uuid, licenceA.clientUuid);
             assert.equal(result.serverConfig.address, 'profile.example.test');
             assert.equal(result.serverConfig.sni, 'tls.example.test');
-            assert.equal(result.serverConfig.wsHost, 'profile.example.test');
+            assert.equal(result.serverConfig.wsHost, 'http-header.example.test');
             if (stableUuid) assert.equal(result.serverConfig.uuid, stableUuid, 'the VLESS UUID for one licence must remain stable');
             stableUuid = result.serverConfig.uuid;
           }
@@ -217,6 +220,7 @@ jobs:
           assert.equal(importLinkResponse.status, 200, 'encrypted panel links must validate through the mobile API');
           const importedLink = await importLinkResponse.json();
           assert.equal(importedLink.serverConfig.uuid, licenceA.clientUuid);
+          assert.equal(importedLink.serverConfig.wsHost, 'http-header.example.test');
 
           const badLinkResponse = await fetch(`${base}/api/v1/auth/import-link`, {
             method: 'POST',
