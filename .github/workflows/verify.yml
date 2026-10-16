@@ -138,6 +138,15 @@ jobs:
             Authorization: `Bearer ${login.token}`,
           };
 
+          // The API's Caddy/domain variable must not silently become the VPN endpoint or TLS SNI.
+          const initialMasterConfigResponse = await fetch(`${base}/api/v1/admin/server-config`, {
+            headers: { Authorization: `Bearer ${login.token}` },
+          });
+          assert.equal(initialMasterConfigResponse.status, 200);
+          const initialMasterConfig = await initialMasterConfigResponse.json();
+          assert.equal(initialMasterConfig.serverHost, '', 'the VPN profile host must be configured explicitly in the panel');
+          assert.equal(initialMasterConfig.sniHost, '', 'the VPN profile SNI must be configured explicitly in the panel');
+
           // Admin-configured Host/SNI must survive subsequent master-config reads.
           const protocolConfigUpdate = await fetch(`${base}/api/v1/admin/server-config`, {
             method: 'PUT',
