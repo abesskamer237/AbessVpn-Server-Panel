@@ -74,22 +74,28 @@ jobs:
           set -euo pipefail
           node <<'NODE'
           const fs = require('node:fs');
-          const required = [
-            'VPS_HOST', 'VPS_USER',
-            'VPN_DOMAIN', 'ADMIN_EMAIL', 'ADMIN_INITIAL_PASSWORD', 'MASTER_SECRET'
-          ];
+          const crypto = require('node:crypto');
+          const required = ['VPS_HOST', 'VPS_USER', 'VPN_DOMAIN', 'ADMIN_EMAIL'];
           for (const key of required) {
             if (!process.env[key] || !process.env[key].trim()) {
               throw new Error(`Missing GitHub secret/variable: ${key}`);
             }
           }
           if (!process.env.VPS_SSH_KEY?.trim() && !process.env.VPS_SSH_PASSWORD?.trim()) {
-            throw new Error('Set VPS_SSH_KEY (recommended), VPS_SSH_PASSWORD, or VPS_PASSWORD in GitHub Actions secrets.');
+            throw new Error('Set VPS_SSH_KEY, VPS_SSH_PASSWORD, or VPS_PASSWORD in GitHub Actions secrets.');
           }
-          if (process.env.ADMIN_INITIAL_PASSWORD.length < 16) {
+
+          // Generate unique credentials when the optional GitHub secrets are absent.
+          // The remote deployment persists them and preserves them on later deployments.
+          const generatedAdminPassword = !process.env.ADMIN_INITIAL_PASSWORD?.trim();
+          const adminInitialPassword = process.env.ADMIN_INITIAL_PASSWORD?.trim() || crypto.randomBytes(24).toString('hex');
+          const masterSecret = process.env.MASTER_SECRET?.trim() || crypto.randomBytes(32).toString('hex');
+          console.log(`::add-mask::${adminInitialPassword}`);
+          console.log(`::add-mask::${masterSecret}`);
+          if (adminInitialPassword.length < 16) {
             throw new Error('ADMIN_INITIAL_PASSWORD must be at least 16 characters.');
           }
-          if (process.env.MASTER_SECRET.length < 32) {
+          if (masterSecret.length < 32) {
             throw new Error('MASTER_SECRET must be at least 32 random characters.');
           }
           const hostname = process.env.VPN_DOMAIN;
@@ -103,13 +109,23 @@ jobs:
             ACME_EMAIL: process.env.ACME_EMAIL || process.env.ADMIN_EMAIL,
             ADMIN_EMAIL: process.env.ADMIN_EMAIL,
             ADMIN_NAME: process.env.ADMIN_NAME || 'ABESS VPN Administrator',
-            ADMIN_INITIAL_PASSWORD: process.env.ADMIN_INITIAL_PASSWORD,
-            MASTER_SECRET: process.env.MASTER_SECRET
+            ADMIN_INITIAL_PASSWORD: adminInitialPassword,
+            MASTER_SECRET: masterSecret
           };
           const envText = Object.entries(values)
             .map(([key, value]) => key + '=' + JSON.stringify(value))
             .join('\n') + '\n';
           fs.writeFileSync('.deploy.env', envText, { mode: 0o600 });
+          if (generatedAdminPassword) {
+            const credentialsText = [
+              'ABESS VPN — identifiants initiaux du Super Administrateur',
+              'Email: ' + process.env.ADMIN_EMAIL,
+              'Mot de passe initial: ' + adminInitialPassword,
+              'Conservez ce fichier en lieu sûr, puis supprimez-le du VPS après sauvegarde des identifiants.',
+              ''
+            ].join('\n');
+            fs.writeFileSync('.deploy.credentials', credentialsText, { mode: 0o600 });
+          }
           NODE
 
       - name: Configure SSH authentication
@@ -182,6 +198,10 @@ jobs:
           docker info >/dev/null 2>&1 || { echo "SSH user must be able to run Docker non-interactively." >&2; exit 1; }
           mkdir -p "$HOME/abessvpn-server"
           test -w "$HOME/abessvpn-server" || { echo "Cannot write to ~/abessvpn-server." >&2; exit 1; }
+          if [ ! -f "$HOME/abessvpn-server/.env" ] && docker volume inspect abessvpn-server_abessvpn_data >/dev/null 2>&1; then
+            echo "ABESS persistent data volume exists but the deployment .env file is missing. Restore the original .env before deploying to avoid changing the master encryption key or losing the initial admin credential." >&2
+            exit 1
+          fi
 
           existing_caddy=""
           if [ -f "$HOME/abessvpn-server/docker-compose.yml" ]; then
@@ -216,8 +236,11 @@ jobs:
             --exclude '.deploy.env' \
             ./ "$DEST:abessvpn-server/"
           "$HOME/.local/bin/abess-scp" -P "$VPS_PORT" -o StrictHostKeyChecking=yes .deploy.env "$DEST:abessvpn-server/.env.new"
+          if [[ -f .deploy.credentials ]]; then
+            "$HOME/.local/bin/abess-scp" -P "$VPS_PORT" -o StrictHostKeyChecking=yes .deploy.credentials "$DEST:abessvpn-server/.initial-admin-credentials.new"
+          fi
           # shellcheck disable=SC2016
-          "$HOME/.local/bin/abess-ssh" -p "$VPS_PORT" -o StrictHostKeyChecking=yes "$DEST" 'chmod 600 "$HOME/abessvpn-server/.env.new"'
+          "$HOME/.local/bin/abess-ssh" -p "$VPS_PORT" -o StrictHostKeyChecking=yes "$DEST" 'chmod 600 "$HOME/abessvpn-server/.env.new"; if [ -f "$HOME/abessvpn-server/.initial-admin-credentials.new" ]; then chmod 600 "$HOME/abessvpn-server/.initial-admin-credentials.new"; fi'
 
       - name: Build and start services, then verify public HTTPS
         shell: bash
@@ -234,6 +257,28 @@ jobs:
           "$HOME/.local/bin/abess-ssh" -p "$VPS_PORT" -o StrictHostKeyChecking=yes "$DEST" "VPN_DOMAIN='$VPN_DOMAIN' bash -s" <<'REMOTE'
           set -euo pipefail
           cd "$HOME/abessvpn-server"
+          if [ -f .env ]; then
+            # Preserve the initial administrator password and master key on redeploys.
+            for key in ADMIN_INITIAL_PASSWORD MASTER_SECRET; do
+              existing_line="$(grep -m1 "^${key}=" .env || true)"
+              if [ -n "$existing_line" ]; then
+                grep -v "^${key}=" .env.new > .env.merged
+                printf '%s\n' "$existing_line" >> .env.merged
+                mv .env.merged .env.new
+              fi
+            done
+            rm -f .initial-admin-credentials.new
+          else
+            if docker volume inspect abessvpn-server_abessvpn_data >/dev/null 2>&1; then
+              echo "ABESS persistent data exists but .env is missing; refusing to replace its secrets." >&2
+              exit 1
+            fi
+            if [ -f .initial-admin-credentials.new ]; then
+              mv .initial-admin-credentials.new INITIAL_ADMIN_CREDENTIALS.txt
+              chmod 600 INITIAL_ADMIN_CREDENTIALS.txt
+              echo "Initial login details were saved to ~/abessvpn-server/INITIAL_ADMIN_CREDENTIALS.txt (owner-only permissions)."
+            fi
+          fi
           mv .env.new .env
           chmod 600 .env
           docker compose config -q
@@ -263,4 +308,4 @@ jobs:
 
       - name: Remove temporary deployment material
         if: always()
-        run: rm -f .deploy.env
+        run: rm -f .deploy.env .deploy.credentials
