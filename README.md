@@ -70,6 +70,8 @@ Generate secrets locally; do not paste them into a chat, source code, workflow f
 
 The administrator password is used only when the persistent user store is first created; changing the GitHub secret later does not reset the existing admin password. Keep `MASTER_SECRET` stable after issuing encrypted links—rotating it requires a planned migration of existing links.
 
+**Also point the Android build at the same domain:** in the separate `abesskamer237/AbessVpn-Cyber` repository, add the repository variable `VPN_DOMAIN` with the same hostname. Its APK workflow compiles this value as `ABESS_API_BASE_URL=https://VPN_DOMAIN`. After setting the variable, run **Actions → Build APK Release (68MB Universal) → Run workflow** to produce an APK configured for the VPS. Without that variable, the APK keeps its legacy fallback API hosts.
+
 ### 4. Launch the deployment
 
 1. Open the repository's **Actions** tab.
