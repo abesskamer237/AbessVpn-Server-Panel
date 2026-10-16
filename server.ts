@@ -11,7 +11,7 @@ const isProduction = process.env.NODE_ENV === 'production';
 const PORT = Number(process.env.PORT) || 3000;
 
 // Persistent Data Storage
-const dataDir = path.resolve(__dirname, 'data');
+const dataDir = process.env.DATA_DIR || path.resolve(__dirname, 'data');
 if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true });
 }
