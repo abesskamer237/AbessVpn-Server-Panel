@@ -1088,17 +1088,19 @@ export default function App() {
                     <option value="native" disabled={masterConfig.protocol !== "shadowsocks"}>TCP + UDP natifs (Shadowsocks)</option>
                   </select>
                 </div>
-                <div className="md:col-span-2">
-                  <label className="block text-slate-300 font-semibold mb-1">Host HTTP / WebSocket (en-tête Host ou :authority)</label>
+                <div className="md:col-span-2 rounded-xl border border-cyan-700/70 bg-cyan-950/20 p-4">
+                  <div className="mb-2 text-xs font-black uppercase tracking-wider text-cyan-300">Paramètre indépendant — Host HTTP</div>
+                  <label className="block text-slate-100 font-semibold mb-1">Host HTTP / WebSocket (en-tête Host ou :authority)</label>
                   <input
                     type="text"
                     value={masterConfig.host}
                     onChange={(e) => setMasterConfig({ ...masterConfig, host: e.target.value })}
-                    className="w-full bg-[#03060e] border border-emerald-900 rounded-lg px-3 py-2 text-cyan-200"
-                    placeholder="host.exemple.com (vide = adresse du serveur)"
+                    className="w-full bg-[#03060e] border border-cyan-800 rounded-lg px-3 py-3 text-cyan-200"
+                    placeholder="ex. host.exemple.com — indépendant de l’IP du serveur"
                     autoComplete="off"
+                    aria-describedby="master-http-host-help"
                   />
-                  <p className="mt-1 text-xs text-slate-500">Facultatif et indépendant de l’adresse IP/domaine de destination. Utilisé par WS, gRPC, HTTPUpgrade et XHTTP.</p>
+                  <p id="master-http-host-help" className="mt-2 text-sm text-slate-300">Ce champ est distinct de l’adresse IP/domaine de destination et du SNI TLS. Il définit uniquement l’en-tête Host pour WebSocket, gRPC, HTTPUpgrade et XHTTP. Facultatif : s’il reste vide, l’adresse du serveur est utilisée.</p>
                 </div>
                 <div className="md:col-span-2 rounded-lg border border-slate-700 bg-slate-900/50 p-3 text-slate-400">
                   Les profils WS/gRPC/HTTPUpgrade/XHTTP passent par HTTPS sur TCP 443. VMess RAW utilise TCP 10060 et VMess mKCP utilise UDP 10061. Shadowsocks natif utilise TCP + UDP sur 10050. Ouvre les ports 10050/TCP+UDP, 10060/TCP et 10061/UDP dans le pare-feu. RAW/mKCP sont réservés à VMess pour ne pas exposer VLESS sans TLS ni Trojan sans couche TLS.
@@ -1116,16 +1118,19 @@ export default function App() {
                   />
                 </div>
 
-                <div>
-                  <label className="block text-slate-300 font-semibold mb-1">SNI TLS (nom de domaine couvert par le certificat HTTPS)</label>
+                <div className="md:col-span-2 rounded-xl border border-amber-700/60 bg-amber-950/15 p-4">
+                  <div className="mb-2 text-xs font-black uppercase tracking-wider text-amber-300">Paramètre TLS indépendant — SNI</div>
+                  <label className="block text-slate-100 font-semibold mb-1">SNI TLS (nom présenté pendant la négociation TLS)</label>
                   <input
                     type="text"
                     value={masterConfig.sniHost}
                     onChange={(e) => setMasterConfig({ ...masterConfig, sniHost: e.target.value })}
-                    className="w-full bg-[#03060e] border border-emerald-900 rounded-lg px-3 py-2 text-amber-300"
+                    className="w-full bg-[#03060e] border border-amber-800 rounded-lg px-3 py-3 text-amber-300"
                     placeholder="vpn.ton-domaine.com"
                     required
+                    aria-describedby="master-sni-help"
                   />
+                  <p id="master-sni-help" className="mt-2 text-sm text-slate-300">Le SNI ne remplace pas l’adresse du serveur ni le Host HTTP. Pour cette configuration TLS via Caddy, utilise un nom correspondant à un certificat chargé par Caddy.</p>
                 </div>
 
                 <div className="md:col-span-2">
