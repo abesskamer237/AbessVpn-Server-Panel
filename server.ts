@@ -114,15 +114,14 @@ function loadMasterConfig(): MasterServerConfig {
       const merged: MasterServerConfig = {
         ...defaults,
         ...stored,
-        // Scrub stale development/demo hostnames from persisted configs and do not
-        // inherit the API domain or the server host as an implicit SNI.
+        // Normalize persisted Host/SNI values and never infer either one from the API domain.
         serverHost: normalizedStoredHost(stored.serverHost),
         serverPort: Number(stored.serverPort) || defaults.serverPort,
         path: '/@abess237',
         sniHost: normalizedStoredHost(stored.sniHost),
         secretPassphrase: process.env.MASTER_SECRET || ''
       };
-      // Persist the scrubbed fields so stale demo hosts are removed from the saved configuration.
+      // Persist normalized fields when whitespace or letter case changed.
       if (merged.serverHost !== rawStoredHost || merged.sniHost !== rawStoredSni) {
         saveMasterConfig(merged);
       }
