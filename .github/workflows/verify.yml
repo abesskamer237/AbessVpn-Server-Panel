@@ -215,7 +215,8 @@ jobs:
           assert.ok(vmessKcp, 'VMess mKCP/UDP profile must be generated');
           assert.equal(vmessKcp.port, 10031);
           assert.equal(vmessKcp.streamSettings.network, 'kcp');
-          assert.ok(vmessKcp.streamSettings.kcpSettings.seed, 'mKCP seed must be stable and present');
+          assert.equal(vmessKcp.streamSettings.kcpSettings.mtu, 1350);
+          assert.ok(!Object.hasOwn(vmessKcp.streamSettings.kcpSettings, 'seed'), 'legacy mKCP seed field must not be emitted by current Xray');
           const shadowsocksRaw = configResponse.inbounds.find(inbound => inbound.tag === 'shadowsocks-raw-in');
           assert.ok(shadowsocksRaw, 'Shadowsocks RAW/TCP profile must be generated');
           assert.equal(shadowsocksRaw.port, 10023);
