@@ -77,19 +77,37 @@ export interface MasterServerConfig {
 
 // Master Configuration Helper
 const PUBLIC_HOST_PATTERN = /^(?=.{1,253}$)([a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)(\.([a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?))*$/;
+
+// Temporary development-platform hostnames must never be injected into client profiles.
+// Admins must explicitly configure a real public endpoint in the infrastructure panel.
+function isTemporaryDevelopmentHost(value: string): boolean {
+  const host = value.toLowerCase().replace(/\.$/, '');
+  return host === 'run.app' || host.endsWith('.run.app') ||
+    host === 'ai.studio' || host.endsWith('.ai.studio') ||
+    host === 'ia.studio' || host.endsWith('.ia.studio');
+}
+
 function isValidPublicHost(value: unknown): value is string {
-  return typeof value === 'string' && value === value.trim() && PUBLIC_HOST_PATTERN.test(value);
+  return typeof value === 'string' && value === value.trim() &&
+    PUBLIC_HOST_PATTERN.test(value) && !isTemporaryDevelopmentHost(value);
+}
+
+function normalizedStoredHost(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  const host = value.trim().toLowerCase();
+  return isValidPublicHost(host) ? host : '';
 }
 
 function loadMasterConfig(): MasterServerConfig {
-  const vpnDomain = (process.env.VPN_DOMAIN || '').trim().toLowerCase();
   const defaults: MasterServerConfig = {
-    serverHost: vpnDomain,
+    // The API/Caddy hostname from VPN_DOMAIN is not automatically a VPN profile host/SNI.
+    // The Super Admin explicitly configures both in the panel before issuing licences.
+    serverHost: '',
     serverPort: Number(process.env.VPN_PORT) || 443,
     protocol: 'vless',
     transport: 'ws',
     path: '/@abess237',
-    sniHost: vpnDomain,
+    sniHost: '',
     uuid: 'abe55237-0237-4237-8237-ab3552370237',
     secretPassphrase: process.env.MASTER_SECRET || '',
     systemName: 'AbessVpn Master Server',
@@ -99,15 +117,23 @@ function loadMasterConfig(): MasterServerConfig {
   if (fs.existsSync(configFile)) {
     try {
       const stored = JSON.parse(fs.readFileSync(configFile, 'utf8')) as Partial<MasterServerConfig>;
+      const rawStoredHost = typeof stored.serverHost === 'string' ? stored.serverHost.trim() : '';
+      const rawStoredSni = typeof stored.sniHost === 'string' ? stored.sniHost.trim() : '';
       const merged: MasterServerConfig = {
         ...defaults,
         ...stored,
-        serverHost: typeof stored.serverHost === 'string' ? stored.serverHost.trim() : defaults.serverHost,
+        // Scrub stale development/demo hostnames from persisted configs and do not
+        // inherit the API domain or the server host as an implicit SNI.
+        serverHost: normalizedStoredHost(stored.serverHost),
         serverPort: Number(stored.serverPort) || defaults.serverPort,
         path: '/@abess237',
-        sniHost: typeof stored.sniHost === 'string' ? stored.sniHost.trim() : (typeof stored.serverHost === 'string' ? stored.serverHost.trim() : defaults.sniHost),
+        sniHost: normalizedStoredHost(stored.sniHost),
         secretPassphrase: process.env.MASTER_SECRET || ''
       };
+      // Persist the scrubbed fields so stale demo hosts are removed from the saved configuration.
+      if (merged.serverHost !== rawStoredHost || merged.sniHost !== rawStoredSni) {
+        saveMasterConfig(merged);
+      }
       // Shadowsocks UDP uses its native socket, not an HTTP/WebSocket proxy.
       if (merged.protocol === 'shadowsocks' && merged.transport !== 'native') {
         merged.transport = 'native';
