@@ -760,9 +760,14 @@ async function startServer() {
   // 6. CLIENT MOBILE APPLICATION AUTHENTICATION
   // (Called by flutter_v2ray on Android/iOS)
   // ==========================================
-  app.post('/api/v1/auth/token', (req, res) => {
-    const rawToken = req.body?.token?.toString()?.trim();
-    const deviceId = req.body?.deviceId?.toString()?.trim();
+  const validateMobileToken = (
+    req: express.Request,
+    res: express.Response,
+    rawTokenInput: unknown,
+    deviceIdInput: unknown
+  ) => {
+    const rawToken = rawTokenInput?.toString()?.trim();
+    const deviceId = deviceIdInput?.toString()?.trim();
 
     if (!rawToken) {
       res.status(400).json({ valid: false, error: 'Token manquant' });
@@ -873,6 +878,40 @@ async function startServer() {
         security: 'tls'
       }
     });
+  };
+
+  app.post('/api/v1/auth/token', (req, res) => {
+    validateMobileToken(req, res, req.body?.token, req.body?.deviceId);
+  });
+
+  // Decrypt panel-issued links on the server; the master secret never enters the mobile app.
+  // Continue through the same expiry, quota, status, and device-limit validation as a typed token.
+  app.post('/api/v1/auth/import-link', (req, res) => {
+    const link = req.body?.link?.toString()?.trim();
+    if (!link || !link.startsWith('abess://')) {
+      res.status(400).json({ valid: false, error: 'Lien ABESS chiffré manquant ou invalide.' });
+      return;
+    }
+
+    try {
+      const linkPayload = link.slice('abess://'.length);
+      const separator = linkPayload.indexOf('.');
+      if (separator <= 0 || separator === linkPayload.length - 1) throw new Error('Invalid encrypted payload');
+      const iv = Buffer.from(linkPayload.slice(0, separator), 'base64');
+      const ciphertext = linkPayload.slice(separator + 1);
+      if (iv.length !== 16 || !ciphertext) throw new Error('Invalid IV or ciphertext');
+
+      const masterConfig = loadMasterConfig();
+      const key = crypto.createHash('sha256').update(masterConfig.secretPassphrase).digest();
+      const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
+      let plaintext = decipher.update(ciphertext, 'base64', 'utf8');
+      plaintext += decipher.final('utf8');
+      const decoded = JSON.parse(plaintext) as { token?: unknown };
+      if (typeof decoded.token !== 'string' || !decoded.token.trim()) throw new Error('Missing token in encrypted payload');
+      validateMobileToken(req, res, decoded.token, req.body?.deviceId);
+    } catch {
+      res.status(400).json({ valid: false, error: 'Lien ABESS invalide ou impossible à déchiffrer.' });
+    }
   });
 
   // Fail closed until an actual Xray/VLESS data plane is connected.
