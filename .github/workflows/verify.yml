@@ -211,6 +211,17 @@ jobs:
           assert.ok(xrayUsers.some(user => user.id === licenceA.clientUuid));
           assert.ok(xrayUsers.some(user => user.id === licenceB.clientUuid));
 
+          const vmessRawInbound = configResponse.inbounds.find(inbound => inbound.tag === 'vmess-raw-in');
+          const vmessKcpInbound = configResponse.inbounds.find(inbound => inbound.tag === 'vmess-kcp-in');
+          assert.ok(vmessRawInbound, 'VMess RAW/TCP inbound must be generated');
+          assert.equal(vmessRawInbound.port, 10060);
+          assert.equal(vmessRawInbound.streamSettings.network, 'raw');
+          assert.ok(vmessKcpInbound, 'VMess mKCP/UDP inbound must be generated');
+          assert.equal(vmessKcpInbound.port, 10061);
+          assert.equal(vmessKcpInbound.streamSettings.network, 'kcp');
+          assert.ok(!configResponse.inbounds.some(inbound => inbound.tag === 'vless-raw-in'), 'RAW must not expose VLESS without TLS');
+          assert.ok(!configResponse.inbounds.some(inbound => inbound.tag === 'trojan-kcp-in'), 'mKCP must not expose Trojan without TLS');
+
           // The API must never fake an HTTP/WebSocket handshake as a VPN tunnel.
           const crlf = String.fromCharCode(13, 10);
           const websocketResponse = await new Promise((resolve, reject) => {
