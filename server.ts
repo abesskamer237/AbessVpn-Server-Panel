@@ -766,8 +766,8 @@ async function startServer() {
     rawTokenInput: unknown,
     deviceIdInput: unknown
   ) => {
-    const rawToken = rawTokenInput?.toString()?.trim();
-    const deviceId = deviceIdInput?.toString()?.trim();
+    const rawToken = rawTokenInput == null ? '' : String(rawTokenInput).trim();
+    const deviceId = deviceIdInput == null ? '' : String(deviceIdInput).trim();
 
     if (!rawToken) {
       res.status(400).json({ valid: false, error: 'Token manquant' });
