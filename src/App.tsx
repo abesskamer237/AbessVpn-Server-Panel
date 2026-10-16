@@ -75,7 +75,10 @@ interface ClientToken {
 }
 
 interface MasterConfig {
+  /** Destination address for the TCP/UDP connection. */
   serverHost: string;
+  /** HTTP Host/authority header; may differ from serverHost. */
+  wsHost: string;
   serverPort: number;
   protocol: string;
   transport: string;
@@ -1043,7 +1046,7 @@ export default function App() {
 
               <form onSubmit={handleSaveConfig} className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="md:col-span-2 rounded-xl border border-slate-700 bg-slate-900/60 p-3 text-sm leading-relaxed text-slate-300">
-                  L’hôte public du protocole et le SNI ne sont plus préremplis depuis le domaine du panneau. Renseigne ici une adresse DNS ou IP qui pointe vers ce VPS. Pour WS, gRPC, HTTPUpgrade et XHTTP, le domaine doit être servi par Caddy et son certificat TLS doit couvrir le SNI. Avec le déploiement actuel, utilise normalement le même domaine public que VPN_DOMAIN, sauf si tu configures aussi cet hôte supplémentaire dans Caddy.
+                  Ces trois valeurs sont distinctes : <strong>Adresse du serveur</strong> = domaine/IP auquel le client ouvre la connexion ; <strong>Host HTTP</strong> = en-tête HTTP envoyé par WS/HTTPUpgrade/XHTTP (ou authority pour gRPC) ; <strong>SNI TLS</strong> = nom présenté pendant la négociation TLS. Pour le Caddy actuellement déployé, le Host HTTP et le SNI doivent normalement correspondre au domaine configuré dans <code>VPN_DOMAIN</code> et couvert par son certificat. Exemple courant : adresse = IP du VPS, Host HTTP = domaine VPN, SNI = domaine VPN.
                 </div>
                 <div>
                   <label className="block text-slate-300 font-semibold mb-1">Hôte public du protocole (domaine ou IP du VPS)</label>
@@ -1055,6 +1058,18 @@ export default function App() {
                     placeholder="vpn.ton-domaine.com"
                     required
                   />
+                </div>
+
+                <div>
+                  <label className="block text-slate-300 font-semibold mb-1">Host HTTP (en-tête Host / authority)</label>
+                  <input
+                    type="text"
+                    value={masterConfig.wsHost ?? ''}
+                    onChange={(e) => setMasterConfig({ ...masterConfig, wsHost: e.target.value })}
+                    className="w-full bg-[#03060e] border border-emerald-900 rounded-lg px-3 py-2 text-cyan-300 font-bold"
+                    placeholder="vpn.ton-domaine.com"
+                  />
+                  <p className="mt-1 text-xs text-slate-500">Valeur envoyée au transport HTTP. Laisse vide pour reprendre l’adresse du serveur. Pour le Caddy actuel, utilise en général le domaine déclaré dans VPN_DOMAIN.</p>
                 </div>
 
                 <div>
@@ -1090,7 +1105,7 @@ export default function App() {
                   Les profils WS/gRPC/HTTPUpgrade/XHTTP passent par HTTPS sur TCP 443. VMess RAW utilise TCP 10060 et VMess mKCP utilise UDP 10061. Shadowsocks natif utilise TCP + UDP sur 10050. Ouvre les ports 10050/TCP+UDP, 10060/TCP et 10061/UDP dans le pare-feu. RAW/mKCP sont réservés à VMess pour ne pas exposer VLESS sans TLS ni Trojan sans couche TLS.
                 </div>
                 <div className="md:col-span-2 rounded-lg border border-sky-900 bg-sky-950/20 p-3 text-sky-200">
-                  Configure l’hôte et le SNI ici, dans le panneau. Pour WS/gRPC/HTTPUpgrade/XHTTP, utilise normalement le domaine public configuré dans GitHub sous VPN_DOMAIN : son DNS doit pointer vers ce VPS et son certificat HTTPS doit être valide. Les transports directs TCP/UDP utilisent leurs ports dédiés et ne reposent pas sur le SNI TLS.
+                  Adresse, Host HTTP et SNI sont sauvegardés séparément. WS utilise Host HTTP dans l’en-tête WebSocket ; HTTPUpgrade/XHTTP l’utilisent dans leurs paramètres de transport ; gRPC utilise l’authority. Pour les transports directs TCP/UDP (VMess RAW/mKCP et Shadowsocks natif), ce champ Host n’est pas utilisé. Le SNI doit toujours être couvert par le certificat TLS présenté au client.
                 </div>
                 <label className="block text-slate-300 font-semibold mb-1">Chemin WebSocket (VLESS + WS)</label>
                   <input
