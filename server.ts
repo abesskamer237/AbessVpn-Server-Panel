@@ -220,6 +220,105 @@ async function startServer() {
 
   const server = http.createServer(app);
 
+  // Public health check used by the mobile client before token operations.
+  app.get('/api/v1/ping', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({
+      ok: true,
+      service: 'abessvpn-master',
+      uptimeSeconds: Math.floor(process.uptime()),
+      timestamp: new Date().toISOString(),
+      // The current WebSocket implementation is only a handshake placeholder.
+      // Do not advertise the data plane as ready until it is replaced by Xray-core.
+      dataPlane: 'not-ready'
+    });
+  });
+
+  // Real HTTP throughput probes. Limit payload size to protect the management API.
+  app.get('/api/v1/speedtest/download', (req, res) => {
+    const requested = Number(req.query.bytes ?? 1024 * 1024);
+    const byteCount = Number.isFinite(requested)
+      ? Math.max(16 * 1024, Math.min(5 * 1024 * 1024, Math.floor(requested)))
+      : 1024 * 1024;
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Length', String(byteCount));
+    res.end(Buffer.alloc(byteCount, 0x61));
+  });
+
+  app.post(
+    '/api/v1/speedtest/upload',
+    express.raw({ type: 'application/octet-stream', limit: '5mb' }),
+    (req, res) => {
+      const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+      res.setHeader('Cache-Control', 'no-store');
+      res.json({ ok: true, receivedBytes: body.length, timestamp: new Date().toISOString() });
+    }
+  );
+
+  // The Android app previously called these routes, but they did not exist.
+  // This endpoint only records client-reported usage; it is not authoritative
+  // quota enforcement. The VLESS data plane must account server-side bytes.
+  app.post('/api/v1/client/telemetry', (req, res) => {
+    const rawToken = req.body?.token?.toString()?.trim();
+    if (!rawToken) {
+      res.status(400).json({ ok: false, error: 'Token manquant' });
+      return;
+    }
+
+    const tokens = loadTokens();
+    const found = tokens.find(t => t.token.toUpperCase() === rawToken.toUpperCase());
+    if (!found) {
+      res.status(401).json({ ok: false, error: 'Token client non reconnu ou révoqué.' });
+      return;
+    }
+
+    const now = Date.now();
+    const expiry = new Date(found.expiresAt).getTime();
+    const isExpired = !Number.isFinite(expiry) || now >= expiry;
+    const isQuotaExceeded = found.bandwidthUsedGb >= found.bandwidthGb;
+
+    if (isExpired) found.status = 'expired';
+    else if (isQuotaExceeded) found.status = 'quota_exceeded';
+
+    found.lastSeenAt = new Date(now).toISOString();
+    found.lastSeenIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim()
+      || req.socket.remoteAddress
+      || 'unknown';
+    saveTokens(tokens);
+
+    res.json({
+      ok: true,
+      isExpired,
+      isQuotaExceeded,
+      status: found.status,
+      bandwidthGb: found.bandwidthGb,
+      bandwidthUsedGb: Number(found.bandwidthUsedGb.toFixed(3)),
+      bandwidthRemainingGb: Number(Math.max(0, found.bandwidthGb - found.bandwidthUsedGb).toFixed(3)),
+      expiresAt: found.expiresAt,
+      quotaSource: 'server-accounting-required'
+    });
+  });
+
+  // Licence creation stays inside the authenticated admin/reseller panel.
+  // Never create paid tokens through an unauthenticated public mobile endpoint.
+  app.post('/api/v1/client/create-token', (_req, res) => {
+    res.status(403).json({
+      ok: false,
+      error: 'La création de tokens doit passer par le panneau ABESS VPN avec une session administrateur ou revendeur authentifiée.'
+    });
+  });
+
+  // A trial cannot be issued until a real data plane is configured. Returning a
+  // clear error avoids telling the user a free VPN connection is active when it is not.
+  app.post('/api/v1/client/claim-free-trial', (_req, res) => {
+    res.status(503).json({
+      ok: false,
+      error: 'Essai temporairement indisponible : le moteur de tunnel VPN n’est pas encore opérationnel sur ce serveur.'
+    });
+  });
+
+
   // Authentication Middleware
   const authenticate = (req: express.Request, res: express.Response, next: express.NextFunction) => {
     const authHeader = req.headers['authorization'];
