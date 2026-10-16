@@ -63,7 +63,10 @@ export interface ClientToken {
 }
 
 export interface MasterServerConfig {
+  /** Socket endpoint clients connect to (domain or IP). */
   serverHost: string;
+  /** HTTP Host/authority header for WS, HTTPUpgrade, XHTTP and gRPC; empty means use serverHost. */
+  wsHost: string;
   serverPort: number;
   protocol: string;
   transport: string;
@@ -95,6 +98,7 @@ function loadMasterConfig(): MasterServerConfig {
     // The API/Caddy hostname from VPN_DOMAIN is not automatically a VPN profile host/SNI.
     // The Super Admin explicitly configures both in the panel before issuing licences.
     serverHost: '',
+    wsHost: '',
     serverPort: Number(process.env.VPN_PORT) || 443,
     protocol: 'vless',
     transport: 'ws',
@@ -110,19 +114,21 @@ function loadMasterConfig(): MasterServerConfig {
     try {
       const stored = JSON.parse(fs.readFileSync(configFile, 'utf8')) as Partial<MasterServerConfig>;
       const rawStoredHost = typeof stored.serverHost === 'string' ? stored.serverHost.trim() : '';
+      const rawStoredWsHost = typeof stored.wsHost === 'string' ? stored.wsHost.trim() : '';
       const rawStoredSni = typeof stored.sniHost === 'string' ? stored.sniHost.trim() : '';
       const merged: MasterServerConfig = {
         ...defaults,
         ...stored,
-        // Normalize persisted Host/SNI values and never infer either one from the API domain.
+        // Keep the socket endpoint, HTTP Host/authority and TLS SNI as separate values.
         serverHost: normalizedStoredHost(stored.serverHost),
+        wsHost: normalizedStoredHost(stored.wsHost),
         serverPort: Number(stored.serverPort) || defaults.serverPort,
         path: '/@abess237',
         sniHost: normalizedStoredHost(stored.sniHost),
         secretPassphrase: process.env.MASTER_SECRET || ''
       };
       // Persist normalized fields when whitespace or letter case changed.
-      if (merged.serverHost !== rawStoredHost || merged.sniHost !== rawStoredSni) {
+      if (merged.serverHost !== rawStoredHost || merged.wsHost !== rawStoredWsHost || merged.sniHost !== rawStoredSni) {
         saveMasterConfig(merged);
       }
       // Shadowsocks UDP uses its native socket, not an HTTP/WebSocket proxy.
@@ -881,6 +887,7 @@ async function startServer() {
       bandwidthGb: requestedGb,
       expiresAt: calculatedExpiresAt,
       serverHost: masterConfig.serverHost,
+      wsHost: masterConfig.wsHost,
       serverPort: xrayPublicPort(masterConfig.protocol, masterConfig.transport, masterConfig.serverPort),
       path: isXrayProtocol(masterConfig.protocol) && isXrayTransport(masterConfig.transport)
         ? xrayProfilePath(masterConfig.protocol, masterConfig.transport, masterConfig.path)
@@ -990,11 +997,16 @@ async function startServer() {
       return;
     }
     const requestedHost = typeof req.body?.serverHost === 'string' ? req.body.serverHost.trim() : current.serverHost;
+    const requestedWsHost = typeof req.body?.wsHost === 'string' ? req.body.wsHost.trim() : current.wsHost;
     const requestedSni = typeof req.body?.sniHost === 'string' ? req.body.sniHost.trim() : current.sniHost;
-    if (!isValidPublicHost(requestedHost) || !isValidPublicHost(requestedSni)) {
+    if (
+      !isValidPublicHost(requestedHost) ||
+      !isValidPublicHost(requestedSni) ||
+      (requestedWsHost !== '' && !isValidPublicHost(requestedWsHost))
+    ) {
       res.status(400).json({
         success: false,
-        error: 'Renseignez un hôte public et un SNI valides (nom DNS ou IPv4, sans protocole, port ni chemin). Pour les transports TLS, utilisez un domaine couvert par le certificat HTTPS.'
+        error: 'Renseignez une adresse serveur et un SNI valides, ainsi qu’un Host HTTP valide s’il est renseigné (nom DNS ou IPv4, sans protocole, port ni chemin). Le SNI doit être couvert par le certificat TLS.'
       });
       return;
     }
@@ -1006,6 +1018,7 @@ async function startServer() {
       ...current,
       ...req.body,
       serverHost: requestedHost,
+      wsHost: requestedWsHost.toLowerCase(),
       sniHost: requestedSni,
       serverPort: effectivePort,
       protocol: requestedProtocol,
@@ -1186,7 +1199,7 @@ async function startServer() {
           : '/@abess237',
         uuid: found.clientUuid || masterConfig.uuid,
         sni: masterConfig.sniHost,
-        wsHost: host,
+        wsHost: masterConfig.wsHost,
         method: masterConfig.protocol === 'shadowsocks' ? 'aes-128-gcm' : undefined,
         protocol: masterConfig.protocol,
         transport: masterConfig.transport,
