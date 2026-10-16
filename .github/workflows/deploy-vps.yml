@@ -216,6 +216,7 @@ jobs:
             --exclude '.deploy.env' \
             ./ "$DEST:abessvpn-server/"
           "$HOME/.local/bin/abess-scp" -P "$VPS_PORT" -o StrictHostKeyChecking=yes .deploy.env "$DEST:abessvpn-server/.env.new"
+          # shellcheck disable=SC2016
           "$HOME/.local/bin/abess-ssh" -p "$VPS_PORT" -o StrictHostKeyChecking=yes "$DEST" 'chmod 600 "$HOME/abessvpn-server/.env.new"'
 
       - name: Build and start services, then verify public HTTPS
