@@ -38,6 +38,8 @@ export interface AppUser {
 export interface ClientToken {
   id: string;
   token: string;
+  /** Per-licence VLESS identity; legacy records are migrated on load. */
+  clientUuid?: string;
   resellerId: string;
   resellerName: string;
   plan: string;
@@ -151,7 +153,20 @@ function saveUsers(users: AppUser[]) {
 function loadTokens(): ClientToken[] {
   if (fs.existsSync(tokensFile)) {
     try {
-      return JSON.parse(fs.readFileSync(tokensFile, 'utf8'));
+      const loaded = JSON.parse(fs.readFileSync(tokensFile, 'utf8')) as ClientToken[];
+      let changed = false;
+      for (const token of loaded) {
+        if (!token.clientUuid || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(token.clientUuid)) {
+          token.clientUuid = crypto.randomUUID();
+          changed = true;
+        }
+        if (!Array.isArray(token.deviceIds)) {
+          token.deviceIds = [];
+          changed = true;
+        }
+      }
+      if (changed) fs.writeFileSync(tokensFile, JSON.stringify(loaded, null, 2), 'utf8');
+      return loaded;
     } catch {
       // fallback
     }
@@ -161,6 +176,8 @@ function loadTokens(): ClientToken[] {
     {
       id: 'tok_root_1',
       token: 'ABESS-VIP-ROOT-2026',
+      clientUuid: crypto.randomUUID(),
+      deviceIds: [],
       resellerId: 'usr_admin_master',
       resellerName: 'Rigobert Manga (Admin Principal)',
       plan: 'COMMERCE VIP ULTRA 50 GO',
@@ -590,7 +607,8 @@ async function startServer() {
     }
 
     const masterConfig = loadMasterConfig();
-    const finalToken = (token || 'ABESS-' + Math.random().toString(36).substring(2, 9).toUpperCase()).trim();
+    const clientUuid = crypto.randomUUID();
+    const finalToken = (token || 'ABESS-' + crypto.randomBytes(5).toString('hex').toUpperCase()).trim();
     const calculatedExpiresAt = expiresAt || new Date(Date.now() + (Number(days) || 30) * 24 * 3600 * 1000).toISOString();
     const daysRemaining = Math.max(0, Math.ceil((new Date(calculatedExpiresAt).getTime() - Date.now()) / (1000 * 3600 * 24)));
 
@@ -604,7 +622,7 @@ async function startServer() {
       serverPort: masterConfig.serverPort,
       path: masterConfig.path,
       sniHost: masterConfig.sniHost,
-      uuid: masterConfig.uuid,
+      uuid: clientUuid,
       protocol: masterConfig.protocol,
       transport: masterConfig.transport
     };
@@ -614,6 +632,8 @@ async function startServer() {
     const newToken: ClientToken = {
       id: 'tok_' + Math.random().toString(36).substring(2, 9),
       token: finalToken,
+      clientUuid,
+      deviceIds: [],
       resellerId: user.id,
       resellerName: user.name,
       plan: plan || `${requestedGb} GO CYBER VIP`,
@@ -847,7 +867,7 @@ async function startServer() {
         address: host,
         port: masterConfig.serverPort,
         path: masterConfig.path,
-        uuid: masterConfig.uuid,
+        uuid: found.clientUuid || masterConfig.uuid,
         sni: masterConfig.sniHost,
         protocol: masterConfig.protocol,
         transport: masterConfig.transport,
