@@ -872,6 +872,12 @@ async function startServer() {
     }
 
     const masterConfig = loadMasterConfig();
+    if (!isValidPublicHost(masterConfig.serverHost) || !isValidPublicHost(masterConfig.sniHost)) {
+      res.status(409).json({
+        error: 'Configurez d’abord l’hôte public et le SNI TLS dans le panneau Super Admin avant de créer des licences.'
+      });
+      return;
+    }
     const clientUuid = crypto.randomUUID();
     const finalToken = (token || 'ABESS-' + crypto.randomBytes(5).toString('hex').toUpperCase()).trim();
     const calculatedExpiresAt = expiresAt || new Date(Date.now() + (Number(days) || 30) * 24 * 3600 * 1000).toISOString();
