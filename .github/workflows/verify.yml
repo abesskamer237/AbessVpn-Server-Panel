@@ -120,7 +120,7 @@ jobs:
                 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==',
                 '',
                 '',
-              ].join('\\r\\n'));
+              ].join('\r\n'));
             });
             let response = '';
             const timeout = setTimeout(() => {
@@ -129,7 +129,7 @@ jobs:
             }, 3000);
             socket.on('data', (chunk) => {
               response += chunk.toString('utf8');
-              if (response.includes('\\r\\n\\r\\n')) {
+              if (response.includes('\r\n\r\n')) {
                 clearTimeout(timeout);
                 socket.destroy();
                 resolve(response);
@@ -140,7 +140,7 @@ jobs:
               reject(error);
             });
           });
-          assert.match(websocketStatus, /^HTTP\\/1\\.1 503 Service Unavailable/m);
+          assert.ok(String(websocketStatus).includes('HTTP/1.1 503 Service Unavailable'));
 
           console.log('Mobile route, token/device-limit, and fail-closed WebSocket smoke tests passed.');
           NODE
