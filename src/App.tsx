@@ -108,6 +108,7 @@ export default function App() {
   const [masterConfig, setMasterConfig] = useState<MasterConfig | null>(null);
   const [configSaving, setConfigSaving] = useState<boolean>(false);
   const [configSuccess, setConfigSuccess] = useState<boolean>(false);
+  const [configError, setConfigError] = useState<string | null>(null);
 
   // Modal / Action States: New Reseller
   const [newResellerName, setNewResellerName] = useState<string>('');
@@ -405,6 +406,7 @@ export default function App() {
     if (!masterConfig) return;
     setConfigSaving(true);
     setConfigSuccess(false);
+    setConfigError(null);
 
     try {
       const res = await fetch('/api/v1/admin/server-config', {
@@ -416,12 +418,18 @@ export default function App() {
         body: JSON.stringify(masterConfig)
       });
       if (res.ok) {
+        const payload = await res.json();
+        if (payload.config) setMasterConfig(payload.config as MasterConfig);
         setConfigSuccess(true);
         setTimeout(() => setConfigSuccess(false), 3000);
         addLog(`[MASTER CONFIG] Configuration d'infrastructure sauvegardée.`);
+      } else {
+        const payload = await res.json().catch(() => ({}));
+        setConfigError(typeof payload.error === 'string' ? payload.error : 'La configuration n’a pas pu être sauvegardée.');
       }
     } catch (err) {
       console.error(err);
+      setConfigError('Impossible de joindre le serveur. Vérifiez la connexion puis réessayez.');
     } finally {
       setConfigSaving(false);
     }
@@ -1032,15 +1040,21 @@ export default function App() {
                   <span>Configuration du serveur maître mise à jour avec succès.</span>
                 </div>
               )}
+              {configError && (
+                <div role="alert" className="p-3 bg-red-950/40 border border-red-500/50 rounded-xl text-red-300">
+                  {configError}
+                </div>
+              )}
 
               <form onSubmit={handleSaveConfig} className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-slate-300 font-semibold mb-1">Serveur Hôte / Domaine Principal</label>
+                  <label className="block text-slate-300 font-semibold mb-1">Hôte public du protocole (domaine ou IP du VPS)</label>
                   <input
                     type="text"
                     value={masterConfig.serverHost}
                     onChange={(e) => setMasterConfig({ ...masterConfig, serverHost: e.target.value })}
                     className="w-full bg-[#03060e] border border-emerald-900 rounded-lg px-3 py-2 text-emerald-300 font-bold"
+                    placeholder="vpn.ton-domaine.com"
                     required
                   />
                 </div>
@@ -1051,7 +1065,8 @@ export default function App() {
                     type="number"
                     value={masterConfig.serverPort}
                     onChange={(e) => setMasterConfig({ ...masterConfig, serverPort: Number(e.target.value) })}
-                    className="w-full bg-[#03060e] border border-emerald-900 rounded-lg px-3 py-2 text-slate-200"
+                    className="w-full bg-[#03060e] border border-emerald-900 rounded-lg px-3 py-2 text-slate-200 cursor-not-allowed"
+                    readOnly
                     required
                   />
                 </div>
@@ -1060,13 +1075,13 @@ export default function App() {
                   {/* Generated Xray profiles with TLS on TCP 443; native Shadowsocks TCP/UDP uses port 10050. */}
                 <div>
                   <label className="block text-slate-300 font-semibold mb-1">Protocole Xray</label>
-                  <select value={masterConfig.protocol} onChange={(e) => { const protocol = e.target.value; const transport = protocol === "shadowsocks" ? "native" : (masterConfig.transport === "native" || (protocol !== "vmess" && ["raw", "kcp"].includes(masterConfig.transport))) ? "ws" : masterConfig.transport; setMasterConfig({ ...masterConfig, protocol, transport }); }} className="w-full bg-[#03060e] border border-emerald-900 rounded-lg px-3 py-2 text-emerald-200">
+                  <select value={masterConfig.protocol} onChange={(e) => { const protocol = e.target.value; const transport = protocol === "shadowsocks" ? "native" : (masterConfig.transport === "native" || (protocol !== "vmess" && ["raw", "kcp"].includes(masterConfig.transport))) ? "ws" : masterConfig.transport; const serverPort = transport === "native" ? 10050 : transport === "raw" ? 10060 : transport === "kcp" ? 10061 : 443; setMasterConfig({ ...masterConfig, protocol, transport, serverPort }); }} className="w-full bg-[#03060e] border border-emerald-900 rounded-lg px-3 py-2 text-emerald-200">
                     <option value="vless">VLESS</option><option value="vmess">VMess</option><option value="trojan">Trojan</option><option value="shadowsocks">Shadowsocks AEAD</option>
                   </select>
                 </div>
                 <div>
                   <label className="block text-slate-300 font-semibold mb-1">Transport</label>
-                  <select value={masterConfig.transport} onChange={(e) => setMasterConfig({ ...masterConfig, transport: e.target.value })} className="w-full bg-[#03060e] border border-emerald-900 rounded-lg px-3 py-2 text-emerald-200">
+                  <select value={masterConfig.transport} onChange={(e) => { const transport = e.target.value; const serverPort = transport === "native" ? 10050 : transport === "raw" ? 10060 : transport === "kcp" ? 10061 : 443; setMasterConfig({ ...masterConfig, transport, serverPort }); }} className="w-full bg-[#03060e] border border-emerald-900 rounded-lg px-3 py-2 text-emerald-200">
                     <option value="ws" disabled={masterConfig.protocol === "shadowsocks"}>WebSocket (WS)</option><option value="grpc" disabled={masterConfig.protocol === "shadowsocks"}>gRPC</option><option value="httpupgrade" disabled={masterConfig.protocol === "shadowsocks"}>HTTPUpgrade</option><option value="xhttp" disabled={masterConfig.protocol === "shadowsocks"}>XHTTP</option>
                     <option value="raw" disabled={masterConfig.protocol !== "vmess"}>RAW / TCP direct (VMess)</option>
                     <option value="kcp" disabled={masterConfig.protocol !== "vmess"}>mKCP / UDP (VMess)</option>
@@ -1074,7 +1089,10 @@ export default function App() {
                   </select>
                 </div>
                 <div className="md:col-span-2 rounded-lg border border-slate-700 bg-slate-900/50 p-3 text-slate-400">
-                  Les profils WS/gRPC/HTTPUpgrade/XHTTP passent par TLS sur TCP 443. VMess RAW utilise TCP 10060 et VMess mKCP utilise UDP 10061. Shadowsocks natif utilise TCP + UDP sur 10050. Ouvre les ports 10050/TCP+UDP, 10060/TCP et 10061/UDP dans le pare-feu. RAW/mKCP sont réservés à VMess pour ne pas exposer VLESS sans TLS ni Trojan sans couche TLS.
+                  Les profils WS/gRPC/HTTPUpgrade/XHTTP passent par HTTPS sur TCP 443. VMess RAW utilise TCP 10060 et VMess mKCP utilise UDP 10061. Shadowsocks natif utilise TCP + UDP sur 10050. Ouvre les ports 10050/TCP+UDP, 10060/TCP et 10061/UDP dans le pare-feu. RAW/mKCP sont réservés à VMess pour ne pas exposer VLESS sans TLS ni Trojan sans couche TLS.
+                </div>
+                <div className="md:col-span-2 rounded-lg border border-sky-900 bg-sky-950/20 p-3 text-sky-200">
+                  Configure l’hôte et le SNI ici, dans le panneau. Pour WS/gRPC/HTTPUpgrade/XHTTP, utilise normalement le domaine public configuré dans GitHub sous VPN_DOMAIN : son DNS doit pointer vers ce VPS et son certificat HTTPS doit être valide. Les transports directs TCP/UDP utilisent leurs ports dédiés et ne reposent pas sur le SNI TLS.
                 </div>
                 <label className="block text-slate-300 font-semibold mb-1">Chemin WebSocket (VLESS + WS)</label>
                   <input
@@ -1087,12 +1105,13 @@ export default function App() {
                 </div>
 
                 <div>
-                  <label className="block text-slate-300 font-semibold mb-1">SNI Bug Host Maître</label>
+                  <label className="block text-slate-300 font-semibold mb-1">SNI TLS (nom de domaine couvert par le certificat HTTPS)</label>
                   <input
                     type="text"
                     value={masterConfig.sniHost}
                     onChange={(e) => setMasterConfig({ ...masterConfig, sniHost: e.target.value })}
                     className="w-full bg-[#03060e] border border-emerald-900 rounded-lg px-3 py-2 text-amber-300"
+                    placeholder="vpn.ton-domaine.com"
                     required
                   />
                 </div>
