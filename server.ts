@@ -83,7 +83,7 @@ function loadMasterConfig(): MasterServerConfig {
     serverPort: Number(process.env.VPN_PORT) || 443,
     protocol: 'vless',
     transport: 'ws',
-    path: process.env.VLESS_WS_PATH || '/@abess237',
+    path: '/@abess237',
     sniHost: vpnDomain,
     uuid: 'abe55237-0237-4237-8237-ab3552370237',
     secretPassphrase: process.env.MASTER_SECRET || '',
@@ -99,7 +99,7 @@ function loadMasterConfig(): MasterServerConfig {
         ...stored,
         serverHost: vpnDomain,
         serverPort: Number(process.env.VPN_PORT) || 443,
-        path: process.env.VLESS_WS_PATH || stored.path || '/@abess237',
+        path: '/@abess237',
         sniHost: vpnDomain,
         secretPassphrase: process.env.MASTER_SECRET || ''
       };
@@ -223,76 +223,85 @@ function xrayUserEmail(token: ClientToken): string {
   return 'abess-' + token.id.replace(/[^a-zA-Z0-9_.@-]/g, '_');
 }
 
+const XRAY_PROTOCOLS = ['vless', 'vmess', 'trojan', 'shadowsocks'] as const;
+const XRAY_TRANSPORTS = ['ws', 'grpc', 'httpupgrade', 'xhttp'] as const;
+type XrayProtocol = typeof XRAY_PROTOCOLS[number];
+type XrayTransport = typeof XRAY_TRANSPORTS[number] | 'native';
+
+function isXrayProtocol(value: unknown): value is XrayProtocol {
+  return typeof value === 'string' && (XRAY_PROTOCOLS as readonly string[]).includes(value);
+}
+function isXrayTransport(value: unknown): value is XrayTransport {
+  return value === 'native' || (typeof value === 'string' && (XRAY_TRANSPORTS as readonly string[]).includes(value));
+}
+function normalizedPath(_value: string): string { return '/@abess237'; }
+function xrayProfilePath(protocol: XrayProtocol, transport: XrayTransport, customWsPath = '/@abess237'): string {
+  if (protocol === 'shadowsocks' && transport === 'native') return '';
+  if (protocol === 'vless' && transport === 'ws') return normalizedPath(customWsPath);
+  return '/@abess237/' + protocol + '/' + transport;
+}
+function xrayProfilePort(protocol: XrayProtocol, transport: typeof XRAY_TRANSPORTS[number]): number {
+  return 10000 + XRAY_PROTOCOLS.indexOf(protocol) * 5 + XRAY_TRANSPORTS.indexOf(transport);
+}
+function xrayStreamSettings(transport: typeof XRAY_TRANSPORTS[number], profilePath: string): Record<string, unknown> {
+  switch (transport) {
+    case 'ws': return { network: 'ws', security: 'none', wsSettings: { path: profilePath } };
+    case 'grpc': return { network: 'grpc', security: 'none', grpcSettings: { serviceName: profilePath.replace(/^\/+/, ''), multiMode: false } };
+    case 'httpupgrade': return { network: 'httpupgrade', security: 'none', httpupgradeSettings: { path: profilePath, host: '' } };
+    case 'xhttp': return { network: 'xhttp', security: 'none', xhttpSettings: { path: profilePath, mode: 'auto' } };
+  }
+}
+
 function syncXrayConfig(tokens: ClientToken[] = loadTokens()): boolean {
   const masterConfig = loadMasterConfig();
   const now = Date.now();
-  const users = tokens
-    .filter(token =>
-      token.status === 'active' &&
-      Number.isFinite(new Date(token.expiresAt).getTime()) &&
-      new Date(token.expiresAt).getTime() > now &&
-      Number(token.bandwidthUsedGb) < Number(token.bandwidthGb) &&
-      typeof token.clientUuid === 'string' &&
-      token.clientUuid.length > 0
-    )
-    .map(token => ({
-      id: token.clientUuid,
-      email: xrayUserEmail(token),
-      level: 0
-    }));
-
+  const activeTokens = tokens.filter(token => token.status === 'active' &&
+    Number.isFinite(new Date(token.expiresAt).getTime()) && new Date(token.expiresAt).getTime() > now &&
+    Number(token.bandwidthUsedGb) < Number(token.bandwidthGb) &&
+    typeof token.clientUuid === 'string' && token.clientUuid.length > 0);
+  const inbounds: Array<Record<string, unknown>> = [];
+  for (const protocol of XRAY_PROTOCOLS) {
+    for (const transport of XRAY_TRANSPORTS) {
+      const profilePath = xrayProfilePath(protocol, transport, masterConfig.path);
+      const users = activeTokens.map(token => ({ id: token.clientUuid as string, email: xrayUserEmail(token), level: 0 }));
+      let settings: Record<string, unknown>;
+      switch (protocol) {
+        case 'vless': settings = { users, decryption: 'none' }; break;
+        case 'vmess': settings = { users: users.map(user => ({ id: user.id, email: user.email, level: 0, alterId: 0, security: 'auto' })) }; break;
+        case 'trojan': settings = { users: activeTokens.map(token => ({ password: token.clientUuid as string, email: xrayUserEmail(token), level: 0 })) }; break;
+        case 'shadowsocks':
+          settings = {
+            network: 'tcp',
+            method: 'aes-128-gcm',
+            password: crypto.createHmac('sha256', masterConfig.secretPassphrase || 'abessvpn').update('abessvpn-shadowsocks-inbound').digest('hex'),
+            users: activeTokens.map(token => ({ method: 'aes-128-gcm', password: token.clientUuid as string, email: xrayUserEmail(token), level: 0 }))
+          };
+          break;
+      }
+      inbounds.push({ tag: protocol + '-' + transport + '-in', listen: '0.0.0.0', port: xrayProfilePort(protocol, transport), protocol, settings, streamSettings: xrayStreamSettings(transport, profilePath) });
+    }
+  }
+  // Native Shadowsocks uses an exposed TCP/UDP socket; Caddy handles only HTTP-based transports.
+  inbounds.push({
+    tag: 'shadowsocks-native-in', listen: '0.0.0.0', port: 10050, protocol: 'shadowsocks',
+    settings: {
+      network: 'tcp,udp', method: 'aes-128-gcm',
+      password: crypto.createHmac('sha256', masterConfig.secretPassphrase || 'abessvpn').update('abessvpn-shadowsocks-native').digest('hex'),
+      users: activeTokens.map(token => ({ method: 'aes-128-gcm', password: token.clientUuid as string, email: xrayUserEmail(token), level: 0 }))
+    }
+  });
+  inbounds.push({ tag: 'api', listen: '127.0.0.1', port: 10085, protocol: 'dokodemo-door', settings: { address: '127.0.0.1' } });
   const config = {
     log: { loglevel: 'warning', access: 'none', error: '/dev/stderr' },
-    api: {
-      tag: 'api',
-      services: ['HandlerService', 'StatsService', 'LoggerService']
-    },
+    api: { tag: 'api', services: ['HandlerService', 'StatsService', 'LoggerService'] },
     stats: {},
-    policy: {
-      levels: {
-        '0': {
-          statsUserUplink: true,
-          statsUserDownlink: true,
-          statsUserOnline: true
-        }
-      }
-    },
-    inbounds: [
-      {
-        tag: 'vless-ws-in',
-        listen: '0.0.0.0',
-        port: 10000,
-        protocol: 'vless',
-        settings: { users, decryption: 'none' },
-        streamSettings: {
-          network: 'ws',
-          security: 'none',
-          wsSettings: { path: masterConfig.path }
-        }
-      },
-      {
-        tag: 'api',
-        listen: '127.0.0.1',
-        port: 10085,
-        protocol: 'dokodemo-door',
-        settings: { address: '127.0.0.1' }
-      }
-    ],
-    outbounds: [
-      // The first outbound is the default for ordinary VLESS client traffic.
-      { tag: 'direct', protocol: 'freedom', settings: {} },
-      // Xray's local control API requires a dedicated outbound tag named "api".
-      { tag: 'api', protocol: 'freedom', settings: {} },
-      { tag: 'block', protocol: 'blackhole', settings: {} }
-    ],
-    routing: {
-      rules: [{ type: 'field', inboundTag: ['api'], outboundTag: 'api' }]
-    }
+    policy: { levels: { '0': { statsUserUplink: true, statsUserDownlink: true, statsUserOnline: true } } },
+    inbounds,
+    outbounds: [{ tag: 'direct', protocol: 'freedom', settings: {} }, { tag: 'api', protocol: 'freedom', settings: {} }, { tag: 'block', protocol: 'blackhole', settings: {} }],
+    routing: { rules: [{ type: 'field', inboundTag: ['api'], outboundTag: 'api' }] }
   };
-
   return writeJsonAtomically(xrayConfigFile, config);
 }
-
 interface XrayUsageState {
   generation: string;
   lastCounters: Record<string, { uplink: number; downlink: number }>;
@@ -802,8 +811,10 @@ async function startServer() {
       bandwidthGb: requestedGb,
       expiresAt: calculatedExpiresAt,
       serverHost: masterConfig.serverHost,
-      serverPort: masterConfig.serverPort,
-      path: masterConfig.path,
+      serverPort: masterConfig.transport === 'native' && masterConfig.protocol === 'shadowsocks' ? 10050 : masterConfig.serverPort,
+      path: isXrayProtocol(masterConfig.protocol) && isXrayTransport(masterConfig.transport)
+        ? xrayProfilePath(masterConfig.protocol, masterConfig.transport, masterConfig.path)
+        : '/@abess237',
       sniHost: masterConfig.sniHost,
       uuid: clientUuid,
       protocol: masterConfig.protocol,
@@ -893,8 +904,15 @@ async function startServer() {
     }
 
     const current = loadMasterConfig();
-    const updated = { ...current, ...req.body };
+    const requestedProtocol = req.body?.protocol ?? current.protocol;
+    const requestedTransport = req.body?.transport ?? current.transport;
+    if (!isXrayProtocol(requestedProtocol) || !isXrayTransport(requestedTransport) || (requestedTransport === 'native' && requestedProtocol !== 'shadowsocks')) {
+      res.status(400).json({ success: false, error: 'Profils autorisés : VLESS, VMess, Trojan, Shadowsocks ; transports WS, gRPC, HTTPUpgrade, XHTTP. TCP/UDP natif est disponible pour Shadowsocks.' });
+      return;
+    }
+    const updated = { ...current, ...req.body, protocol: requestedProtocol, transport: requestedTransport, path: '/@abess237' };
     saveMasterConfig(updated);
+    syncXrayConfig();
     res.json({ success: true, config: updated });
   });
 
@@ -1052,13 +1070,15 @@ async function startServer() {
       status: found.status,
       serverConfig: {
         address: host,
-        port: masterConfig.serverPort,
-        path: masterConfig.path,
+        port: masterConfig.transport === 'native' && masterConfig.protocol === 'shadowsocks' ? 10050 : masterConfig.serverPort,
+        path: isXrayProtocol(masterConfig.protocol) && isXrayTransport(masterConfig.transport)
+          ? xrayProfilePath(masterConfig.protocol, masterConfig.transport, masterConfig.path)
+          : '/@abess237',
         uuid: found.clientUuid || masterConfig.uuid,
         sni: masterConfig.sniHost,
         protocol: masterConfig.protocol,
         transport: masterConfig.transport,
-        security: 'tls'
+        security: masterConfig.transport === 'native' ? 'none' : 'tls'
       }
     });
   };

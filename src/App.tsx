@@ -1057,11 +1057,28 @@ export default function App() {
                 </div>
 
                 <div>
-                  <label className="block text-slate-300 font-semibold mb-1">Chemin WebSocket (Path)</label>
+                  {/* Generated Xray profiles with TLS on TCP 443; native Shadowsocks TCP/UDP uses port 10050. */}
+                <div>
+                  <label className="block text-slate-300 font-semibold mb-1">Protocole Xray</label>
+                  <select value={masterConfig.protocol} onChange={(e) => setMasterConfig({ ...masterConfig, protocol: e.target.value, transport: e.target.value !== "shadowsocks" && masterConfig.transport === "native" ? "ws" : masterConfig.transport })} className="w-full bg-[#03060e] border border-emerald-900 rounded-lg px-3 py-2 text-emerald-200">
+                    <option value="vless">VLESS</option><option value="vmess">VMess</option><option value="trojan">Trojan</option><option value="shadowsocks">Shadowsocks AEAD</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-slate-300 font-semibold mb-1">Transport</label>
+                  <select value={masterConfig.transport} onChange={(e) => setMasterConfig({ ...masterConfig, transport: e.target.value })} className="w-full bg-[#03060e] border border-emerald-900 rounded-lg px-3 py-2 text-emerald-200">
+                    <option value="ws">WebSocket (WS)</option><option value="grpc">gRPC</option><option value="httpupgrade">HTTPUpgrade</option><option value="xhttp">XHTTP</option>
+                    <option value="native" disabled={masterConfig.protocol !== "shadowsocks"}>TCP + UDP natifs (Shadowsocks)</option>
+                  </select>
+                </div>
+                <div className="md:col-span-2 rounded-lg border border-slate-700 bg-slate-900/50 p-3 text-slate-400">
+                  Les profils WS/gRPC/HTTPUpgrade/XHTTP passent par le port TLS 443. Shadowsocks natif utilise le port 10050 en TCP et UDP ; ouvre les deux dans le pare-feu.
+                </div>
+                <label className="block text-slate-300 font-semibold mb-1">Chemin WebSocket (VLESS + WS)</label>
                   <input
                     type="text"
                     value={masterConfig.path}
-                    onChange={(e) => setMasterConfig({ ...masterConfig, path: e.target.value })}
+                    readOnly
                     className="w-full bg-[#03060e] border border-emerald-900 rounded-lg px-3 py-2 text-slate-200"
                     required
                   />

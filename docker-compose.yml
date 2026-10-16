@@ -41,6 +41,9 @@ services:
       - abessvpn_data:/shared
     expose:
       - "10000"
+    ports:
+      - "10050:10050/tcp"
+      - "10050:10050/udp"
     healthcheck:
       test: ["CMD-SHELL", "test -s /shared/xray-ready && test -s /shared/xray-config.json && test -s /shared/xray.pid && kill -0 $(cat /shared/xray.pid)"]
       interval: 5s

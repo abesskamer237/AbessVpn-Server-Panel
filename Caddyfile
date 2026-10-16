@@ -5,8 +5,38 @@
 {$VPN_DOMAIN} {
   encode zstd gzip
 
-  @vless path /@abess237
-  reverse_proxy @vless xray:10000
+  @abess_vless_ws path /@abess237
+  reverse_proxy @abess_vless_ws xray:10000
+  @abess_vless_grpc path /@abess237/vless/grpc/*
+  reverse_proxy @abess_vless_grpc h2c://xray:10001
+  @abess_vless_httpupgrade path /@abess237/vless/httpupgrade
+  reverse_proxy @abess_vless_httpupgrade xray:10002
+  @abess_vless_xhttp path /@abess237/vless/xhttp*
+  reverse_proxy @abess_vless_xhttp xray:10003
+  @abess_vmess_ws path /@abess237/vmess/ws
+  reverse_proxy @abess_vmess_ws xray:10005
+  @abess_vmess_grpc path /@abess237/vmess/grpc/*
+  reverse_proxy @abess_vmess_grpc h2c://xray:10006
+  @abess_vmess_httpupgrade path /@abess237/vmess/httpupgrade
+  reverse_proxy @abess_vmess_httpupgrade xray:10007
+  @abess_vmess_xhttp path /@abess237/vmess/xhttp*
+  reverse_proxy @abess_vmess_xhttp xray:10008
+  @abess_trojan_ws path /@abess237/trojan/ws
+  reverse_proxy @abess_trojan_ws xray:10010
+  @abess_trojan_grpc path /@abess237/trojan/grpc/*
+  reverse_proxy @abess_trojan_grpc h2c://xray:10011
+  @abess_trojan_httpupgrade path /@abess237/trojan/httpupgrade
+  reverse_proxy @abess_trojan_httpupgrade xray:10012
+  @abess_trojan_xhttp path /@abess237/trojan/xhttp*
+  reverse_proxy @abess_trojan_xhttp xray:10013
+  @abess_shadowsocks_ws path /@abess237/shadowsocks/ws
+  reverse_proxy @abess_shadowsocks_ws xray:10015
+  @abess_shadowsocks_grpc path /@abess237/shadowsocks/grpc/*
+  reverse_proxy @abess_shadowsocks_grpc h2c://xray:10016
+  @abess_shadowsocks_httpupgrade path /@abess237/shadowsocks/httpupgrade
+  reverse_proxy @abess_shadowsocks_httpupgrade xray:10017
+  @abess_shadowsocks_xhttp path /@abess237/shadowsocks/xhttp*
+  reverse_proxy @abess_shadowsocks_xhttp xray:10018
 
   reverse_proxy api:3000
 }

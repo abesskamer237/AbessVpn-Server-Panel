@@ -5,9 +5,9 @@ ABESS VPN combines a Node.js/Express control plane, a React administration panel
 ## Status and architecture
 
 - **Control plane:** authentication, reseller accounts, per-licence UUIDs, encrypted `abess://` links, expiry, device limits, and licence administration.
-- **Xray-core:** the API writes `data/xray-config.json` from active licences. Xray-core reads this generated configuration and accounts uplink/downlink traffic for each VLESS user.
+- **Xray-core:** the API writes `data/xray-config.json` from active licences. Managed profiles include VLESS, VMess, Trojan and Shadowsocks AEAD over WebSocket, gRPC, HTTPUpgrade and XHTTP. A separate native Shadowsocks TCP/UDP listener is available on port 10050.
 - **Quota enforcement:** the API reads Xray's real user counters and disables a licence in Xray when it expires or exhausts its quota. Client-submitted byte counts are not treated as authoritative.
-- **HTTPS:** Caddy automatically obtains and renews the certificate for `VPN_DOMAIN`. The public VLESS path is `/@abess237`; TLS is terminated at Caddy and the private Caddy-to-Xray hop uses WebSocket on the internal Docker network.
+- **HTTPS:** Caddy automatically obtains and renews the certificate for `VPN_DOMAIN`. TLS terminates at Caddy on TCP 443; path routes forward supported profile traffic to private Xray inbounds. Native Shadowsocks TCP/UDP is separately published on port 10050.
 - **No sample production credentials:** the first boot requires an administrator email/password in environment variables. The admin password is stored with scrypt hashing. The master encryption secret must remain stable or previously issued encrypted links can no longer be decrypted.
 
 The health route `GET /api/v1/ping` only reports `dataPlane: "ready"` after the Xray sidecar has started and answered its local stats API. The watcher validates every generated configuration before replacing the active Xray process.
@@ -105,3 +105,13 @@ Licence issuance stays in the authenticated administration/reseller panel. Publi
 - Xray-core VLESS inbound: https://xtls.github.io/en/config/inbounds/vless.html
 - Xray-core WebSocket transport: https://xtls.github.io/en/config/transports/websocket.html
 - Caddy automatic HTTPS: https://caddyserver.com/docs/automatic-https
+
+## Multi-protocol Xray profiles
+
+The panel supports **VLESS, VMess, Trojan and Shadowsocks AEAD** with **WebSocket, gRPC, HTTPUpgrade and XHTTP** transports. Caddy terminates TLS on public TCP 443 and routes each HTTP-based profile to a private Xray inbound.
+
+**Native TCP/UDP:** Shadowsocks also has a dedicated listener on port `10050` for both TCP and UDP. Permit TCP and UDP 10050 in the VPS/provider firewall when that profile is selected. This native mode does not use the public HTTPS certificate.
+
+mKCP, Hysteria/QUIC, WireGuard, TUN and other native UDP inbound modes are not advertised as enabled: they need separate UDP ports and protocol-specific client/server configuration. Native UDP cannot be forwarded through the ordinary HTTP reverse proxy. The Android app's local SOCKS inbound has UDP enabled, which is separate from a native public UDP listener.
+
+The legacy path `/@abess237` remains for VLESS + WS. Other HTTP-carried profiles use `/@abess237/<protocol>/<transport>`. A successful compile or Xray config validation does not replace a real Android connection test for every combination.
