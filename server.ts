@@ -1101,7 +1101,11 @@ async function startServer() {
       status: found.status,
       serverConfig: {
         address: host,
-        port: masterConfig.transport === 'native' && masterConfig.protocol === 'shadowsocks' ? 10050 : masterConfig.serverPort,
+        port: isXrayProtocol(masterConfig.protocol) && isXrayTransport(masterConfig.transport)
+          ? ((masterConfig.transport === 'native' || masterConfig.transport === 'raw' || masterConfig.transport === 'mkcp')
+            ? xrayProfilePort(masterConfig.protocol, masterConfig.transport)
+            : masterConfig.serverPort)
+          : masterConfig.serverPort,
         path: isXrayProtocol(masterConfig.protocol) && isXrayTransport(masterConfig.transport)
           ? xrayProfilePath(masterConfig.protocol, masterConfig.transport, masterConfig.path)
           : '/@abess237',
@@ -1109,7 +1113,8 @@ async function startServer() {
         sni: masterConfig.sniHost,
         protocol: masterConfig.protocol,
         transport: masterConfig.transport,
-        security: masterConfig.transport === 'native' ? 'none' : 'tls'
+        security: ['native', 'raw', 'mkcp'].includes(masterConfig.transport) ? 'none' : 'tls',
+        ...(masterConfig.transport === 'mkcp' ? { seed: xrayKcpSeed(masterConfig) } : {})
       }
     });
   };
