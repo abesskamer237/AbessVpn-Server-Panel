@@ -41,6 +41,16 @@ jobs:
       - name: Build official Xray-core sidecar image
         run: docker build --pull -f docker/xray/Dockerfile -t abessvpn-xray:ci ./docker/xray
 
+      - name: Validate Caddyfile routing configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -e VPN_DOMAIN=vpn.example.test \
+            -e ACME_EMAIL=ci@example.test \
+            -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            caddy:2-alpine caddy adapt --config /etc/caddy/Caddyfile --adapter caddyfile --validate
+
       - name: Validate Docker Compose configuration
         shell: bash
         run: |
@@ -144,7 +154,8 @@ jobs:
           });
           assert.equal(initialMasterConfigResponse.status, 200);
           const initialMasterConfig = await initialMasterConfigResponse.json();
-          assert.equal(initialMasterConfig.serverHost, '', 'the VPN profile host must be configured explicitly in the panel');
+          assert.equal(initialMasterConfig.serverHost, '', 'the VPN profile destination must be configured explicitly in the panel');
+          assert.equal(initialMasterConfig.host, '', 'the HTTP Host header must be independent and optional');
           assert.equal(initialMasterConfig.sniHost, '', 'the VPN profile SNI must be configured explicitly in the panel');
 
           const prematureLicenceResponse = await fetch(`${base}/api/v1/admin/tokens`, {
@@ -160,6 +171,7 @@ jobs:
             headers: adminHeaders,
             body: JSON.stringify({
               serverHost: 'profile.example.test',
+              host: 'header.example.test',
               sniHost: 'tls.example.test',
               serverPort: 443,
               protocol: 'vless',
@@ -173,6 +185,7 @@ jobs:
           assert.equal(protocolConfigRead.status, 200);
           const savedProtocolConfig = await protocolConfigRead.json();
           assert.equal(savedProtocolConfig.serverHost, 'profile.example.test');
+          assert.equal(savedProtocolConfig.host, 'header.example.test');
           assert.equal(savedProtocolConfig.sniHost, 'tls.example.test');
           const createA = await fetch(`${base}/api/v1/admin/tokens`, {
             method: 'POST',
@@ -196,8 +209,9 @@ jobs:
             assert.equal(result.deviceLimit, 2);
             assert.equal(result.serverConfig.uuid, licenceA.clientUuid);
             assert.equal(result.serverConfig.address, 'profile.example.test');
+            assert.equal(result.serverConfig.host, 'header.example.test');
             assert.equal(result.serverConfig.sni, 'tls.example.test');
-            assert.equal(result.serverConfig.wsHost, 'profile.example.test');
+            assert.equal(result.serverConfig.wsHost, 'header.example.test');
             if (stableUuid) assert.equal(result.serverConfig.uuid, stableUuid, 'the VLESS UUID for one licence must remain stable');
             stableUuid = result.serverConfig.uuid;
           }

@@ -76,6 +76,8 @@ interface ClientToken {
 
 interface MasterConfig {
   serverHost: string;
+  /** Optional HTTP Host/:authority header; independent from destination and SNI. */
+  host: string;
   serverPort: number;
   protocol: string;
   transport: string;
@@ -1043,10 +1045,10 @@ export default function App() {
 
               <form onSubmit={handleSaveConfig} className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="md:col-span-2 rounded-xl border border-slate-700 bg-slate-900/60 p-3 text-sm leading-relaxed text-slate-300">
-                  L’hôte public du protocole et le SNI ne sont plus préremplis depuis le domaine du panneau. Renseigne ici une adresse DNS ou IP qui pointe vers ce VPS. Pour WS, gRPC, HTTPUpgrade et XHTTP, le domaine doit être servi par Caddy et son certificat TLS doit couvrir le SNI. Avec le déploiement actuel, utilise normalement le même domaine public que VPN_DOMAIN, sauf si tu configures aussi cet hôte supplémentaire dans Caddy.
+                  Trois valeurs distinctes : l’adresse du serveur est la destination réseau (domaine/IP), Host HTTP est l’en-tête envoyé par le client, et SNI est le nom présenté pendant la négociation TLS. Le Host HTTP peut être différent de l’adresse. Pour les transports TLS, choisis un SNI couvert par un certificat servi par Caddy (par défaut VPN_DOMAIN). Le Host HTTP est ignoré pour les transports directs TCP/UDP.
                 </div>
                 <div>
-                  <label className="block text-slate-300 font-semibold mb-1">Hôte public du protocole (domaine ou IP du VPS)</label>
+                  <label className="block text-slate-300 font-semibold mb-1">Adresse du serveur (domaine/IP de destination)</label>
                   <input
                     type="text"
                     value={masterConfig.serverHost}
@@ -1086,11 +1088,23 @@ export default function App() {
                     <option value="native" disabled={masterConfig.protocol !== "shadowsocks"}>TCP + UDP natifs (Shadowsocks)</option>
                   </select>
                 </div>
+                <div className="md:col-span-2">
+                  <label className="block text-slate-300 font-semibold mb-1">Host HTTP / WebSocket (en-tête Host ou :authority)</label>
+                  <input
+                    type="text"
+                    value={masterConfig.host}
+                    onChange={(e) => setMasterConfig({ ...masterConfig, host: e.target.value })}
+                    className="w-full bg-[#03060e] border border-emerald-900 rounded-lg px-3 py-2 text-cyan-200"
+                    placeholder="host.exemple.com (vide = adresse du serveur)"
+                    autoComplete="off"
+                  />
+                  <p className="mt-1 text-xs text-slate-500">Facultatif et indépendant de l’adresse IP/domaine de destination. Utilisé par WS, gRPC, HTTPUpgrade et XHTTP.</p>
+                </div>
                 <div className="md:col-span-2 rounded-lg border border-slate-700 bg-slate-900/50 p-3 text-slate-400">
                   Les profils WS/gRPC/HTTPUpgrade/XHTTP passent par HTTPS sur TCP 443. VMess RAW utilise TCP 10060 et VMess mKCP utilise UDP 10061. Shadowsocks natif utilise TCP + UDP sur 10050. Ouvre les ports 10050/TCP+UDP, 10060/TCP et 10061/UDP dans le pare-feu. RAW/mKCP sont réservés à VMess pour ne pas exposer VLESS sans TLS ni Trojan sans couche TLS.
                 </div>
                 <div className="md:col-span-2 rounded-lg border border-sky-900 bg-sky-950/20 p-3 text-sky-200">
-                  Configure l’hôte et le SNI ici, dans le panneau. Pour WS/gRPC/HTTPUpgrade/XHTTP, utilise normalement le domaine public configuré dans GitHub sous VPN_DOMAIN : son DNS doit pointer vers ce VPS et son certificat HTTPS doit être valide. Les transports directs TCP/UDP utilisent leurs ports dédiés et ne reposent pas sur le SNI TLS.
+                  Adresse, Host HTTP et SNI sont indépendants. Le reverse proxy HTTPS accepte un Host différent; le SNI TLS doit néanmoins correspondre à un certificat valide chargé par Caddy. Les transports directs TCP/UDP utilisent leurs ports dédiés et ne transmettent ni Host HTTP ni SNI TLS.
                 </div>
                 <label className="block text-slate-300 font-semibold mb-1">Chemin WebSocket (VLESS + WS)</label>
                   <input

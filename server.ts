@@ -64,6 +64,8 @@ export interface ClientToken {
 
 export interface MasterServerConfig {
   serverHost: string;
+  /** Optional HTTP Host/:authority override, separate from the destination and TLS SNI. */
+  host: string;
   serverPort: number;
   protocol: string;
   transport: string;
@@ -95,6 +97,7 @@ function loadMasterConfig(): MasterServerConfig {
     // The API/Caddy hostname from VPN_DOMAIN is not automatically a VPN profile host/SNI.
     // The Super Admin explicitly configures both in the panel before issuing licences.
     serverHost: '',
+    host: '',
     serverPort: Number(process.env.VPN_PORT) || 443,
     protocol: 'vless',
     transport: 'ws',
@@ -110,19 +113,21 @@ function loadMasterConfig(): MasterServerConfig {
     try {
       const stored = JSON.parse(fs.readFileSync(configFile, 'utf8')) as Partial<MasterServerConfig>;
       const rawStoredHost = typeof stored.serverHost === 'string' ? stored.serverHost.trim() : '';
+      const rawStoredHeaderHost = typeof stored.host === 'string' ? stored.host.trim() : '';
       const rawStoredSni = typeof stored.sniHost === 'string' ? stored.sniHost.trim() : '';
       const merged: MasterServerConfig = {
         ...defaults,
         ...stored,
         // Normalize persisted Host/SNI values and never infer either one from the API domain.
         serverHost: normalizedStoredHost(stored.serverHost),
+        host: normalizedStoredHost(stored.host),
         serverPort: Number(stored.serverPort) || defaults.serverPort,
         path: '/@abess237',
         sniHost: normalizedStoredHost(stored.sniHost),
         secretPassphrase: process.env.MASTER_SECRET || ''
       };
       // Persist normalized fields when whitespace or letter case changed.
-      if (merged.serverHost !== rawStoredHost || merged.sniHost !== rawStoredSni) {
+      if (merged.serverHost !== rawStoredHost || merged.host !== rawStoredHeaderHost || merged.sniHost !== rawStoredSni) {
         saveMasterConfig(merged);
       }
       // Shadowsocks UDP uses its native socket, not an HTTP/WebSocket proxy.
@@ -881,6 +886,7 @@ async function startServer() {
       bandwidthGb: requestedGb,
       expiresAt: calculatedExpiresAt,
       serverHost: masterConfig.serverHost,
+      host: masterConfig.host || masterConfig.serverHost,
       serverPort: xrayPublicPort(masterConfig.protocol, masterConfig.transport, masterConfig.serverPort),
       path: isXrayProtocol(masterConfig.protocol) && isXrayTransport(masterConfig.transport)
         ? xrayProfilePath(masterConfig.protocol, masterConfig.transport, masterConfig.path)
@@ -990,11 +996,16 @@ async function startServer() {
       return;
     }
     const requestedHost = typeof req.body?.serverHost === 'string' ? req.body.serverHost.trim() : current.serverHost;
+    const requestedHeaderHost = typeof req.body?.host === 'string' ? req.body.host.trim() : current.host;
     const requestedSni = typeof req.body?.sniHost === 'string' ? req.body.sniHost.trim() : current.sniHost;
-    if (!isValidPublicHost(requestedHost) || !isValidPublicHost(requestedSni)) {
+    if (
+      !isValidPublicHost(requestedHost) ||
+      (requestedHeaderHost !== '' && !isValidPublicHost(requestedHeaderHost)) ||
+      !isValidPublicHost(requestedSni)
+    ) {
       res.status(400).json({
         success: false,
-        error: 'Renseignez un hôte public et un SNI valides (nom DNS ou IPv4, sans protocole, port ni chemin). Pour les transports TLS, utilisez un domaine couvert par le certificat HTTPS.'
+        error: 'Renseignez une adresse de serveur et un SNI valides. Le Host HTTP est facultatif, mais s’il est renseigné il doit être un nom DNS ou une IPv4, sans protocole, port ni chemin. Le SNI doit correspondre à un certificat TLS servi par Caddy.'
       });
       return;
     }
@@ -1006,6 +1017,7 @@ async function startServer() {
       ...current,
       ...req.body,
       serverHost: requestedHost,
+      host: requestedHeaderHost,
       sniHost: requestedSni,
       serverPort: effectivePort,
       protocol: requestedProtocol,
@@ -1186,7 +1198,8 @@ async function startServer() {
           : '/@abess237',
         uuid: found.clientUuid || masterConfig.uuid,
         sni: masterConfig.sniHost,
-        wsHost: host,
+        host: masterConfig.host || host,
+        wsHost: masterConfig.host || host,
         method: masterConfig.protocol === 'shadowsocks' ? 'aes-128-gcm' : undefined,
         protocol: masterConfig.protocol,
         transport: masterConfig.transport,

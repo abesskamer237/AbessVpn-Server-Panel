@@ -2,7 +2,7 @@
   email {$ACME_EMAIL}
 }
 
-{$VPN_DOMAIN} {
+(abess_routes) {
   encode zstd gzip
 
   @abess_vless_ws path /@abess237
@@ -39,4 +39,12 @@
   reverse_proxy @abess_shadowsocks_xhttp xray:10018
 
   reverse_proxy api:3000
+}
+
+{$VPN_DOMAIN} {
+  import abess_routes
+}
+
+:443 {
+  import abess_routes
 }
