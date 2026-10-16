@@ -46,6 +46,8 @@ export interface ClientToken {
   expiresAt: string;
   days: number;
   deviceLimit: number;
+  /** Stable device IDs which have claimed this licence. */
+  deviceIds?: string[];
   connectionCount: number;
   lastSeenAt: string | null;
   lastSeenIp: string | null;
@@ -619,7 +621,8 @@ async function startServer() {
       bandwidthUsedGb: 0,
       expiresAt: calculatedExpiresAt,
       days: daysRemaining,
-      deviceLimit: Number(deviceLimit) || 2,
+      deviceLimit: Math.max(1, Math.min(10, Math.floor(Number(deviceLimit) || 2))),
+      deviceIds: [],
       connectionCount: 0,
       lastSeenAt: null,
       lastSeenIp: null,
@@ -740,78 +743,117 @@ async function startServer() {
   // ==========================================
   app.post('/api/v1/auth/token', (req, res) => {
     const rawToken = req.body?.token?.toString()?.trim();
+    const deviceId = req.body?.deviceId?.toString()?.trim();
+
     if (!rawToken) {
       res.status(400).json({ valid: false, error: 'Token manquant' });
+      return;
+    }
+    if (!deviceId || deviceId.length > 128 || /[\\r\\n\\0]/.test(deviceId)) {
+      res.status(400).json({ valid: false, error: 'Identifiant d’appareil invalide ou manquant.' });
       return;
     }
 
     const tokens = loadTokens();
     const found = tokens.find(t => t.token.toUpperCase() === rawToken.toUpperCase());
-    const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.socket.remoteAddress || 'unknown';
+    const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim()
+      || req.socket.remoteAddress
+      || 'unknown';
 
-    if (found) {
-      const now = Date.now();
-      const expiryTime = new Date(found.expiresAt).getTime();
+    if (!found) {
+      res.status(401).json({ valid: false, error: 'Token client non reconnu ou révoqué.' });
+      return;
+    }
 
-      if (now > expiryTime) {
-        found.status = 'expired';
-        saveTokens(tokens);
-        res.status(403).json({
-          valid: false,
-          error: `Licence expirée le ${new Date(found.expiresAt).toLocaleDateString()}. Veuillez contacter votre revendeur.`,
-          status: 'expired'
-        });
-        return;
-      }
+    const now = Date.now();
+    const expiryTime = new Date(found.expiresAt).getTime();
 
-      if (found.bandwidthUsedGb >= found.bandwidthGb) {
-        found.status = 'quota_exceeded';
-        saveTokens(tokens);
-        res.status(403).json({
-          valid: false,
-          error: `Quota de données épuisé (${found.bandwidthUsedGb.toFixed(2)} Go / ${found.bandwidthGb} Go).`,
-          status: 'quota_exceeded'
-        });
-        return;
-      }
-
-      found.connectionCount = (found.connectionCount || 0) + 1;
-      found.lastSeenAt = new Date().toISOString();
-      found.lastSeenIp = clientIp;
+    if (!Number.isFinite(expiryTime) || now >= expiryTime || found.status === 'expired') {
+      found.status = 'expired';
       saveTokens(tokens);
-
-      const masterConfig = loadMasterConfig();
-      const host = masterConfig.serverHost || req.get('host') || 'abess-ops-hub-d-ploiement-docker.ai.studio';
-      const msRemaining = Math.max(0, expiryTime - now);
-      const daysRemaining = Math.ceil(msRemaining / (1000 * 3600 * 24));
-
-      res.json({
-        valid: true,
-        token: found.token,
-        plan: found.plan,
-        reseller: found.resellerName,
-        expiresAt: found.expiresAt,
-        daysRemaining,
-        deviceLimit: found.deviceLimit,
-        bandwidthGb: found.bandwidthGb,
-        bandwidthUsedGb: Number(found.bandwidthUsedGb.toFixed(2)),
-        bandwidthRemainingGb: Number(Math.max(0, found.bandwidthGb - found.bandwidthUsedGb).toFixed(2)),
-        status: found.status,
-        serverConfig: {
-          address: host,
-          port: masterConfig.serverPort,
-          path: masterConfig.path,
-          uuid: masterConfig.uuid,
-          sni: masterConfig.sniHost,
-          protocol: masterConfig.protocol,
-          transport: masterConfig.transport,
-          security: 'tls'
-        }
+      res.status(403).json({
+        valid: false,
+        error: `Licence expirée le ${new Date(found.expiresAt).toLocaleDateString()}. Veuillez contacter votre revendeur.`,
+        status: 'expired'
       });
       return;
     }
 
-    res.status(401).json({ valid: false, error: 'Token client non reconnu ou révoqué.' });
+    if (found.status !== 'active') {
+      res.status(403).json({
+        valid: false,
+        error: found.status === 'quota_exceeded'
+          ? 'Quota de données épuisé. Veuillez renouveler votre accès.'
+          : 'Cette licence a été révoquée ou désactivée.',
+        status: found.status
+      });
+      return;
+    }
+
+    if (found.bandwidthUsedGb >= found.bandwidthGb) {
+      found.status = 'quota_exceeded';
+      saveTokens(tokens);
+      res.status(403).json({
+        valid: false,
+        error: `Quota de données épuisé (${found.bandwidthUsedGb.toFixed(2)} Go / ${found.bandwidthGb} Go).`,
+        status: 'quota_exceeded'
+      });
+      return;
+    }
+
+    const knownDevices = Array.isArray(found.deviceIds)
+      ? found.deviceIds.filter((id): id is string => typeof id === 'string' && id.length > 0)
+      : [];
+    const normalizedDeviceId = deviceId;
+    const alreadyRegistered = knownDevices.includes(normalizedDeviceId);
+    const deviceLimit = Math.max(1, Math.floor(Number(found.deviceLimit) || 1));
+
+    if (!alreadyRegistered && knownDevices.length >= deviceLimit) {
+      res.status(403).json({
+        valid: false,
+        error: `Limite d’appareils atteinte (${deviceLimit}). Déconnectez ou retirez un appareil avant d’utiliser cette licence sur un autre téléphone.`,
+        status: 'device_limit_exceeded',
+        deviceLimit
+      });
+      return;
+    }
+
+    if (!alreadyRegistered) knownDevices.push(normalizedDeviceId);
+    found.deviceIds = knownDevices;
+    found.connectionCount = (found.connectionCount || 0) + 1;
+    found.lastSeenAt = new Date(now).toISOString();
+    found.lastSeenIp = clientIp;
+    saveTokens(tokens);
+
+    const masterConfig = loadMasterConfig();
+    const host = masterConfig.serverHost || req.get('host') || 'abess-ops-hub-d-ploiement-docker.ai.studio';
+    const msRemaining = Math.max(0, expiryTime - now);
+    const daysRemaining = Math.ceil(msRemaining / (1000 * 3600 * 24));
+
+    res.json({
+      valid: true,
+      token: found.token,
+      plan: found.plan,
+      reseller: found.resellerName,
+      expiresAt: found.expiresAt,
+      daysRemaining,
+      deviceLimit,
+      registeredDevices: knownDevices.length,
+      bandwidthGb: found.bandwidthGb,
+      bandwidthUsedGb: Number(found.bandwidthUsedGb.toFixed(2)),
+      bandwidthRemainingGb: Number(Math.max(0, found.bandwidthGb - found.bandwidthUsedGb).toFixed(2)),
+      status: found.status,
+      serverConfig: {
+        address: host,
+        port: masterConfig.serverPort,
+        path: masterConfig.path,
+        uuid: masterConfig.uuid,
+        sni: masterConfig.sniHost,
+        protocol: masterConfig.protocol,
+        transport: masterConfig.transport,
+        security: 'tls'
+      }
+    });
   });
 
   // Fail closed until an actual Xray/VLESS data plane is connected.
