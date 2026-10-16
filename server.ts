@@ -4,7 +4,6 @@ import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
-import { WebSocketServer, WebSocket } from 'ws';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -196,7 +195,7 @@ function encryptConfig(plainJson: object, secret: string): string {
 
 // Telemetry & metrics
 let activeTunnelConnections = 0;
-let totalBytesTransferred = 1024 * 1024 * 460;
+let totalBytesTransferred = 0;
 const startTime = Date.now();
 
 // Sessions in memory for token authentication
@@ -815,35 +814,27 @@ async function startServer() {
     res.status(401).json({ valid: false, error: 'Token client non reconnu ou révoqué.' });
   });
 
-  // WebSocket Server on /@abess237
-  const wss = new WebSocketServer({ noServer: true });
-
-  server.on('upgrade', (request, socket, head) => {
-    const pathname = new URL(request.url || '', `http://${request.headers.host}`).pathname;
-    if (pathname === '/@abess237' || pathname.startsWith('/@abess237')) {
-      wss.handleUpgrade(request, socket, head, (ws) => {
-        wss.emit('connection', ws, request);
-      });
+  // Fail closed until an actual Xray/VLESS data plane is connected.
+  // The previous implementation replied with a two-byte placeholder to every
+  // message. That is not a tunnel and can make a client appear connected while
+  // no Internet traffic is relayed.
+  server.on('upgrade', (request, socket) => {
+    let pathname = '';
+    try {
+      pathname = new URL(request.url || '', `http://${request.headers.host || 'localhost'}`).pathname;
+    } catch {
+      socket.destroy();
+      return;
     }
-  });
 
-  wss.on('connection', (ws: WebSocket) => {
-    activeTunnelConnections++;
-    ws.on('message', (message, isBinary) => {
-      const len = isBinary ? (message as Buffer).length : Buffer.byteLength(message.toString());
-      totalBytesTransferred += len;
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(Buffer.from([0x00, 0x00])); // VLESS handshake response
-      }
-    });
-
-    ws.on('close', () => {
-      activeTunnelConnections = Math.max(0, activeTunnelConnections - 1);
-    });
-
-    ws.on('error', () => {
-      activeTunnelConnections = Math.max(0, activeTunnelConnections - 1);
-    });
+    const configuredPath = loadMasterConfig().path || '/@abess237';
+    if (pathname === configuredPath || pathname.startsWith(`${configuredPath}/`)) {
+      const body = 'VLESS data plane is not configured on this server.';
+      socket.write(
+        `HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: ${Buffer.byteLength(body)}\r\nCache-Control: no-store\r\n\r\n${body}`
+      );
+    }
+    socket.destroy();
   });
 
   // Frontend static / dev middleware
