@@ -78,18 +78,10 @@ export interface MasterServerConfig {
 // Master Configuration Helper
 const PUBLIC_HOST_PATTERN = /^(?=.{1,253}$)([a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)(\.([a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?))*$/;
 
-// Temporary development-platform hostnames must never be injected into client profiles.
-// Admins must explicitly configure a real public endpoint in the infrastructure panel.
-function isTemporaryDevelopmentHost(value: string): boolean {
-  const host = value.toLowerCase().replace(/\.$/, '');
-  return host === 'run.app' || host.endsWith('.run.app') ||
-    host === 'ai.studio' || host.endsWith('.ai.studio') ||
-    host === 'ia.studio' || host.endsWith('.ia.studio');
-}
-
+// Hosts and SNI are deliberately not inferred from the API/panel domain.
+// The Super Administrator must enter the public endpoint in the infrastructure panel.
 function isValidPublicHost(value: unknown): value is string {
-  return typeof value === 'string' && value === value.trim() &&
-    PUBLIC_HOST_PATTERN.test(value) && !isTemporaryDevelopmentHost(value);
+  return typeof value === 'string' && value === value.trim() && PUBLIC_HOST_PATTERN.test(value);
 }
 
 function normalizedStoredHost(value: unknown): string {
