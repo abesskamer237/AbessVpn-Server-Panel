@@ -266,7 +266,7 @@ function xrayKcpSeed(masterConfig: MasterServerConfig): string {
 function xrayStreamSettings(transport: typeof XRAY_TRANSPORTS[number], profilePath: string, kcpSeed: string): Record<string, unknown> {
   switch (transport) {
     case 'ws': return { network: 'ws', security: 'none', wsSettings: { path: profilePath } };
-    case 'grpc': return { network: 'grpc', security: 'none', grpcSettings: { serviceName: profilePath.replace(/^\\/+/, ''), multiMode: false } };
+    case 'grpc': return { network: 'grpc', security: 'none', grpcSettings: { serviceName: profilePath.replace(/^\/+/, ''), multiMode: false } };
     case 'httpupgrade': return { network: 'httpupgrade', security: 'none', httpupgradeSettings: { path: profilePath, host: '' } };
     case 'xhttp': return { network: 'xhttp', security: 'none', xhttpSettings: { path: profilePath, mode: 'auto' } };
     case 'raw': return { network: 'tcp', security: 'none', tcpSettings: { header: { type: 'none' } } };
