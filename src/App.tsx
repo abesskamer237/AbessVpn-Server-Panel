@@ -108,6 +108,8 @@ export default function App() {
   const [resellers, setResellers] = useState<Reseller[]>([]);
   const [tokens, setTokens] = useState<ClientToken[]>([]);
   const [masterConfig, setMasterConfig] = useState<MasterConfig | null>(null);
+  const [configLoading, setConfigLoading] = useState<boolean>(false);
+  const [configLoadError, setConfigLoadError] = useState<string | null>(null);
   const [configSaving, setConfigSaving] = useState<boolean>(false);
   const [configSuccess, setConfigSuccess] = useState<boolean>(false);
   const [configError, setConfigError] = useState<string | null>(null);
@@ -187,12 +189,37 @@ export default function App() {
         const resellersRes = await fetch('/api/v1/admin/resellers', { headers });
         if (resellersRes.ok) setResellers(await resellersRes.json());
 
-        // Master config
-        const configRes = await fetch('/api/v1/admin/server-config', { headers });
-        if (configRes.ok) setMasterConfig(await configRes.json());
+        // Master config: report failures instead of leaving the Infrastructure tab blank.
+        if (!masterConfig) setConfigLoading(true);
+        try {
+          const configRes = await fetch('/api/v1/admin/server-config', { headers });
+          if (configRes.ok) {
+            const config = await configRes.json();
+            if (config && typeof config === 'object' && 'serverHost' in config && 'protocol' in config) {
+              setMasterConfig(config as MasterConfig);
+              setConfigLoadError(null);
+            } else {
+              setConfigLoadError('Le serveur a répondu, mais sa configuration est vide ou invalide. Réessayez ou consultez les journaux de l’API.');
+            }
+          } else {
+            const payload = await configRes.json().catch(() => ({}));
+            setConfigLoadError(
+              typeof payload.error === 'string'
+                ? payload.error
+                : `Impossible de charger la configuration maître (HTTP ${configRes.status}). Vérifiez votre session Super Admin et l’API.`
+            );
+          }
+        } catch (error) {
+          setConfigLoadError(error instanceof Error ? error.message : 'Erreur réseau lors du chargement de la configuration maître.');
+        } finally {
+          setConfigLoading(false);
+        }
       }
     } catch {
-      // offline fallback
+      if (!masterConfig) {
+        setConfigLoadError('Impossible de joindre l’API pour charger les données du panneau.');
+        setConfigLoading(false);
+      }
     }
   };
 
@@ -1013,6 +1040,28 @@ export default function App() {
         {/* ========================================================================= */}
         {/* TAB 4: MASTER INFRASTRUCTURE CONFIG (SUPER ADMIN ONLY - STRICTLY CONFIDENTIAL) */}
         {/* ========================================================================= */}
+        {activeTab === 'infrastructure' && currentUser.role === 'SUPER_ADMIN' && !masterConfig && (
+          <section className="animate-fade-in rounded-2xl border border-emerald-900/80 bg-[#060c18] p-6 sm:p-8 font-mono text-xs space-y-4" role="status" aria-live="polite">
+            <div className="flex items-center gap-3">
+              {configLoading ? <RefreshCw className="h-5 w-5 animate-spin text-cyan-300" /> : <AlertTriangle className="h-5 w-5 text-amber-300" />}
+              <h2 className="text-base font-bold text-white">Configuration de l’infrastructure maître</h2>
+            </div>
+            {configLoading && !configLoadError && (
+              <p className="text-slate-300">Chargement des paramètres depuis l’API…</p>
+            )}
+            {configLoadError && (
+              <div role="alert" className="rounded-xl border border-red-500/40 bg-red-950/30 p-4 text-red-200">
+                <p className="font-bold">La configuration ne s’est pas chargée.</p>
+                <p className="mt-2 break-words">{configLoadError}</p>
+                <p className="mt-2 text-slate-300">Le panneau reste visible afin que vous puissiez diagnostiquer le problème au lieu d’afficher une zone vide.</p>
+              </div>
+            )}
+            <button type="button" onClick={() => { setConfigLoadError(null); setConfigLoading(true); void refreshData(); }} disabled={configLoading} className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 font-bold text-black disabled:cursor-not-allowed disabled:opacity-60">
+              <RefreshCw className={`h-4 w-4 ${configLoading ? 'animate-spin' : ''}`} />
+              {configLoading ? 'Chargement…' : 'Réessayer le chargement'}
+            </button>
+          </section>
+        )}
         {activeTab === 'infrastructure' && currentUser.role === 'SUPER_ADMIN' && masterConfig && (
           <div className="space-y-6 animate-fade-in font-mono text-xs">
             <div className="p-6 rounded-2xl bg-[#060c18] border border-emerald-900/80 shadow-xl space-y-5">
