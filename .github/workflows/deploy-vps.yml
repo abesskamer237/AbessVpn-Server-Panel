@@ -61,6 +61,7 @@ jobs:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD }}
           VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
           VPS_PORT: ${{ vars.VPS_PORT }}
           VPN_DOMAIN: ${{ vars.VPN_DOMAIN }}
@@ -74,13 +75,16 @@ jobs:
           node <<'NODE'
           const fs = require('node:fs');
           const required = [
-            'VPS_HOST', 'VPS_USER', 'VPS_SSH_KEY', 'VPS_KNOWN_HOSTS',
+            'VPS_HOST', 'VPS_USER', 'VPS_KNOWN_HOSTS',
             'VPN_DOMAIN', 'ADMIN_EMAIL', 'ADMIN_INITIAL_PASSWORD', 'MASTER_SECRET'
           ];
           for (const key of required) {
             if (!process.env[key] || !process.env[key].trim()) {
               throw new Error(`Missing GitHub secret/variable: ${key}`);
             }
+          }
+          if (!process.env.VPS_SSH_KEY?.trim() && !process.env.VPS_SSH_PASSWORD?.trim()) {
+            throw new Error('Set VPS_SSH_KEY (recommended) or VPS_SSH_PASSWORD in GitHub Actions secrets.');
           }
           if (process.env.ADMIN_INITIAL_PASSWORD.length < 16) {
             throw new Error('ADMIN_INITIAL_PASSWORD must be at least 16 characters.');
@@ -108,22 +112,47 @@ jobs:
           fs.writeFileSync('.deploy.env', envText, { mode: 0o600 });
           NODE
 
-      - name: Configure SSH
+      - name: Configure SSH authentication
         shell: bash
         env:
           VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD }}
           VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
-          install -d -m 700 "$HOME/.ssh"
-          printf '%s\n' "$VPS_SSH_KEY" > "$HOME/.ssh/id_ed25519"
-          chmod 600 "$HOME/.ssh/id_ed25519"
+          install -d -m 700 "$HOME/.ssh" "$HOME/.local/bin"
+          if [[ -n "${VPS_SSH_KEY:-}" ]]; then
+            printf '%s\n' "$VPS_SSH_KEY" > "$HOME/.ssh/id_ed25519"
+            chmod 600 "$HOME/.ssh/id_ed25519"
+          elif [[ -n "${VPS_SSH_PASSWORD:-}" ]]; then
+            sudo apt-get update
+            sudo apt-get install -y sshpass
+          fi
           printf '%s\n' "$VPS_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/known_hosts"
-
+          cat > "$HOME/.local/bin/abess-ssh" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [[ -n "${VPS_SSH_PASSWORD:-}" ]]; then
+            export SSHPASS="$VPS_SSH_PASSWORD"
+            exec sshpass -e ssh -o PreferredAuthentications=password,keyboard-interactive -o PubkeyAuthentication=no "$@"
+          fi
+          exec ssh -i "$HOME/.ssh/id_ed25519" -o BatchMode=yes -o IdentitiesOnly=yes "$@"
+          SH
+          cat > "$HOME/.local/bin/abess-scp" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [[ -n "${VPS_SSH_PASSWORD:-}" ]]; then
+            export SSHPASS="$VPS_SSH_PASSWORD"
+            exec sshpass -e scp -o PreferredAuthentications=password,keyboard-interactive -o PubkeyAuthentication=no "$@"
+          fi
+          exec scp -i "$HOME/.ssh/id_ed25519" -o BatchMode=yes -o IdentitiesOnly=yes "$@"
+          SH
+          chmod 700 "$HOME/.local/bin/abess-ssh" "$HOME/.local/bin/abess-scp"
       - name: Preflight VPS without stopping existing services
         shell: bash
         env:
+          VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_PORT: ${{ vars.VPS_PORT }}
@@ -131,7 +160,7 @@ jobs:
           set -euo pipefail
           VPS_PORT="${VPS_PORT:-22}"
           DEST="${VPS_USER}@${VPS_HOST}"
-          ssh -p "$VPS_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes "$DEST" 'bash -s' <<'REMOTE'
+          "$HOME/.local/bin/abess-ssh" -p "$VPS_PORT" -o StrictHostKeyChecking=yes "$DEST" 'bash -s' <<'REMOTE'
           set -euo pipefail
           command -v docker >/dev/null 2>&1 || { echo "Docker is not installed on the VPS." >&2; exit 1; }
           docker compose version >/dev/null 2>&1 || { echo "Docker Compose plugin is missing." >&2; exit 1; }
@@ -158,6 +187,7 @@ jobs:
       - name: Upload application without touching persistent volumes or environment files
         shell: bash
         env:
+          VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_PORT: ${{ vars.VPS_PORT }}
@@ -165,7 +195,7 @@ jobs:
           set -euo pipefail
           VPS_PORT="${VPS_PORT:-22}"
           DEST="${VPS_USER}@${VPS_HOST}"
-          rsync -az --delete -e "ssh -p $VPS_PORT -o BatchMode=yes -o StrictHostKeyChecking=yes" \
+          rsync -az --delete -e "$HOME/.local/bin/abess-ssh -p $VPS_PORT -o StrictHostKeyChecking=yes" \
             --exclude '.git/' \
             --exclude 'node_modules/' \
             --exclude 'dist/' \
@@ -173,12 +203,13 @@ jobs:
             --exclude '.env' \
             --exclude '.deploy.env' \
             ./ "$DEST:abessvpn-server/"
-          scp -P "$VPS_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes .deploy.env "$DEST:abessvpn-server/.env.new"
-          ssh -p "$VPS_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes "$DEST" 'chmod 600 "$HOME/abessvpn-server/.env.new"'
+          "$HOME/.local/bin/abess-scp" -P "$VPS_PORT" -o StrictHostKeyChecking=yes .deploy.env "$DEST:abessvpn-server/.env.new"
+          "$HOME/.local/bin/abess-ssh" -p "$VPS_PORT" -o StrictHostKeyChecking=yes "$DEST" 'chmod 600 "$HOME/abessvpn-server/.env.new"'
 
       - name: Build and start services, then verify public HTTPS
         shell: bash
         env:
+          VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_PORT: ${{ vars.VPS_PORT }}
@@ -187,7 +218,7 @@ jobs:
           set -euo pipefail
           VPS_PORT="${VPS_PORT:-22}"
           DEST="${VPS_USER}@${VPS_HOST}"
-          ssh -p "$VPS_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes "$DEST" "VPN_DOMAIN='$VPN_DOMAIN' bash -s" <<'REMOTE'
+          "$HOME/.local/bin/abess-ssh" -p "$VPS_PORT" -o StrictHostKeyChecking=yes "$DEST" "VPN_DOMAIN='$VPN_DOMAIN' bash -s" <<'REMOTE'
           set -euo pipefail
           cd "$HOME/abessvpn-server"
           mv .env.new .env
