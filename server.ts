@@ -259,11 +259,7 @@ function xrayProfilePort(protocol: XrayProtocol, transport: XrayTransport): numb
   if (transport === 'raw' || transport === 'mkcp') throw new Error(`Unsupported Xray profile: ${protocol}/${transport}`);
   return 10000 + XRAY_PROTOCOLS.indexOf(protocol) * 5 + XRAY_TRANSPORTS.indexOf(transport);
 }
-function xrayKcpSeed(masterConfig: MasterServerConfig): string {
-  return crypto.createHmac('sha256', masterConfig.secretPassphrase || 'abessvpn')
-    .update('abessvpn-mkcp-v1').digest('hex').slice(0, 16);
-}
-function xrayStreamSettings(transport: typeof XRAY_TRANSPORTS[number], profilePath: string, kcpSeed: string): Record<string, unknown> {
+function xrayStreamSettings(transport: typeof XRAY_TRANSPORTS[number], profilePath: string): Record<string, unknown> {
   switch (transport) {
     case 'ws': return { network: 'ws', security: 'none', wsSettings: { path: profilePath } };
     case 'grpc': return { network: 'grpc', security: 'none', grpcSettings: { serviceName: profilePath.replace(/^\/+/, ''), multiMode: false } };
@@ -272,7 +268,7 @@ function xrayStreamSettings(transport: typeof XRAY_TRANSPORTS[number], profilePa
     case 'raw': return { network: 'tcp', security: 'none', tcpSettings: { header: { type: 'none' } } };
     case 'mkcp': return { network: 'kcp', security: 'none', kcpSettings: {
       mtu: 1350, tti: 50, uplinkCapacity: 5, downlinkCapacity: 20, congestion: false,
-      readBufferSize: 2, writeBufferSize: 2, header: { type: 'none' }, seed: kcpSeed
+      readBufferSize: 2, writeBufferSize: 2
     } };
   }
 }
@@ -304,7 +300,7 @@ function syncXrayConfig(tokens: ClientToken[] = loadTokens()): boolean {
           };
           break;
       }
-      inbounds.push({ tag: protocol + '-' + transport + '-in', listen: '0.0.0.0', port: xrayProfilePort(protocol, transport), protocol, settings, streamSettings: xrayStreamSettings(transport, profilePath, xrayKcpSeed(masterConfig)) });
+      inbounds.push({ tag: protocol + '-' + transport + '-in', listen: '0.0.0.0', port: xrayProfilePort(protocol, transport), protocol, settings, streamSettings: xrayStreamSettings(transport, profilePath) });
     }
   }
   // Native Shadowsocks uses an exposed TCP/UDP socket; Caddy handles only HTTP-based transports.
@@ -848,8 +844,7 @@ async function startServer() {
       sniHost: masterConfig.sniHost,
       uuid: clientUuid,
       protocol: masterConfig.protocol,
-      transport: masterConfig.transport,
-      ...(masterConfig.transport === 'mkcp' ? { seed: xrayKcpSeed(masterConfig) } : {})
+      transport: masterConfig.transport
     };
     const encryptedLink = encryptConfig(encryptedPayload, masterConfig.secretPassphrase);
 
@@ -1113,8 +1108,7 @@ async function startServer() {
         sni: masterConfig.sniHost,
         protocol: masterConfig.protocol,
         transport: masterConfig.transport,
-        security: ['native', 'raw', 'mkcp'].includes(masterConfig.transport) ? 'none' : 'tls',
-        ...(masterConfig.transport === 'mkcp' ? { seed: xrayKcpSeed(masterConfig) } : {})
+        security: ['native', 'raw', 'mkcp'].includes(masterConfig.transport) ? 'none' : 'tls'
       }
     });
   };
