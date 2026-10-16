@@ -1071,8 +1071,7 @@ export default function App() {
                   />
                 </div>
 
-                <div>
-                  {/* Generated Xray profiles with TLS on TCP 443; native Shadowsocks TCP/UDP uses port 10050. */}
+                {/* Generated Xray profiles with TLS on TCP 443; native Shadowsocks TCP/UDP uses port 10050. */}
                 <div>
                   <label className="block text-slate-300 font-semibold mb-1">Protocole Xray</label>
                   <select value={masterConfig.protocol} onChange={(e) => { const protocol = e.target.value; const transport = protocol === "shadowsocks" ? "native" : (masterConfig.transport === "native" || (protocol !== "vmess" && ["raw", "kcp"].includes(masterConfig.transport))) ? "ws" : masterConfig.transport; const serverPort = transport === "native" ? 10050 : transport === "raw" ? 10060 : transport === "kcp" ? 10061 : 443; setMasterConfig({ ...masterConfig, protocol, transport, serverPort }); }} className="w-full bg-[#03060e] border border-emerald-900 rounded-lg px-3 py-2 text-emerald-200">
@@ -1108,7 +1107,8 @@ export default function App() {
                 <div className="md:col-span-2 rounded-lg border border-sky-900 bg-sky-950/20 p-3 text-sky-200">
                   Adresse, Host HTTP et SNI sont indépendants. Le reverse proxy HTTPS accepte un Host différent; le SNI TLS doit néanmoins correspondre à un certificat valide chargé par Caddy. Les transports directs TCP/UDP utilisent leurs ports dédiés et ne transmettent ni Host HTTP ni SNI TLS.
                 </div>
-                <label className="block text-slate-300 font-semibold mb-1">Chemin WebSocket (VLESS + WS)</label>
+                <div className="md:col-span-2">
+                  <label className="block text-slate-300 font-semibold mb-1">Chemin WebSocket (VLESS + WS)</label>
                   <input
                     type="text"
                     value={masterConfig.path}
