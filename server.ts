@@ -894,7 +894,9 @@ async function startServer() {
       sniHost: masterConfig.sniHost,
       uuid: clientUuid,
       protocol: masterConfig.protocol,
-      transport: masterConfig.transport
+      transport: masterConfig.transport,
+      // Make the effective client-side security explicit in the issued link.
+      security: ['native', 'raw', 'kcp'].includes(masterConfig.transport) ? 'none' : 'tls'
     };
     const encryptedLink = encryptConfig(encryptedPayload, masterConfig.secretPassphrase);
 
