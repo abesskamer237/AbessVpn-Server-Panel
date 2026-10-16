@@ -582,37 +582,31 @@ async function startServer() {
     }
 
     const users = loadUsers();
-    const user = users.find(u => u.email.toLowerCase().trim() === email.toLowerCase().trim());
-
+    const user = users.find(u => u.email.toLowerCase().trim() === String(email).toLowerCase().trim());
     if (!user || !verifyPassword(String(password), user.passwordHash)) {
-      res.status(401).json({ error: 'Identifiants incorrects (Email ou Mot de passe invalide)' });
+      res.status(401).json({ error: 'Identifiants incorrects (Email ou mot de passe invalide)' });
       return;
     }
-
     if (user.status !== 'active') {
       res.status(403).json({ error: 'Ce compte a été suspendu par l\'administrateur principal.' });
       return;
     }
 
-    if (!user.passwordHash.startsWith('scrypt
+    // Upgrade credentials created by older releases after the first successful login.
+    if (!user.passwordHash.startsWith('scrypt' + String.fromCharCode(36))) {
+      user.passwordHash = hashPassword(String(password));
+    }
+    user.lastLoginAt = new Date().toISOString();
+    saveUsers(users);
 
     const sessionToken = 'sess_' + crypto.randomBytes(32).toString('hex');
-    activeSessions.set(sessionToken, {
-      userId: user.id,
-      role: user.role,
-      email: user.email
-    });
-
+    activeSessions.set(sessionToken, { userId: user.id, role: user.role, email: user.email });
     res.json({
       success: true,
       token: sessionToken,
       user: {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        role: user.role,
-        credits: user.credits,
-        totalTokensCreated: user.totalTokensCreated,
+        id: user.id, email: user.email, name: user.name, role: user.role,
+        credits: user.credits, totalTokensCreated: user.totalTokensCreated,
         totalBandwidthAllocatedGb: user.totalBandwidthAllocatedGb
       }
     });
