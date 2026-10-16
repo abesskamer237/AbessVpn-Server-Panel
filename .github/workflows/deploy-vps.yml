@@ -84,7 +84,7 @@ jobs:
             }
           }
           if (!process.env.VPS_SSH_KEY?.trim() && !process.env.VPS_SSH_PASSWORD?.trim()) {
-            throw new Error('Set VPS_SSH_KEY (recommended) or VPS_SSH_PASSWORD in GitHub Actions secrets.');
+            throw new Error('Set VPS_SSH_KEY (recommended), VPS_SSH_PASSWORD, or VPS_PASSWORD in GitHub Actions secrets.');
           }
           if (process.env.ADMIN_INITIAL_PASSWORD.length < 16) {
             throw new Error('ADMIN_INITIAL_PASSWORD must be at least 16 characters.');
