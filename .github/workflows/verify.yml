@@ -87,6 +87,10 @@ jobs:
           assert.equal(ping.ok, true);
           assert.equal(ping.dataPlane, 'not-ready', 'the control plane must not claim Xray is ready without its sidecar');
 
+          // Keep the first-run config too: a brand-new installation has no issued licences yet.
+          fs.copyFileSync(`${dataDir}/xray-config.json`, `${dataDir}/xray-config-empty.json`);
+          fs.chmodSync(`${dataDir}/xray-config-empty.json`, 0o644);
+
           const downloadResponse = await fetch(`${base}/api/v1/speedtest/download?bytes=1048576`);
           assert.equal(downloadResponse.status, 200);
           assert.equal((await downloadResponse.arrayBuffer()).byteLength, 1048576);
@@ -244,12 +248,15 @@ jobs:
           console.log('API, licensing, encrypted import and Xray config tests passed.');
           NODE
 
-      - name: Validate generated configuration with official Xray-core
+      - name: Validate first-run and active-licence configurations with official Xray-core
         shell: bash
         run: |
           set -euo pipefail
-          cp "${{ runner.temp }}/abessvpn-data/xray-config.json" "${{ runner.temp }}/xray-config-test.json"
-          chmod 644 "${{ runner.temp }}/xray-config-test.json"
-          docker run --rm \
-            -v "${{ runner.temp }}/xray-config-test.json:/tmp/xray-config.json:ro" \
-            ghcr.io/xtls/xray-core:26.7.28 run -test -c /tmp/xray-config.json
+          for source_config in xray-config-empty.json xray-config.json; do
+            test_file="${{ runner.temp }}/${source_config}.test"
+            cp "${{ runner.temp }}/abessvpn-data/$source_config" "$test_file"
+            chmod 644 "$test_file"
+            docker run --rm \
+              -v "$test_file:/tmp/xray-config.json:ro" \
+              ghcr.io/xtls/xray-core:26.7.28 run -test -c /tmp/xray-config.json
+          done
