@@ -276,8 +276,27 @@ async function startServer() {
     const now = Date.now();
     const expiry = new Date(found.expiresAt).getTime();
     const isExpired = !Number.isFinite(expiry) || now >= expiry;
-    const isQuotaExceeded = found.bandwidthUsedGb >= found.bandwidthGb;
 
+    // V2RayStatus reports real byte counters in the mobile client. This API
+    // accepts bounded client-reported deltas for display/compatibility only;
+    // a hostile client can falsify them, so they are not a substitute for
+    // accounting bytes in the VLESS data plane.
+    const maxBytesPerDirection = 256 * 1024 * 1024;
+    const parseBytes = (value: unknown) => {
+      const bytes = Number(value);
+      return Number.isFinite(bytes) && bytes > 0
+        ? Math.min(maxBytesPerDirection, Math.floor(bytes))
+        : 0;
+    };
+    if (!isExpired && found.status === 'active') {
+      const reportedBytes = parseBytes(req.body?.bytesDownloaded) + parseBytes(req.body?.bytesUploaded);
+      found.bandwidthUsedGb = Math.min(
+        found.bandwidthGb,
+        found.bandwidthUsedGb + reportedBytes / (1024 * 1024 * 1024)
+      );
+    }
+
+    const isQuotaExceeded = found.bandwidthUsedGb >= found.bandwidthGb;
     if (isExpired) found.status = 'expired';
     else if (isQuotaExceeded) found.status = 'quota_exceeded';
 
@@ -296,7 +315,7 @@ async function startServer() {
       bandwidthUsedGb: Number(found.bandwidthUsedGb.toFixed(3)),
       bandwidthRemainingGb: Number(Math.max(0, found.bandwidthGb - found.bandwidthUsedGb).toFixed(3)),
       expiresAt: found.expiresAt,
-      quotaSource: 'server-accounting-required'
+      quotaSource: 'client-reported-not-authoritative'
     });
   });
 
