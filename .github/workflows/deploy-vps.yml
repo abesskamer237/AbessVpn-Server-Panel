@@ -11,8 +11,45 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  validate:
+    name: Validate code and container images
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: TypeScript check
+        run: npm run lint
+
+      - name: Build admin panel
+        run: npm run build
+
+      - name: Validate shell script syntax
+        run: sh -n docker/xray/watch-config.sh
+
+      - name: Build API image
+        run: docker build --pull -f Dockerfile -t abessvpn-api:ci .
+
+      - name: Build Xray-core sidecar image
+        run: docker build --pull -f docker/xray/Dockerfile -t abessvpn-xray:ci ./docker/xray
+
+      - name: Validate Compose file
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp .env.example .env
+          docker compose config -q
+          rm -f .env
+
   deploy:
     name: Deploy control plane, Xray-core and HTTPS
+    needs: validate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -50,12 +87,14 @@ jobs:
           if (process.env.MASTER_SECRET.length < 32) {
             throw new Error('MASTER_SECRET must be at least 32 random characters.');
           }
-          if (!/^(?=.{1,253}$)([a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)(\.([a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?))*$/.test(process.env.VPN_DOMAIN)) {
+          const hostname = process.env.VPN_DOMAIN;
+          const hostnamePattern = /^(?=.{1,253}$)([a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)(\.([a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?))*$/;
+          if (!hostnamePattern.test(hostname)) {
             throw new Error('VPN_DOMAIN must be a hostname only, without https://, a port, or a path.');
           }
 
           const values = {
-            VPN_DOMAIN: process.env.VPN_DOMAIN,
+            VPN_DOMAIN: hostname,
             ACME_EMAIL: process.env.ACME_EMAIL || process.env.ADMIN_EMAIL,
             ADMIN_EMAIL: process.env.ADMIN_EMAIL,
             ADMIN_NAME: process.env.ADMIN_NAME || 'ABESS VPN Administrator',
@@ -91,26 +130,28 @@ jobs:
           set -euo pipefail
           VPS_PORT="${VPS_PORT:-22}"
           DEST="${VPS_USER}@${VPS_HOST}"
-          ssh -p "$VPS_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes "$DEST" 'set -eu
-            command -v docker >/dev/null 2>&1 || { echo "Docker is not installed on the VPS." >&2; exit 1; }
-            docker compose version >/dev/null 2>&1 || { echo "Docker Compose plugin is missing." >&2; exit 1; }
-            docker info >/dev/null 2>&1 || { echo "The SSH user must be allowed to run Docker without an interactive sudo prompt." >&2; exit 1; }
-            mkdir -p "$HOME/abessvpn-server"
-            test -w "$HOME/abessvpn-server" || { echo "The SSH user cannot write ~/abessvpn-server." >&2; exit 1; }
-            existing_caddy=""
-            if [ -f "$HOME/abessvpn-server/docker-compose.yml" ]; then
-              existing_caddy="$(cd "$HOME/abessvpn-server" && docker compose ps -q caddy 2>/dev/null || true)"
-            fi
-            busy="$(ss -ltnH 2>/dev/null | awk '''$4 ~ /:(80|443)$/ {print $4}''' || true)"
-            if [ -n "$busy" ] && [ -z "$existing_caddy" ]; then
-              echo "Ports 80/443 are already occupied by another service; deployment stopped to protect it." >&2
-              echo "$busy" >&2
-              exit 1
-            fi
-            echo "VPS preflight passed."
-          '
+          ssh -p "$VPS_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes "$DEST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          command -v docker >/dev/null 2>&1 || { echo "Docker is not installed on the VPS." >&2; exit 1; }
+          docker compose version >/dev/null 2>&1 || { echo "Docker Compose plugin is missing." >&2; exit 1; }
+          docker info >/dev/null 2>&1 || { echo "SSH user must be able to run Docker non-interactively." >&2; exit 1; }
+          mkdir -p "$HOME/abessvpn-server"
+          test -w "$HOME/abessvpn-server" || { echo "Cannot write to ~/abessvpn-server." >&2; exit 1; }
 
-      - name: Upload application without touching persistent Docker volumes
+          existing_caddy=""
+          if [ -f "$HOME/abessvpn-server/docker-compose.yml" ]; then
+            existing_caddy="$(cd "$HOME/abessvpn-server" && docker compose ps -q caddy 2>/dev/null || true)"
+          fi
+          busy="$(ss -ltnH 2>/dev/null | awk '$4 ~ /:(80|443)$/ {print $4}' || true)"
+          if [ -n "$busy" ] && [ -z "$existing_caddy" ]; then
+            echo "Ports 80/443 are occupied by another service. Deployment stopped to protect it." >&2
+            echo "$busy" >&2
+            exit 1
+          fi
+          echo "VPS preflight passed."
+          REMOTE
+
+      - name: Upload application without touching persistent volumes or environment files
         shell: bash
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
@@ -141,31 +182,34 @@ jobs:
           set -euo pipefail
           VPS_PORT="${VPS_PORT:-22}"
           DEST="${VPS_USER}@${VPS_HOST}"
-          ssh -p "$VPS_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes "$DEST" "set -eu
-            cd \"\$HOME/abessvpn-server\"
-            mv .env.new .env
-            chmod 600 .env
-            docker compose config -q
-            docker compose up -d --build --remove-orphans
-            docker compose ps
-            ready=0
-            for attempt in \$(seq 1 30); do
-              response=\$(curl --silent --show-error --fail --max-time 8 'https://${VPN_DOMAIN}/api/v1/ping' 2>/dev/null || true)
-              if printf '%s' \"\$response\" | grep -q '\\"dataPlane\\":\\"ready\\"'; then
-                ready=1
-                break
-              fi
-              sleep 5
-            done
-            if [ \"\$ready\" -ne 1 ]; then
-              echo 'Public health check failed. Recent service logs follow.' >&2
-              docker compose ps >&2 || true
-              docker compose logs --tail=100 api xray caddy >&2 || true
-              exit 1
+          ssh -p "$VPS_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes "$DEST" "VPN_DOMAIN='$VPN_DOMAIN' bash -s" <<'REMOTE'
+          set -euo pipefail
+          cd "$HOME/abessvpn-server"
+          mv .env.new .env
+          chmod 600 .env
+          docker compose config -q
+          docker compose up -d --build --remove-orphans
+          docker compose ps
+
+          ready=0
+          for attempt in $(seq 1 30); do
+            response="$(curl --silent --show-error --fail --max-time 8 "https://${VPN_DOMAIN}/api/v1/ping" 2>/dev/null || true)"
+            if printf '%s' "$response" | grep -q '"dataPlane":"ready"'; then
+              ready=1
+              break
             fi
-            printf '%s\\n' \"\$response\"
-            echo 'ABESS VPN deployed; API and Xray-core report ready.'
-          "
+            sleep 5
+          done
+
+          if [ "$ready" -ne 1 ]; then
+            echo 'Public HTTPS/Xray readiness check failed. Recent service logs follow.' >&2
+            docker compose ps >&2 || true
+            docker compose logs --tail=100 api xray caddy >&2 || true
+            exit 1
+          fi
+          printf '%s\n' "$response"
+          echo 'ABESS VPN control plane and Xray-core report ready.'
+          REMOTE
           rm -f .deploy.env
 
       - name: Remove temporary deployment material
