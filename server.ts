@@ -773,7 +773,7 @@ async function startServer() {
       res.status(400).json({ valid: false, error: 'Token manquant' });
       return;
     }
-    if (!deviceId || deviceId.length > 128 || /[\\r\\n\\0]/.test(deviceId)) {
+    if (!deviceId || deviceId.length > 128 || deviceId.includes('\r') || deviceId.includes('\n') || deviceId.includes('\0')) {
       res.status(400).json({ valid: false, error: 'Identifiant d’appareil invalide ou manquant.' });
       return;
     }
