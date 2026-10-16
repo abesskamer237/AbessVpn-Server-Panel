@@ -5,7 +5,7 @@ ABESS VPN combines a Node.js/Express control plane, a React administration panel
 ## Status and architecture
 
 - **Control plane:** authentication, reseller accounts, per-licence UUIDs, encrypted `abess://` links, expiry, device limits, and licence administration.
-- **Xray-core:** the API writes `data/xray-config.json` from active licences. Managed profiles include VLESS, VMess, Trojan and Shadowsocks AEAD over WebSocket, gRPC, HTTPUpgrade and XHTTP. A separate native Shadowsocks TCP/UDP listener is available on port 10050.
+- **Xray-core:** the API writes `data/xray-config.json` from active licences. Managed profiles include VLESS, VMess, Trojan and Shadowsocks AEAD over WebSocket, gRPC, HTTPUpgrade and XHTTP. VMess additionally supports direct RAW/TCP (port 10060) and mKCP/UDP (port 10061). Native Shadowsocks supports TCP and UDP on port 10050. RAW/mKCP are intentionally restricted to VMess so VLESS is not exposed without a TLS/security layer and Trojan is not exposed without TLS.
 - **Quota enforcement:** the API reads Xray's real user counters and disables a licence in Xray when it expires or exhausts its quota. Client-submitted byte counts are not treated as authoritative.
 - **HTTPS:** Caddy automatically obtains and renews the certificate for `VPN_DOMAIN`. TLS terminates at Caddy on TCP 443; path routes forward supported profile traffic to private Xray inbounds. Native Shadowsocks TCP/UDP is separately published on port 10050.
 - **No sample production credentials:** the first boot requires an administrator email/password in environment variables. The admin password is stored with scrypt hashing. The master encryption secret must remain stable or previously issued encrypted links can no longer be decrypted.
@@ -35,7 +35,7 @@ Use Ubuntu 24.04 or 22.04, install Docker Engine and the Docker Compose plugin u
 
 The deployment SSH user must have permission to run Docker without an interactive sudo prompt. Docker group access is effectively root-equivalent; use a dedicated deployment account and a dedicated SSH key. Do not remove existing containers or Docker volumes as part of the setup.
 
-Ensure incoming TCP ports **80 and 443** are available for Caddy and are allowed through the VPS/provider firewall. Port 22 (or your custom SSH port) must be reachable from GitHub-hosted runners. If an existing Nginx, Caddy, x-ui, or other service already owns 80/443, this workflow intentionally aborts; move that service to another port or arrange an explicit reverse-proxy integration before deploying.
+Ensure incoming TCP ports **80 and 443** are available for Caddy and allowed through the VPS/provider firewall. To use every exposed transport, also allow **TCP 10050**, **UDP 10050**, **TCP 10060**, and **UDP 10061**. Port 22 (or your custom SSH port) must be reachable from GitHub-hosted runners. If an existing Nginx, Caddy, x-ui, or other service already owns 80/443, this workflow intentionally aborts; move that service to another port or arrange an explicit reverse-proxy integration before deploying.
 
 ### 2. Point your domain to the VPS
 
@@ -51,8 +51,9 @@ Create these **repository secrets**:
 | --- | --- |
 | `VPS_HOST` | VPS public IPv4 or SSH hostname |
 | `VPS_USER` | Dedicated SSH deployment username |
-| `VPS_SSH_KEY` | Private half of a dedicated SSH key; paste the full multiline private key here only |
-| `VPS_KNOWN_HOSTS` | Verified SSH host-key line for the VPS (not an unchecked fingerprint) |
+| `VPS_SSH_KEY` | Optional; recommended private half of a dedicated SSH key |
+| `VPS_PASSWORD` or `VPS_SSH_PASSWORD` | Password for the SSH deployment user; either name is accepted |
+| `VPS_KNOWN_HOSTS` | Optional but recommended: verified SSH host-key line for the VPS (not an unchecked fingerprint) |
 | `ADMIN_INITIAL_PASSWORD` | New strong administrator password, 16+ characters |
 | `MASTER_SECRET` | Random stable secret, 32+ characters |
 
@@ -66,7 +67,7 @@ Create these **repository variables**:
 | `ADMIN_NAME` | Optional administrator display name |
 | `VPS_PORT` | Optional SSH port; defaults to `22` |
 
-Generate secrets locally; do not paste them into a chat, source code, workflow file, or commit. For example, `openssl rand -hex 32` can generate a 32-byte random master secret. Generate a dedicated Ed25519 SSH key, add its **public** key to the deployment account's `~/.ssh/authorized_keys`, and store the **private** key in `VPS_SSH_KEY`. Obtain the host-key line with `ssh-keyscan`, verify the fingerprint against the VPS/provider through a trusted channel, then store the verified line in `VPS_KNOWN_HOSTS`.
+Generate secrets locally; do not paste them into a chat, source code, workflow file, or commit. For example, `openssl rand -hex 32` can generate a 32-byte random master secret. For password-based access, save the existing SSH login password as the GitHub secret `VPS_PASSWORD` (or `VPS_SSH_PASSWORD`). The workflow installs `sshpass` on the temporary GitHub runner and uses the password without putting it in the SSH command line. A dedicated Ed25519 key in `VPS_SSH_KEY` is still the safer option. If `VPS_KNOWN_HOSTS` is absent, the workflow discovers the host key using `ssh-keyscan`; this is convenient but weaker against a man-in-the-middle attack on the first connection. For stronger protection, fetch the key yourself, verify its fingerprint using the Contabo console/provider support, and save the verified line as `VPS_KNOWN_HOSTS`.
 
 The administrator password is used only when the persistent user store is first created; changing the GitHub secret later does not reset the existing admin password. Keep `MASTER_SECRET` stable after issuing encrypted links—rotating it requires a planned migration of existing links.
 
