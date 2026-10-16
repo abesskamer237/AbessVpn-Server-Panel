@@ -1057,24 +1057,46 @@ export default function App() {
                 </div>
 
                 <div>
-                  {/* Generated Xray profiles with TLS on TCP 443; native Shadowsocks TCP/UDP uses port 10050. */}
+                  {/* HTTPS transports use Caddy on 443; native TCP and UDP modes use dedicated ports. */}
                 <div>
                   <label className="block text-slate-300 font-semibold mb-1">Protocole Xray</label>
-                  <select value={masterConfig.protocol} onChange={(e) => setMasterConfig({ ...masterConfig, protocol: e.target.value, transport: e.target.value !== "shadowsocks" && masterConfig.transport === "native" ? "ws" : masterConfig.transport })} className="w-full bg-[#03060e] border border-emerald-900 rounded-lg px-3 py-2 text-emerald-200">
+                  <select
+                    value={masterConfig.protocol}
+                    onChange={(e) => {
+                      const nextProtocol = e.target.value;
+                      const allowed = nextProtocol === 'vmess'
+                        ? ['ws', 'grpc', 'httpupgrade', 'xhttp', 'raw', 'mkcp']
+                        : nextProtocol === 'shadowsocks'
+                          ? ['ws', 'grpc', 'httpupgrade', 'xhttp', 'raw', 'native']
+                          : ['ws', 'grpc', 'httpupgrade', 'xhttp'];
+                      const nextTransport = allowed.includes(masterConfig.transport) ? masterConfig.transport : 'ws';
+                      setMasterConfig({ ...masterConfig, protocol: nextProtocol, transport: nextTransport });
+                    }}
+                    className="w-full bg-[#03060e] border border-emerald-900 rounded-lg px-3 py-2 text-emerald-200"
+                  >
                     <option value="vless">VLESS</option><option value="vmess">VMess</option><option value="trojan">Trojan</option><option value="shadowsocks">Shadowsocks AEAD</option>
                   </select>
                 </div>
                 <div>
-                  <label className="block text-slate-300 font-semibold mb-1">Transport</label>
-                  <select value={masterConfig.transport} onChange={(e) => setMasterConfig({ ...masterConfig, transport: e.target.value })} className="w-full bg-[#03060e] border border-emerald-900 rounded-lg px-3 py-2 text-emerald-200">
-                    <option value="ws">WebSocket (WS)</option><option value="grpc">gRPC</option><option value="httpupgrade">HTTPUpgrade</option><option value="xhttp">XHTTP</option>
-                    <option value="native" disabled={masterConfig.protocol !== "shadowsocks"}>TCP + UDP natifs (Shadowsocks)</option>
+                  <label className="block text-slate-300 font-semibold mb-1">Transport / Réseau</label>
+                  <select
+                    value={masterConfig.transport}
+                    onChange={(e) => setMasterConfig({ ...masterConfig, transport: e.target.value })}
+                    className="w-full bg-[#03060e] border border-emerald-900 rounded-lg px-3 py-2 text-emerald-200"
+                  >
+                    <option value="ws">WebSocket (WS/TCP via TLS 443)</option>
+                    <option value="grpc">gRPC / HTTP/2 (TLS 443)</option>
+                    <option value="httpupgrade">HTTPUpgrade (TLS 443)</option>
+                    <option value="xhttp">XHTTP (TLS 443)</option>
+                    {(masterConfig.protocol === 'vmess' || masterConfig.protocol === 'shadowsocks') && <option value="raw">TCP brut / RAW</option>}
+                    {masterConfig.protocol === 'vmess' && <option value="mkcp">mKCP / UDP</option>}
+                    {masterConfig.protocol === 'shadowsocks' && <option value="native">TCP + UDP natifs (Shadowsocks)</option>}
                   </select>
                 </div>
-                <div className="md:col-span-2 rounded-lg border border-slate-700 bg-slate-900/50 p-3 text-slate-400">
-                  Les profils WS/gRPC/HTTPUpgrade/XHTTP passent par le port TLS 443. Shadowsocks natif utilise le port 10050 en TCP et UDP ; ouvre les deux dans le pare-feu.
+                <div className="md:col-span-2 rounded-lg border border-slate-700 bg-slate-900/50 p-3 text-slate-300 leading-relaxed">
+                  <strong className="text-emerald-300">Ports et compatibilité :</strong> WS/gRPC/HTTPUpgrade/XHTTP utilisent TLS public sur 443. VMess RAW utilise TCP 10021 ; Shadowsocks RAW utilise TCP 10023 ; VMess mKCP utilise UDP 10031 ; Shadowsocks natif utilise TCP et UDP 10050. Ouvre uniquement les ports nécessaires dans le pare-feu du VPS. VLESS/Trojan en RAW sans TLS/REALITY ne sont volontairement pas proposés.
                 </div>
-                <label className="block text-slate-300 font-semibold mb-1">Chemin WebSocket (VLESS + WS)</label>
+                <label className="block text-slate-300 font-semibold mb-1">Chemin de transport (WS)</label>
                   <input
                     type="text"
                     value={masterConfig.path}

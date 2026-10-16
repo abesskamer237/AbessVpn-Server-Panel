@@ -42,8 +42,12 @@ services:
     expose:
       - "10000"
     ports:
-      - "10050:10050/tcp"
-      - "10050:10050/udp"
+      # Native authenticated/encrypted transports. Only expose what is required by the chosen profile.
+      - "10021:10021/tcp" # VMess over TCP/RAW
+      - "10023:10023/tcp" # Shadowsocks AEAD over TCP/RAW
+      - "10031:10031/udp" # VMess over mKCP/UDP
+      - "10050:10050/tcp" # Native Shadowsocks TCP
+      - "10050:10050/udp" # Native Shadowsocks UDP
     healthcheck:
       test: ["CMD-SHELL", "test -s /shared/xray-ready && test -s /shared/xray-config.json && test -s /shared/xray.pid && kill -0 $(cat /shared/xray.pid)"]
       interval: 5s
