@@ -234,6 +234,7 @@ jobs:
             --exclude 'data/' \
             --exclude '.env' \
             --exclude '.deploy.env' \
+            --exclude '.deploy.credentials' \
             ./ "$DEST:abessvpn-server/"
           "$HOME/.local/bin/abess-scp" -P "$VPS_PORT" -o StrictHostKeyChecking=yes .deploy.env "$DEST:abessvpn-server/.env.new"
           if [[ -f .deploy.credentials ]]; then
@@ -257,6 +258,7 @@ jobs:
           "$HOME/.local/bin/abess-ssh" -p "$VPS_PORT" -o StrictHostKeyChecking=yes "$DEST" "VPN_DOMAIN='$VPN_DOMAIN' bash -s" <<'REMOTE'
           set -euo pipefail
           cd "$HOME/abessvpn-server"
+          rm -f .deploy.credentials
           if [ -f .env ]; then
             # Preserve the initial administrator password and master key on redeploys.
             for key in ADMIN_INITIAL_PASSWORD MASTER_SECRET; do
