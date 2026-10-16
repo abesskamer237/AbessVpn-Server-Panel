@@ -196,7 +196,7 @@ jobs:
           docker compose ps
 
           ready=0
-          for attempt in $(seq 1 30); do
+          for ((attempt=1; attempt<=30; attempt++)); do
             response="$(curl --silent --show-error --fail --max-time 8 "https://${VPN_DOMAIN}/api/v1/ping" 2>/dev/null || true)"
             if printf '%s' "$response" | grep -q '"dataPlane":"ready"'; then
               ready=1
