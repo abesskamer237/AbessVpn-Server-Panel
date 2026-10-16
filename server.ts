@@ -469,14 +469,22 @@ async function startServer() {
       return;
     }
 
-    const tokens = loadTokens();
-    const found = tokens.find(t => t.token.toUpperCase() === rawToken.toUpperCase());
+    let tokens = loadTokens();
+    let found = tokens.find(t => t.token.toUpperCase() === rawToken.toUpperCase());
     if (!found) {
       res.status(401).json({ ok: false, error: 'Token client non reconnu ou révoqué.' });
       return;
     }
 
     reconcileXrayUsage();
+    // Re-read after reconciliation: it may have advanced the real Xray counters or disabled an exhausted licence.
+    tokens = loadTokens();
+    found = tokens.find(t => t.token.toUpperCase() === rawToken.toUpperCase());
+    if (!found) {
+      res.status(401).json({ ok: false, error: 'Token client non reconnu ou révoqué.' });
+      return;
+    }
+
     const now = Date.now();
     const expiry = new Date(found.expiresAt).getTime();
     const isExpired = !Number.isFinite(expiry) || now >= expiry || found.status === 'expired';
