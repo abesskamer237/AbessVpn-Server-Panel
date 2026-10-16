@@ -27,7 +27,7 @@ The local API listens on port 3000 by default. In non-production mode Vite serve
 
 ## Deploy to an Ubuntu VPS using GitHub Actions
 
-The repository includes `.github/workflows/deploy-vps.yml`. It first type-checks and builds the panel, builds both Docker images, checks the Compose configuration, and then performs an SSH deployment. The workflow deliberately stops before modifying services if Docker/Compose cannot be used or if an unrelated service is listening on ports 80/443.
+The repository includes `.github/workflows/deploy-vps.yml`. It validates the code, panel, Docker images, and Compose configuration before deploying over SSH. Deployment can be started manually from Actions, and pushes to `main` now trigger the same workflow. The workflow deliberately stops before modifying services if Docker/Compose cannot be used or if an unrelated service is listening on ports 80/443.
 
 ### 1. Prepare the VPS
 
