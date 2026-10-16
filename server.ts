@@ -224,7 +224,8 @@ function xrayUserEmail(token: ClientToken): string {
 }
 
 const XRAY_PROTOCOLS = ['vless', 'vmess', 'trojan', 'shadowsocks'] as const;
-const XRAY_TRANSPORTS = ['ws', 'grpc', 'httpupgrade', 'xhttp'] as const;
+// HTTPS transports are routed by Caddy. RAW TCP and mKCP UDP use dedicated public ports.
+const XRAY_TRANSPORTS = ['ws', 'grpc', 'httpupgrade', 'xhttp', 'raw', 'mkcp'] as const;
 type XrayProtocol = typeof XRAY_PROTOCOLS[number];
 type XrayTransport = typeof XRAY_TRANSPORTS[number] | 'native';
 
@@ -234,21 +235,45 @@ function isXrayProtocol(value: unknown): value is XrayProtocol {
 function isXrayTransport(value: unknown): value is XrayTransport {
   return value === 'native' || (typeof value === 'string' && (XRAY_TRANSPORTS as readonly string[]).includes(value));
 }
+function isXrayProfileSupported(protocol: XrayProtocol, transport: XrayTransport): boolean {
+  if (transport === 'native') return protocol === 'shadowsocks';
+  // RAW public TCP profiles must use a protocol with built-in payload encryption.
+  if (transport === 'raw') return protocol === 'vmess' || protocol === 'shadowsocks';
+  // This deployment exposes mKCP as VMess over UDP; it bypasses HTTP/TLS reverse proxies.
+  if (transport === 'mkcp') return protocol === 'vmess';
+  return true;
+}
 function normalizedPath(_value: string): string { return '/@abess237'; }
 function xrayProfilePath(protocol: XrayProtocol, transport: XrayTransport, customWsPath = '/@abess237'): string {
-  if (protocol === 'shadowsocks' && transport === 'native') return '';
+  if (transport === 'native' || transport === 'raw' || transport === 'mkcp') return '';
   if (protocol === 'vless' && transport === 'ws') return normalizedPath(customWsPath);
   return '/@abess237/' + protocol + '/' + transport;
 }
-function xrayProfilePort(protocol: XrayProtocol, transport: typeof XRAY_TRANSPORTS[number]): number {
+function xrayProfilePort(protocol: XrayProtocol, transport: XrayTransport): number {
+  if (transport === 'native') return 10050;
+  if (transport === 'raw') {
+    if (protocol === 'vmess') return 10021;
+    if (protocol === 'shadowsocks') return 10023;
+  }
+  if (transport === 'mkcp' && protocol === 'vmess') return 10031;
+  if (transport === 'raw' || transport === 'mkcp') throw new Error(`Unsupported Xray profile: ${protocol}/${transport}`);
   return 10000 + XRAY_PROTOCOLS.indexOf(protocol) * 5 + XRAY_TRANSPORTS.indexOf(transport);
 }
-function xrayStreamSettings(transport: typeof XRAY_TRANSPORTS[number], profilePath: string): Record<string, unknown> {
+function xrayKcpSeed(masterConfig: MasterServerConfig): string {
+  return crypto.createHmac('sha256', masterConfig.secretPassphrase || 'abessvpn')
+    .update('abessvpn-mkcp-v1').digest('hex').slice(0, 16);
+}
+function xrayStreamSettings(transport: typeof XRAY_TRANSPORTS[number], profilePath: string, kcpSeed: string): Record<string, unknown> {
   switch (transport) {
     case 'ws': return { network: 'ws', security: 'none', wsSettings: { path: profilePath } };
-    case 'grpc': return { network: 'grpc', security: 'none', grpcSettings: { serviceName: profilePath.replace(/^\/+/, ''), multiMode: false } };
+    case 'grpc': return { network: 'grpc', security: 'none', grpcSettings: { serviceName: profilePath.replace(/^\\/+/, ''), multiMode: false } };
     case 'httpupgrade': return { network: 'httpupgrade', security: 'none', httpupgradeSettings: { path: profilePath, host: '' } };
     case 'xhttp': return { network: 'xhttp', security: 'none', xhttpSettings: { path: profilePath, mode: 'auto' } };
+    case 'raw': return { network: 'tcp', security: 'none', tcpSettings: { header: { type: 'none' } } };
+    case 'mkcp': return { network: 'kcp', security: 'none', kcpSettings: {
+      mtu: 1350, tti: 50, uplinkCapacity: 5, downlinkCapacity: 20, congestion: false,
+      readBufferSize: 2, writeBufferSize: 2, header: { type: 'none' }, seed: kcpSeed
+    } };
   }
 }
 
@@ -262,6 +287,7 @@ function syncXrayConfig(tokens: ClientToken[] = loadTokens()): boolean {
   const inbounds: Array<Record<string, unknown>> = [];
   for (const protocol of XRAY_PROTOCOLS) {
     for (const transport of XRAY_TRANSPORTS) {
+      if (!isXrayProfileSupported(protocol, transport)) continue;
       const profilePath = xrayProfilePath(protocol, transport, masterConfig.path);
       const users = activeTokens.map(token => ({ id: token.clientUuid as string, email: xrayUserEmail(token), level: 0 }));
       let settings: Record<string, unknown>;
@@ -278,7 +304,7 @@ function syncXrayConfig(tokens: ClientToken[] = loadTokens()): boolean {
           };
           break;
       }
-      inbounds.push({ tag: protocol + '-' + transport + '-in', listen: '0.0.0.0', port: xrayProfilePort(protocol, transport), protocol, settings, streamSettings: xrayStreamSettings(transport, profilePath) });
+      inbounds.push({ tag: protocol + '-' + transport + '-in', listen: '0.0.0.0', port: xrayProfilePort(protocol, transport), protocol, settings, streamSettings: xrayStreamSettings(transport, profilePath, xrayKcpSeed(masterConfig)) });
     }
   }
   // Native Shadowsocks uses an exposed TCP/UDP socket; Caddy handles only HTTP-based transports.
@@ -811,14 +837,19 @@ async function startServer() {
       bandwidthGb: requestedGb,
       expiresAt: calculatedExpiresAt,
       serverHost: masterConfig.serverHost,
-      serverPort: masterConfig.transport === 'native' && masterConfig.protocol === 'shadowsocks' ? 10050 : masterConfig.serverPort,
+      serverPort: isXrayProtocol(masterConfig.protocol) && isXrayTransport(masterConfig.transport)
+        ? ((masterConfig.transport === 'native' || masterConfig.transport === 'raw' || masterConfig.transport === 'mkcp')
+          ? xrayProfilePort(masterConfig.protocol, masterConfig.transport)
+          : masterConfig.serverPort)
+        : masterConfig.serverPort,
       path: isXrayProtocol(masterConfig.protocol) && isXrayTransport(masterConfig.transport)
         ? xrayProfilePath(masterConfig.protocol, masterConfig.transport, masterConfig.path)
         : '/@abess237',
       sniHost: masterConfig.sniHost,
       uuid: clientUuid,
       protocol: masterConfig.protocol,
-      transport: masterConfig.transport
+      transport: masterConfig.transport,
+      ...(masterConfig.transport === 'mkcp' ? { seed: xrayKcpSeed(masterConfig) } : {})
     };
     const encryptedLink = encryptConfig(encryptedPayload, masterConfig.secretPassphrase);
 
@@ -906,8 +937,8 @@ async function startServer() {
     const current = loadMasterConfig();
     const requestedProtocol = req.body?.protocol ?? current.protocol;
     const requestedTransport = req.body?.transport ?? current.transport;
-    if (!isXrayProtocol(requestedProtocol) || !isXrayTransport(requestedTransport) || (requestedTransport === 'native' && requestedProtocol !== 'shadowsocks')) {
-      res.status(400).json({ success: false, error: 'Profils autorisés : VLESS, VMess, Trojan, Shadowsocks ; transports WS, gRPC, HTTPUpgrade, XHTTP. TCP/UDP natif est disponible pour Shadowsocks.' });
+    if (!isXrayProtocol(requestedProtocol) || !isXrayTransport(requestedTransport) || !isXrayProfileSupported(requestedProtocol, requestedTransport)) {
+      res.status(400).json({ success: false, error: 'Profil non compatible. VLESS/VMess/Trojan/Shadowsocks : WS, gRPC, HTTPUpgrade ou XHTTP via TLS 443 ; VMess/RAW via TCP 10021 ; VMess/mKCP via UDP 10031 ; Shadowsocks/RAW via TCP 10023 ; Shadowsocks natif via TCP+UDP 10050.' });
       return;
     }
     const updated = { ...current, ...req.body, protocol: requestedProtocol, transport: requestedTransport, path: '/@abess237' };
