@@ -1,0 +1,90 @@
+name: Verify ABESS VPN Server Panel
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript check
+        run: npm run lint
+
+      - name: Build admin panel
+        run: npm run build
+
+      - name: Start API and smoke-test mobile routes
+        shell: bash
+        run: |
+          set -euo pipefail
+          PORT=3187 NODE_ENV=production npm run start > /tmp/abessvpn-server.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+
+          for attempt in $(seq 1 30); do
+            if curl --silent --fail http://127.0.0.1:3187/api/v1/ping > /tmp/abess-ping.json; then
+              break
+            fi
+            sleep 1
+          done
+
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+
+          const base = 'http://127.0.0.1:3187';
+
+          const pingResponse = await fetch(`${base}/api/v1/ping`);
+          assert.equal(pingResponse.status, 200, 'ping route must return HTTP 200');
+          const ping = await pingResponse.json();
+          assert.equal(ping.ok, true);
+          assert.equal(ping.dataPlane, 'not-ready', 'do not claim the tunnel is ready until a real data plane exists');
+
+          const downloadResponse = await fetch(`${base}/api/v1/speedtest/download?bytes=1048576`);
+          assert.equal(downloadResponse.status, 200);
+          assert.equal((await downloadResponse.arrayBuffer()).byteLength, 1048576);
+
+          const uploadResponse = await fetch(`${base}/api/v1/speedtest/upload`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/octet-stream' },
+            body: Buffer.alloc(4096, 65),
+          });
+          assert.equal(uploadResponse.status, 200);
+          assert.equal((await uploadResponse.json()).receivedBytes, 4096);
+
+          const createTokenResponse = await fetch(`${base}/api/v1/client/create-token`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token: 'SHOULD_NOT_BE_CREATED', bandwidthGb: 100 }),
+          });
+          assert.equal(createTokenResponse.status, 403, 'unauthenticated mobile token creation must be denied');
+
+          const trialResponse = await fetch(`${base}/api/v1/client/claim-free-trial`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ deviceId: 'TEST-DEVICE-123456' }),
+          });
+          assert.equal(trialResponse.status, 503, 'do not issue a trial until the tunnel data plane is real');
+
+          const telemetryResponse = await fetch(`${base}/api/v1/client/telemetry`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({}),
+          });
+          assert.equal(telemetryResponse.status, 400, 'telemetry must reject a missing token');
+
+          console.log('Mobile route contract smoke tests passed.');
+          NODE
