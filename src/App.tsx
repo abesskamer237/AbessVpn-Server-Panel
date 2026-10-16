@@ -1047,6 +1047,9 @@ export default function App() {
               )}
 
               <form onSubmit={handleSaveConfig} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="md:col-span-2 rounded-xl border border-slate-700 bg-slate-900/60 p-3 text-sm leading-relaxed text-slate-300">
+                  L’hôte public du protocole et le SNI ne sont plus préremplis depuis le domaine du panneau. Renseigne ici une adresse DNS ou IP qui pointe vers ce VPS. Pour WS, gRPC, HTTPUpgrade et XHTTP, le domaine doit être servi par Caddy et son certificat TLS doit couvrir le SNI. Avec le déploiement actuel, utilise normalement le même domaine public que VPN_DOMAIN, sauf si tu configures aussi cet hôte supplémentaire dans Caddy.
+                </div>
                 <div>
                   <label className="block text-slate-300 font-semibold mb-1">Hôte public du protocole (domaine ou IP du VPS)</label>
                   <input
