@@ -94,7 +94,7 @@ function loadMasterConfig(): MasterServerConfig {
   if (fs.existsSync(configFile)) {
     try {
       const stored = JSON.parse(fs.readFileSync(configFile, 'utf8')) as Partial<MasterServerConfig>;
-      return {
+      const merged: MasterServerConfig = {
         ...defaults,
         ...stored,
         serverHost: vpnDomain,
@@ -103,6 +103,16 @@ function loadMasterConfig(): MasterServerConfig {
         sniHost: vpnDomain,
         secretPassphrase: process.env.MASTER_SECRET || ''
       };
+      // Shadowsocks UDP uses its native socket, not an HTTP/WebSocket proxy.
+      if (merged.protocol === 'shadowsocks' && merged.transport !== 'native') {
+        merged.transport = 'native';
+      } else if (
+        (merged.protocol !== 'vmess' && ['raw', 'kcp'].includes(merged.transport)) ||
+        (merged.protocol !== 'shadowsocks' && merged.transport === 'native')
+      ) {
+        merged.transport = 'ws';
+      }
+      return merged;
     } catch {
       // Recreate from environment defaults below.
     }
@@ -940,11 +950,12 @@ async function startServer() {
       !isXrayProtocol(requestedProtocol) ||
       !isXrayTransport(requestedTransport) ||
       (requestedTransport === 'native' && requestedProtocol !== 'shadowsocks') ||
+      (requestedProtocol === 'shadowsocks' && requestedTransport !== 'native') ||
       ((requestedTransport === 'raw' || requestedTransport === 'kcp') && requestedProtocol !== 'vmess')
     ) {
       res.status(400).json({
         success: false,
-        error: 'VLESS, VMess, Trojan et Shadowsocks sont disponibles en WS/gRPC/HTTPUpgrade/XHTTP. VMess prend aussi en charge RAW/TCP et mKCP/UDP ; Shadowsocks natif prend en charge TCP + UDP.'
+        error: 'VLESS, VMess et Trojan sont disponibles en WS/gRPC/HTTPUpgrade/XHTTP. VMess prend aussi en charge RAW/TCP et mKCP/UDP ; Shadowsocks doit utiliser le transport natif TCP + UDP.'
       });
       return;
     }
