@@ -1,0 +1,173 @@
+name: Deploy ABESS VPN to VPS
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: abessvpn-production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy control plane, Xray-core and HTTPS
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate deployment settings and prepare private environment file
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+          VPS_PORT: ${{ vars.VPS_PORT }}
+          VPN_DOMAIN: ${{ vars.VPN_DOMAIN }}
+          ACME_EMAIL: ${{ vars.ACME_EMAIL }}
+          ADMIN_EMAIL: ${{ vars.ADMIN_EMAIL }}
+          ADMIN_NAME: ${{ vars.ADMIN_NAME }}
+          ADMIN_INITIAL_PASSWORD: ${{ secrets.ADMIN_INITIAL_PASSWORD }}
+          MASTER_SECRET: ${{ secrets.MASTER_SECRET }}
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const required = [
+            'VPS_HOST', 'VPS_USER', 'VPS_SSH_KEY', 'VPS_KNOWN_HOSTS',
+            'VPN_DOMAIN', 'ADMIN_EMAIL', 'ADMIN_INITIAL_PASSWORD', 'MASTER_SECRET'
+          ];
+          for (const key of required) {
+            if (!process.env[key] || !process.env[key].trim()) {
+              throw new Error(`Missing GitHub secret/variable: ${key}`);
+            }
+          }
+          if (process.env.ADMIN_INITIAL_PASSWORD.length < 16) {
+            throw new Error('ADMIN_INITIAL_PASSWORD must be at least 16 characters.');
+          }
+          if (process.env.MASTER_SECRET.length < 32) {
+            throw new Error('MASTER_SECRET must be at least 32 random characters.');
+          }
+          if (!/^(?=.{1,253}$)([a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)(\.([a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?))*$/.test(process.env.VPN_DOMAIN)) {
+            throw new Error('VPN_DOMAIN must be a hostname only, without https://, a port, or a path.');
+          }
+
+          const values = {
+            VPN_DOMAIN: process.env.VPN_DOMAIN,
+            ACME_EMAIL: process.env.ACME_EMAIL || process.env.ADMIN_EMAIL,
+            ADMIN_EMAIL: process.env.ADMIN_EMAIL,
+            ADMIN_NAME: process.env.ADMIN_NAME || 'ABESS VPN Administrator',
+            ADMIN_INITIAL_PASSWORD: process.env.ADMIN_INITIAL_PASSWORD,
+            MASTER_SECRET: process.env.MASTER_SECRET
+          };
+          const envText = Object.entries(values)
+            .map(([key, value]) => key + '=' + JSON.stringify(value))
+            .join('\n') + '\n';
+          fs.writeFileSync('.deploy.env', envText, { mode: 0o600 });
+          NODE
+
+      - name: Configure SSH
+        shell: bash
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$VPS_SSH_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$VPS_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Preflight VPS without stopping existing services
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ vars.VPS_PORT }}
+        run: |
+          set -euo pipefail
+          VPS_PORT="${VPS_PORT:-22}"
+          DEST="${VPS_USER}@${VPS_HOST}"
+          ssh -p "$VPS_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes "$DEST" 'set -eu
+            command -v docker >/dev/null 2>&1 || { echo "Docker is not installed on the VPS." >&2; exit 1; }
+            docker compose version >/dev/null 2>&1 || { echo "Docker Compose plugin is missing." >&2; exit 1; }
+            docker info >/dev/null 2>&1 || { echo "The SSH user must be allowed to run Docker without an interactive sudo prompt." >&2; exit 1; }
+            mkdir -p "$HOME/abessvpn-server"
+            test -w "$HOME/abessvpn-server" || { echo "The SSH user cannot write ~/abessvpn-server." >&2; exit 1; }
+            existing_caddy=""
+            if [ -f "$HOME/abessvpn-server/docker-compose.yml" ]; then
+              existing_caddy="$(cd "$HOME/abessvpn-server" && docker compose ps -q caddy 2>/dev/null || true)"
+            fi
+            busy="$(ss -ltnH 2>/dev/null | awk '''$4 ~ /:(80|443)$/ {print $4}''' || true)"
+            if [ -n "$busy" ] && [ -z "$existing_caddy" ]; then
+              echo "Ports 80/443 are already occupied by another service; deployment stopped to protect it." >&2
+              echo "$busy" >&2
+              exit 1
+            fi
+            echo "VPS preflight passed."
+          '
+
+      - name: Upload application without touching persistent Docker volumes
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ vars.VPS_PORT }}
+        run: |
+          set -euo pipefail
+          VPS_PORT="${VPS_PORT:-22}"
+          DEST="${VPS_USER}@${VPS_HOST}"
+          rsync -az --delete -e "ssh -p $VPS_PORT -o BatchMode=yes -o StrictHostKeyChecking=yes" \
+            --exclude '.git/' \
+            --exclude 'node_modules/' \
+            --exclude 'dist/' \
+            --exclude 'data/' \
+            --exclude '.env' \
+            --exclude '.deploy.env' \
+            ./ "$DEST:abessvpn-server/"
+          scp -P "$VPS_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes .deploy.env "$DEST:abessvpn-server/.env.new"
+
+      - name: Build and start services, then verify public HTTPS
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ vars.VPS_PORT }}
+          VPN_DOMAIN: ${{ vars.VPN_DOMAIN }}
+        run: |
+          set -euo pipefail
+          VPS_PORT="${VPS_PORT:-22}"
+          DEST="${VPS_USER}@${VPS_HOST}"
+          ssh -p "$VPS_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes "$DEST" "set -eu
+            cd \"\$HOME/abessvpn-server\"
+            mv .env.new .env
+            chmod 600 .env
+            docker compose config -q
+            docker compose up -d --build --remove-orphans
+            docker compose ps
+            ready=0
+            for attempt in \$(seq 1 30); do
+              response=\$(curl --silent --show-error --fail --max-time 8 'https://${VPN_DOMAIN}/api/v1/ping' 2>/dev/null || true)
+              if printf '%s' \"\$response\" | grep -q '\\"dataPlane\\":\\"ready\\"'; then
+                ready=1
+                break
+              fi
+              sleep 5
+            done
+            if [ \"\$ready\" -ne 1 ]; then
+              echo 'Public health check failed. Recent service logs follow.' >&2
+              docker compose ps >&2 || true
+              docker compose logs --tail=100 api xray caddy >&2 || true
+              exit 1
+            fi
+            printf '%s\\n' \"\$response\"
+            echo 'ABESS VPN deployed; API and Xray-core report ready.'
+          "
+          rm -f .deploy.env
+
+      - name: Remove temporary deployment material
+        if: always()
+        run: rm -f .deploy.env
