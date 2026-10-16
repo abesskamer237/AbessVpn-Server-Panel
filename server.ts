@@ -830,9 +830,10 @@ async function startServer() {
     const configuredPath = loadMasterConfig().path || '/@abess237';
     if (pathname === configuredPath || pathname.startsWith(`${configuredPath}/`)) {
       const body = 'VLESS data plane is not configured on this server.';
-      socket.write(
+      socket.end(
         `HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: ${Buffer.byteLength(body)}\r\nCache-Control: no-store\r\n\r\n${body}`
       );
+      return;
     }
     socket.destroy();
   });
