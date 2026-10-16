@@ -1,0 +1,12 @@
+{
+  email {$ACME_EMAIL}
+}
+
+{$VPN_DOMAIN} {
+  encode zstd gzip
+
+  @vless path /@abess237
+  reverse_proxy @vless xray:10000
+
+  reverse_proxy api:3000
+}
