@@ -55,6 +55,8 @@ export interface ClientToken {
   deviceLimit: number;
   /** Stable device IDs which have claimed this licence. */
   deviceIds?: string[];
+  /** Optional pinned ABESS installation ID; when set, only that app installation may activate. */
+  allowedDeviceId?: string;
   connectionCount: number;
   lastSeenAt: string | null;
   lastSeenIp: string | null;
@@ -973,6 +975,16 @@ async function startServer() {
   app.post('/api/v1/admin/tokens', authenticate, (req, res) => {
     const user: AppUser = (req as any).user;
     const { token, plan, bandwidthGb, expiresAt, days, deviceLimit, configurationId } = req.body || {};
+    const rawAllowedDeviceId = req.body?.allowedDeviceId;
+    const allowedDeviceId = typeof rawAllowedDeviceId === 'string' ? rawAllowedDeviceId.trim() : '';
+    if (allowedDeviceId && (
+      allowedDeviceId.length < 8 ||
+      allowedDeviceId.length > 128 ||
+      !/^[A-Za-z0-9._:-]+$/.test(allowedDeviceId)
+    )) {
+      res.status(400).json({ error: 'L’ID d’installation doit contenir 8 à 128 caractères alphanumériques, tirets, points ou deux-points, sans espace.' });
+      return;
+    }
     const requestedGb = Number(bandwidthGb) || 50;
     if (!Number.isFinite(requestedGb) || requestedGb < 1 || requestedGb > 100000) {
       res.status(400).json({ error: 'Le quota doit être compris entre 1 et 100000 Go.' });
@@ -1025,7 +1037,8 @@ async function startServer() {
     }
     const encryptedPayload = {
       vpnName: 'AbessVpn', token: finalToken, bandwidthGb: requestedGb,
-      expiresAt: calculatedExpiresAt, configurationId: profile.id, configurationName: profile.name,
+      expiresAt: calculatedExpiresAt, allowedDeviceId: allowedDeviceId || undefined,
+      configurationId: profile.id, configurationName: profile.name,
       serverHost: profile.serverHost, host: profile.host || profile.serverHost,
       serverPort: xrayPublicPort(profile.protocol, profile.transport, profile.serverPort),
       path: xrayProfilePath(profile.protocol as XrayProtocol, profile.transport as XrayTransport, profile.path),
@@ -1039,7 +1052,8 @@ async function startServer() {
       resellerId: user.id, resellerName: user.name,
       plan: String(plan || `${requestedGb} GO CYBER VIP`).trim().slice(0, 80),
       bandwidthGb: requestedGb, bandwidthUsedGb: 0, expiresAt: calculatedExpiresAt, days: daysRemaining,
-      deviceLimit: clientLimit, deviceIds: [], connectionCount: 0, lastSeenAt: null, lastSeenIp: null,
+      deviceLimit: clientLimit, deviceIds: [], allowedDeviceId: allowedDeviceId || undefined,
+      connectionCount: 0, lastSeenAt: null, lastSeenIp: null,
       status: 'active', configurationId: profile.id, configurationName: profile.name,
       configurationSnapshot: publicProtocolConfig(profile), encryptedLink, createdAt: new Date().toISOString()
     };
@@ -1342,6 +1356,16 @@ async function startServer() {
       return;
     }
 
+    const pinnedDeviceId = typeof found.allowedDeviceId === 'string' ? found.allowedDeviceId.trim() : '';
+    if (pinnedDeviceId && pinnedDeviceId !== deviceId) {
+      res.status(403).json({
+        valid: false,
+        error: 'Cette licence est liée à une autre installation ABESS. Demandez une licence associée à l’ID de ce téléphone.',
+        status: 'device_id_mismatch'
+      });
+      return;
+    }
+
     const now = Date.now();
     const profile = protocolConfigForToken(found, loadProtocolConfigs());
     if (!profile || !isValidPublicHost(profile.serverHost) ||
@@ -1440,7 +1464,8 @@ async function startServer() {
         method: profile.protocol === 'shadowsocks' ? 'aes-128-gcm' : undefined,
         protocol: profile.protocol,
         transport: profile.transport,
-        security: ['native', 'raw', 'kcp'].includes(profile.transport) ? 'none' : 'tls'
+        security: ['native', 'raw', 'kcp'].includes(profile.transport) ? 'none' : 'tls',
+        allowedDeviceId: found.allowedDeviceId || undefined
       }
     });
   };
