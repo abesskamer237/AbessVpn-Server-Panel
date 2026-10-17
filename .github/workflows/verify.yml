@@ -279,6 +279,41 @@ jobs:
           });
           assert.equal(badLinkResponse.status, 400, 'invalid encrypted links must be rejected');
 
+          // A licence can optionally be pinned to the installation ID copied from ABESS VPN.
+          const pinnedDeviceId = 'ABESS-INST-0123456789ABCDEF01234567';
+          const pinnedCreate = await fetch(`${base}/api/v1/admin/tokens`, {
+            method: 'POST',
+            headers: adminHeaders,
+            body: JSON.stringify({
+              plan: 'CI pinned device licence',
+              bandwidthGb: 2,
+              days: 1,
+              deviceLimit: 1,
+              configurationId: legacyProfile.id,
+              allowedDeviceId: pinnedDeviceId,
+            }),
+          });
+          assert.equal(pinnedCreate.status, 201);
+          const pinnedLicence = await pinnedCreate.json();
+          assert.equal(pinnedLicence.allowedDeviceId, pinnedDeviceId);
+
+          const wrongPinnedDevice = await fetch(`${base}/api/v1/auth/token`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token: pinnedLicence.token, deviceId: 'ABESS-INST-WRONGDEVICEID000000' }),
+          });
+          assert.equal(wrongPinnedDevice.status, 403, 'a pinned licence must refuse another installation ID');
+          assert.equal((await wrongPinnedDevice.json()).status, 'device_id_mismatch');
+
+          const correctPinnedDevice = await fetch(`${base}/api/v1/auth/token`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token: pinnedLicence.token, deviceId: pinnedDeviceId }),
+          });
+          assert.equal(correctPinnedDevice.status, 200, 'the pinned installation ID must be allowed');
+          const pinnedValidation = await correctPinnedDevice.json();
+          assert.equal(pinnedValidation.serverConfig.allowedDeviceId, pinnedDeviceId);
+
           const createB = await fetch(`${base}/api/v1/admin/tokens`, {
             method: 'POST',
             headers: adminHeaders,
