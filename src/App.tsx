@@ -1282,7 +1282,7 @@ export default function App() {
                   <div className="md:col-span-2 rounded-xl border border-amber-900/80 bg-amber-950/15 p-3">
                     <label className="block text-amber-200 font-semibold mb-1">SNI TLS — nom présenté au serveur TLS</label>
                     <input type="text" value={masterConfig.sniHost} onChange={(e) => setMasterConfig({ ...masterConfig, sniHost: e.target.value })} className="w-full bg-[#03060e] border border-amber-800 rounded-lg px-3 py-3 text-amber-100 disabled:opacity-50" placeholder={['native','raw','kcp'].includes(masterConfig.transport) ? 'Non utilisé pour ce transport' : 'Nom couvert par le certificat présenté'} disabled={['native','raw','kcp'].includes(masterConfig.transport)} required={!['native','raw','kcp'].includes(masterConfig.transport)} />
-                    <p className="mt-1 text-slate-400">Pour TLS, le serveur atteint par le client doit présenter un certificat compatible avec ce SNI. Une simple valeur saisie ici ne crée pas un certificat ni un DNS.</p>
+                    <p className="mt-1 text-slate-400">Pour ce déploiement, Caddy présente le certificat associé à la variable VPN_DOMAIN. Pour WS, gRPC, HTTPUpgrade et XHTTP, le SNI doit donc être exactement ce domaine. Le Host HTTP reste séparé et ne remplace pas le certificat. Pour un autre SNI, configurez d’abord un domaine et son certificat sur Caddy.</p>
                   </div>
                   <div className="md:col-span-2">
                     <label className="block text-slate-300 font-semibold mb-1">Chemin de transport</label>

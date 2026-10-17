@@ -172,7 +172,7 @@ jobs:
             body: JSON.stringify({
               serverHost: 'profile.example.test',
               host: 'header.example.test',
-              sniHost: 'tls.example.test',
+              sniHost: 'vpn.example.test',
               serverPort: 443,
               protocol: 'vless',
               transport: 'ws',
@@ -186,7 +186,22 @@ jobs:
           const savedProtocolConfig = await protocolConfigRead.json();
           assert.equal(savedProtocolConfig.serverHost, 'profile.example.test');
           assert.equal(savedProtocolConfig.host, 'header.example.test');
-          assert.equal(savedProtocolConfig.sniHost, 'tls.example.test');
+          assert.equal(savedProtocolConfig.sniHost, 'vpn.example.test');
+
+          const rejectedSniResponse = await fetch(`${base}/api/v1/admin/protocol-configs`, {
+            method: 'POST',
+            headers: adminHeaders,
+            body: JSON.stringify({
+              name: 'CI invalid TLS SNI',
+              serverHost: 'profile-invalid.example.test',
+              host: 'header-invalid.example.test',
+              sniHost: 'tls.example.test',
+              protocol: 'vless',
+              transport: 'ws',
+            }),
+          });
+          assert.equal(rejectedSniResponse.status, 400, 'TLS profiles must not use an SNI not covered by this deployment certificate');
+          assert.match((await rejectedSniResponse.json()).error, /vpn\.example\.test/);
 
           // Multiple named profiles are managed only by the Super Admin and tokens select one profile.
           const legacyProfilesResponse = await fetch(`${base}/api/v1/admin/protocol-configs`, {
@@ -250,7 +265,7 @@ jobs:
             assert.equal(result.serverConfig.uuid, licenceA.clientUuid);
             assert.equal(result.serverConfig.address, 'profile.example.test');
             assert.equal(result.serverConfig.host, 'header.example.test');
-            assert.equal(result.serverConfig.sni, 'tls.example.test');
+            assert.equal(result.serverConfig.sni, 'vpn.example.test');
             assert.equal(result.serverConfig.wsHost, 'header.example.test');
             if (stableUuid) assert.equal(result.serverConfig.uuid, stableUuid, 'the VLESS UUID for one licence must remain stable');
             stableUuid = result.serverConfig.uuid;

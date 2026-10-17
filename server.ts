@@ -345,6 +345,27 @@ function xrayStreamSettings(transport: XrayTransport, profilePath: string): Reco
 function isTlsWebTransport(transport: string): boolean {
   return ['ws', 'grpc', 'httpupgrade', 'xhttp'].includes(transport);
 }
+
+// This deployment's Caddyfile obtains an automatic certificate for VPN_DOMAIN only.
+// A different SNI is not made valid merely by entering it in a profile.
+function configuredTlsDomain(): string {
+  return (process.env.VPN_DOMAIN || '').trim().toLowerCase();
+}
+function tlsSniValidationError(transport: string, sniHost: unknown): string | null {
+  if (!isTlsWebTransport(transport)) return null;
+  const configured = configuredTlsDomain();
+  const supplied = typeof sniHost === 'string' ? sniHost.trim().toLowerCase() : '';
+  if (!configured || !isValidPublicHost(configured)) {
+    return 'Le domaine VPN_DOMAIN est absent ou invalide; le certificat TLS du serveur ne peut pas être vérifié.';
+  }
+  if (!isValidPublicHost(supplied)) {
+    return `Indiquez un SNI TLS valide. Pour ce déploiement, le certificat Caddy est émis pour « ${configured} ».`;
+  }
+  if (supplied !== configured) {
+    return `SNI TLS « ${supplied} » incompatible avec le certificat Caddy de ce déploiement. Utilisez exactement « ${configured} ». Le champ Host HTTP reste distinct et ne remplace pas le certificat.`;
+  }
+  return null;
+}
 function publicProtocolConfig(config: ProtocolConfig): ProtocolConfig {
   return {
     id: config.id, name: config.name, serverHost: config.serverHost, host: config.host || '',
@@ -407,7 +428,7 @@ function normalizeProtocolConfig(input: any, existing?: ProtocolConfig): Protoco
       (protocol === 'shadowsocks' && transport !== 'native') ||
       (transport === 'native' && protocol !== 'shadowsocks') ||
       (['raw', 'kcp'].includes(transport) && protocol !== 'vmess')) return null;
-  if (isTlsWebTransport(transport) && !isValidPublicHost(sniHost)) return null;
+  if (tlsSniValidationError(transport, sniHost)) return null;
   if (sniHost && !isValidPublicHost(sniHost)) return null;
   const now = new Date().toISOString();
   return {
@@ -1007,9 +1028,11 @@ async function startServer() {
       });
       return;
     }
-    if (!isValidPublicHost(profile.serverHost) ||
-        (isTlsWebTransport(profile.transport) && !isValidPublicHost(profile.sniHost))) {
-      res.status(409).json({ error: 'Cette configuration ne dispose pas d’une adresse de destination et d’un SNI TLS valides.' });
+    const profileSniError = tlsSniValidationError(profile.transport, profile.sniHost);
+    if (!isValidPublicHost(profile.serverHost) || profileSniError) {
+      res.status(409).json({
+        error: profileSniError || 'Cette configuration ne dispose pas d’une adresse de destination valide.'
+      });
       return;
     }
     const finalToken = String(token || 'ABESS-' + crypto.randomBytes(5).toString('hex').toUpperCase()).trim().toUpperCase();
@@ -1158,9 +1181,17 @@ async function startServer() {
       return;
     }
     const configs = loadProtocolConfigs();
+    const sniError = tlsSniValidationError(
+      String(req.body?.transport ?? 'ws').toLowerCase(),
+      req.body?.sniHost
+    );
+    if (sniError) {
+      res.status(400).json({ error: sniError });
+      return;
+    }
     const created = normalizeProtocolConfig(req.body);
     if (!created) {
-      res.status(400).json({ error: 'Configuration invalide : nom (2–80 caractères), destination, Host facultatif, protocole/transport compatibles et SNI valide pour TLS requis.' });
+      res.status(400).json({ error: 'Configuration invalide : nom (2–80 caractères), destination, Host facultatif et combinaison protocole/transport compatibles requis.' });
       return;
     }
     if (configs.some(config => config.name.toLowerCase() === created.name.toLowerCase())) {
@@ -1184,9 +1215,17 @@ async function startServer() {
       res.status(404).json({ error: 'Configuration introuvable.' });
       return;
     }
+    const sniError = tlsSniValidationError(
+      String(req.body?.transport ?? configs[index].transport).toLowerCase(),
+      req.body?.sniHost ?? configs[index].sniHost
+    );
+    if (sniError) {
+      res.status(400).json({ error: sniError });
+      return;
+    }
     const updated = normalizeProtocolConfig(req.body, configs[index]);
     if (!updated) {
-      res.status(400).json({ error: 'Configuration invalide : vérifiez le nom, la destination, le Host, le protocole, le transport et le SNI TLS.' });
+      res.status(400).json({ error: 'Configuration invalide : vérifiez le nom, la destination, le Host, le protocole et le transport.' });
       return;
     }
     if (configs.some((config, idx) => idx !== index && config.name.toLowerCase() === updated.name.toLowerCase())) {
@@ -1250,14 +1289,18 @@ async function startServer() {
     const requestedHost = typeof req.body?.serverHost === 'string' ? req.body.serverHost.trim() : current.serverHost;
     const requestedHeaderHost = typeof req.body?.host === 'string' ? req.body.host.trim() : current.host;
     const requestedSni = typeof req.body?.sniHost === 'string' ? req.body.sniHost.trim() : current.sniHost;
+    const sniError = tlsSniValidationError(String(requestedTransport), requestedSni);
+    const invalidNonTlsSni = !isTlsWebTransport(String(requestedTransport)) &&
+      requestedSni !== '' && !isValidPublicHost(requestedSni);
     if (
       !isValidPublicHost(requestedHost) ||
       (requestedHeaderHost !== '' && !isValidPublicHost(requestedHeaderHost)) ||
-      !isValidPublicHost(requestedSni)
+      sniError !== null ||
+      invalidNonTlsSni
     ) {
       res.status(400).json({
         success: false,
-        error: 'Renseignez une adresse de serveur et un SNI valides. Le Host HTTP est facultatif, mais s’il est renseigné il doit être un nom DNS ou une IPv4, sans protocole, port ni chemin. Le SNI doit correspondre à un certificat TLS servi par Caddy.'
+        error: sniError || 'Renseignez une adresse de serveur valide. Le Host HTTP est facultatif et reste distinct du SNI; si vous le renseignez, indiquez un nom DNS ou une IPv4 sans protocole, port ni chemin.'
       });
       return;
     }
@@ -1368,11 +1411,13 @@ async function startServer() {
 
     const now = Date.now();
     const profile = protocolConfigForToken(found, loadProtocolConfigs());
-    if (!profile || !isValidPublicHost(profile.serverHost) ||
-        (isTlsWebTransport(profile.transport) && !isValidPublicHost(profile.sniHost))) {
+    const profileSniError = profile
+      ? tlsSniValidationError(profile.transport, profile.sniHost)
+      : null;
+    if (!profile || !isValidPublicHost(profile.serverHost) || profileSniError) {
       res.status(503).json({
         valid: false,
-        error: 'La configuration VPN associée à cette licence est indisponible. Contactez le Super Administrateur.'
+        error: profileSniError || 'La configuration VPN associée à cette licence est indisponible. Contactez le Super Administrateur.'
       });
       return;
     }
