@@ -1044,7 +1044,7 @@ export default function App() {
           <section className="animate-fade-in rounded-2xl border border-emerald-900/80 bg-[#060c18] p-6 sm:p-8 font-mono text-xs space-y-4" role="status" aria-live="polite">
             <div className="flex items-center gap-3">
               {configLoading ? <RefreshCw className="h-5 w-5 animate-spin text-cyan-300" /> : <AlertTriangle className="h-5 w-5 text-amber-300" />}
-              <h2 className="text-base font-bold text-white">Configuration de l’infrastructure maître</h2>
+              <h2 className="text-base font-bold text-white">Infrastructure</h2>
             </div>
             {configLoading && !configLoadError && (
               <p className="text-slate-300">Chargement des paramètres depuis l’API…</p>
@@ -1053,7 +1053,6 @@ export default function App() {
               <div role="alert" className="rounded-xl border border-red-500/40 bg-red-950/30 p-4 text-red-200">
                 <p className="font-bold">La configuration ne s’est pas chargée.</p>
                 <p className="mt-2 break-words">{configLoadError}</p>
-                <p className="mt-2 text-slate-300">Le panneau reste visible afin que vous puissiez diagnostiquer le problème au lieu d’afficher une zone vide.</p>
               </div>
             )}
             <button type="button" onClick={() => { setConfigLoadError(null); setConfigLoading(true); void refreshData(); }} disabled={configLoading} className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 font-bold text-black disabled:cursor-not-allowed disabled:opacity-60">
@@ -1068,16 +1067,9 @@ export default function App() {
               <div className="pb-3 border-b border-emerald-950">
                 <div className="flex items-center gap-2">
                   <Database className="w-5 h-5 text-amber-400" />
-                  <h2 className="text-base font-bold text-white">
-                    Paramètres d'Infrastructure du Serveur Maître
-                  </h2>
+                  <h2 className="text-base font-bold text-white">Infrastructure</h2>
                 </div>
-                <div className="mt-2 p-3 bg-amber-950/30 border border-amber-500/40 rounded-xl text-amber-300 text-[11px] flex items-center gap-2">
-                  <Lock className="w-4 h-4 text-amber-400 shrink-0" />
-                  <span>
-                    <strong>Confidentialité stricte :</strong> Ces informations (Hôte, SNI, IP, UUID, Passphrase) sont gérées exclusivement par le Super Administrateur. Aucun revendeur n'y a accès.
-                  </span>
-                </div>
+
               </div>
 
               {configSuccess && (
@@ -1093,23 +1085,21 @@ export default function App() {
               )}
 
               <form onSubmit={handleSaveConfig} className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="md:col-span-2 rounded-xl border border-slate-700 bg-slate-900/60 p-3 text-sm leading-relaxed text-slate-300">
-                  Trois valeurs distinctes : l’adresse du serveur est la destination réseau (domaine/IP), Host HTTP est l’en-tête envoyé par le client, et SNI est le nom présenté pendant la négociation TLS. Le Host HTTP peut être différent de l’adresse. Pour les transports TLS, choisis un SNI couvert par un certificat servi par Caddy (par défaut VPN_DOMAIN). Le Host HTTP est ignoré pour les transports directs TCP/UDP.
-                </div>
+                
                 <div>
-                  <label className="block text-slate-300 font-semibold mb-1">Adresse du serveur (domaine/IP de destination)</label>
+                  <label className="block text-slate-300 font-semibold mb-1">Adresse</label>
                   <input
                     type="text"
                     value={masterConfig.serverHost}
                     onChange={(e) => setMasterConfig({ ...masterConfig, serverHost: e.target.value })}
                     className="w-full bg-[#03060e] border border-emerald-900 rounded-lg px-3 py-2 text-emerald-300 font-bold"
-                    placeholder="vpn.ton-domaine.com"
+                    placeholder="Domaine ou IP"
                     required
                   />
                 </div>
 
                 <div>
-                  <label className="block text-slate-300 font-semibold mb-1">Port d'Écoute</label>
+                  <label className="block text-slate-300 font-semibold mb-1">Port</label>
                   <input
                     type="number"
                     value={masterConfig.serverPort}
@@ -1122,7 +1112,7 @@ export default function App() {
 
                 {/* Generated Xray profiles with TLS on TCP 443; native Shadowsocks TCP/UDP uses port 10050. */}
                 <div>
-                  <label className="block text-slate-300 font-semibold mb-1">Protocole Xray</label>
+                  <label className="block text-slate-300 font-semibold mb-1">Protocole</label>
                   <select value={masterConfig.protocol} onChange={(e) => { const protocol = e.target.value; const transport = protocol === "shadowsocks" ? "native" : (masterConfig.transport === "native" || (protocol !== "vmess" && ["raw", "kcp"].includes(masterConfig.transport))) ? "ws" : masterConfig.transport; const serverPort = transport === "native" ? 10050 : transport === "raw" ? 10060 : transport === "kcp" ? 10061 : 443; setMasterConfig({ ...masterConfig, protocol, transport, serverPort }); }} className="w-full bg-[#03060e] border border-emerald-900 rounded-lg px-3 py-2 text-emerald-200">
                     <option value="vless">VLESS</option><option value="vmess">VMess</option><option value="trojan">Trojan</option><option value="shadowsocks">Shadowsocks AEAD</option>
                   </select>
@@ -1136,28 +1126,20 @@ export default function App() {
                     <option value="native" disabled={masterConfig.protocol !== "shadowsocks"}>TCP + UDP natifs (Shadowsocks)</option>
                   </select>
                 </div>
-                <div className="md:col-span-2 rounded-xl border border-cyan-700/70 bg-cyan-950/20 p-4">
-                  <div className="mb-2 text-xs font-black uppercase tracking-wider text-cyan-300">Paramètre indépendant — Host HTTP</div>
-                  <label className="block text-slate-100 font-semibold mb-1">Host HTTP / WebSocket (en-tête Host ou :authority)</label>
+                <div className="md:col-span-2">
+                  <label className="block text-slate-300 font-semibold mb-1">Host HTTP</label>
                   <input
                     type="text"
                     value={masterConfig.host}
                     onChange={(e) => setMasterConfig({ ...masterConfig, host: e.target.value })}
                     className="w-full bg-[#03060e] border border-cyan-800 rounded-lg px-3 py-3 text-cyan-200"
-                    placeholder="ex. host.exemple.com — indépendant de l’IP du serveur"
+                    placeholder="Host HTTP"
                     autoComplete="off"
-                    aria-describedby="master-http-host-help"
                   />
-                  <p id="master-http-host-help" className="mt-2 text-sm text-slate-300">Ce champ est distinct de l’adresse IP/domaine de destination et du SNI TLS. Il définit uniquement l’en-tête Host pour WebSocket, gRPC, HTTPUpgrade et XHTTP. Facultatif : s’il reste vide, l’adresse du serveur est utilisée.</p>
                 </div>
-                <div className="md:col-span-2 rounded-lg border border-slate-700 bg-slate-900/50 p-3 text-slate-400">
-                  Les profils WS/gRPC/HTTPUpgrade/XHTTP passent par HTTPS sur TCP 443. VMess RAW utilise TCP 10060 et VMess mKCP utilise UDP 10061. Shadowsocks natif utilise TCP + UDP sur 10050. Ouvre les ports 10050/TCP+UDP, 10060/TCP et 10061/UDP dans le pare-feu. RAW/mKCP sont réservés à VMess pour ne pas exposer VLESS sans TLS ni Trojan sans couche TLS.
-                </div>
-                <div className="md:col-span-2 rounded-lg border border-sky-900 bg-sky-950/20 p-3 text-sky-200">
-                  Adresse, Host HTTP et SNI sont indépendants. Le reverse proxy HTTPS accepte un Host différent; le SNI TLS doit néanmoins correspondre à un certificat valide chargé par Caddy. Les transports directs TCP/UDP utilisent leurs ports dédiés et ne transmettent ni Host HTTP ni SNI TLS.
-                </div>
+                
                 <div className="md:col-span-2">
-                  <label className="block text-slate-300 font-semibold mb-1">Chemin WebSocket (VLESS + WS)</label>
+                  <label className="block text-slate-300 font-semibold mb-1">Chemin</label>
                   <input
                     type="text"
                     value={masterConfig.path}
@@ -1167,53 +1149,36 @@ export default function App() {
                   />
                 </div>
 
-                <div className="md:col-span-2 rounded-xl border border-amber-700/60 bg-amber-950/15 p-4">
-                  <div className="mb-2 text-xs font-black uppercase tracking-wider text-amber-300">Paramètre TLS indépendant — SNI</div>
-                  <label className="block text-slate-100 font-semibold mb-1">SNI TLS (nom présenté pendant la négociation TLS)</label>
+                <div className="md:col-span-2">
+                  <label className="block text-slate-300 font-semibold mb-1">SNI TLS</label>
                   <input
                     type="text"
                     value={masterConfig.sniHost}
                     onChange={(e) => setMasterConfig({ ...masterConfig, sniHost: e.target.value })}
                     className="w-full bg-[#03060e] border border-amber-800 rounded-lg px-3 py-3 text-amber-300"
-                    placeholder="vpn.ton-domaine.com"
+                    placeholder="SNI"
                     required
-                    aria-describedby="master-sni-help"
                   />
-                  <p id="master-sni-help" className="mt-2 text-sm text-slate-300">Le SNI ne remplace pas l’adresse du serveur ni le Host HTTP. Pour cette configuration TLS via Caddy, utilise un nom correspondant à un certificat chargé par Caddy.</p>
                 </div>
 
 
 
-                <div className="md:col-span-2 rounded-xl border border-emerald-700/70 bg-emerald-950/20 p-4">
-                  <div className="mb-2 text-xs font-black uppercase tracking-wider text-emerald-300">Sécurité du transport — TLS</div>
+                <div className="md:col-span-2 rounded-xl border border-emerald-700/70 bg-emerald-950/20 p-3">
+                  <label className="block text-slate-300 font-semibold mb-2">TLS</label>
                   {["ws", "grpc", "httpupgrade", "xhttp"].includes(masterConfig.transport) ? (
-                    <>
-                      <div className="flex items-center gap-2 text-emerald-300 font-bold">
-                        <span className="inline-block w-2 h-2 rounded-full bg-emerald-400" />
-                        TLS activé · HTTPS sur TCP 443
-                      </div>
-                      <p className="mt-2 text-sm text-slate-300">
-                        Les profils VLESS/WS/TLS, gRPC/TLS, HTTPUpgrade/TLS et XHTTP/TLS utilisent le certificat HTTPS géré et renouvelé automatiquement par Caddy. Xray reçoit le trafic après terminaison TLS côté serveur.
-                      </p>
-                    </>
+                    <div className="flex items-center gap-2 text-emerald-300 font-bold">
+                      <span className="inline-block w-2 h-2 rounded-full bg-emerald-400" />
+                      Activé
+                    </div>
                   ) : (
-                    <>
-                      <div className="flex items-center gap-2 text-amber-300 font-bold">
-                        <span className="inline-block w-2 h-2 rounded-full bg-amber-400" />
-                        TLS non utilisé pour ce transport direct
-                      </div>
-                      <p className="mt-2 text-sm text-slate-300">
-                        {masterConfig.transport === "native"
-                          ? "Shadowsocks natif transporte TCP et UDP sur son port dédié."
-                          : masterConfig.transport === "kcp"
-                            ? "VMess mKCP transporte les paquets sur UDP ; la sécurité dépend du protocole VMess."
-                            : "VMess RAW/TCP utilise son port dédié et ne passe pas par le proxy HTTPS Caddy."}
-                      </p>
-                    </>
+                    <div className="flex items-center gap-2 text-amber-300 font-bold">
+                      <span className="inline-block w-2 h-2 rounded-full bg-amber-400" />
+                      Désactivé
+                    </div>
                   )}
                 </div>
                 <div className="md:col-span-2">
-                  <label className="block text-slate-300 font-semibold mb-1">UUID Principal Xray / VLESS</label>
+                  <label className="block text-slate-300 font-semibold mb-1">UUID</label>
                   <input
                     type="text"
                     value={masterConfig.uuid}
@@ -1224,7 +1189,7 @@ export default function App() {
                 </div>
 
                 <div className="md:col-span-2">
-                  <label className="block text-slate-300 font-semibold mb-1">Passphrase Secrète AES-256 (Chiffrement abess://)</label>
+                  <label className="block text-slate-300 font-semibold mb-1">Clé maître</label>
                   <input
                     type="text"
                     value={masterConfig.secretPassphrase}
@@ -1241,7 +1206,7 @@ export default function App() {
                     className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-black font-black rounded-xl text-xs flex items-center gap-2 shadow transition"
                   >
                     <Check className="w-4 h-4" />
-                    <span>{configSaving ? 'Sauvegarde...' : 'Sauvegarder la Configuration Maître'}</span>
+                    <span>{configSaving ? 'Sauvegarde...' : 'Enregistrer'}</span>
                   </button>
                 </div>
               </form>
