@@ -1056,6 +1056,40 @@ async function startServer() {
     res.status(201).json(safeClientToken(newToken));
   });
 
+  // Suspend/reactivate a licence without deleting its audit history.
+  app.put('/api/v1/admin/tokens/:id/status', authenticate, (req, res) => {
+    const user: AppUser = (req as any).user;
+    const requestedStatus = req.body?.status;
+    if (requestedStatus !== 'active' && requestedStatus !== 'revoked') {
+      res.status(400).json({ error: 'Le statut doit être active ou revoked.' });
+      return;
+    }
+    const tokens = loadTokens();
+    const target = tokens.find(item => item.id === req.params.id);
+    if (!target) {
+      res.status(404).json({ error: 'Token introuvable.' });
+      return;
+    }
+    if (user.role !== 'SUPER_ADMIN' && target.resellerId !== user.id) {
+      res.status(403).json({ error: 'Vous ne pouvez modifier que vos propres licences.' });
+      return;
+    }
+    if (requestedStatus === 'active') {
+      const expiry = new Date(target.expiresAt).getTime();
+      if (!Number.isFinite(expiry) || expiry <= Date.now()) {
+        res.status(409).json({ error: 'Cette licence est expirée et ne peut pas être réactivée.' });
+        return;
+      }
+      if (Number(target.bandwidthUsedGb) >= Number(target.bandwidthGb)) {
+        res.status(409).json({ error: 'Le quota de cette licence est épuisé et ne peut pas être réactivé.' });
+        return;
+      }
+    }
+    target.status = requestedStatus;
+    saveTokens(tokens);
+    res.json({ success: true, token: safeClientToken(target) });
+  });
+
   // Revoke / Delete Token
   app.delete('/api/v1/admin/tokens/:id', authenticate, (req, res) => {
     const user: AppUser = (req as any).user;
