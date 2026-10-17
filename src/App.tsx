@@ -1126,177 +1126,137 @@ export default function App() {
         {/* ========================================================================= */}
         {/* TAB 4: MASTER INFRASTRUCTURE CONFIG (SUPER ADMIN ONLY - STRICTLY CONFIDENTIAL) */}
         {/* ========================================================================= */}
-        {activeTab === 'infrastructure' && currentUser.role === 'SUPER_ADMIN' && !masterConfig && (
-          <section className="animate-fade-in rounded-2xl border border-emerald-900/80 bg-[#060c18] p-6 sm:p-8 font-mono text-xs space-y-4" role="status" aria-live="polite">
-            <div className="flex items-center gap-3">
-              {configLoading ? <RefreshCw className="h-5 w-5 animate-spin text-cyan-300" /> : <AlertTriangle className="h-5 w-5 text-amber-300" />}
-              <h2 className="text-base font-bold text-white">Infrastructure</h2>
-            </div>
-            {configLoading && !configLoadError && (
-              <p className="text-slate-300">Chargement des paramètres depuis l’API…</p>
-            )}
-            {configLoadError && (
-              <div role="alert" className="rounded-xl border border-red-500/40 bg-red-950/30 p-4 text-red-200">
-                <p className="font-bold">La configuration ne s’est pas chargée.</p>
-                <p className="mt-2 break-words">{configLoadError}</p>
-              </div>
-            )}
-            <button type="button" onClick={() => { setConfigLoadError(null); setConfigLoading(true); void refreshData(); }} disabled={configLoading} className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 font-bold text-black disabled:cursor-not-allowed disabled:opacity-60">
-              <RefreshCw className={`h-4 w-4 ${configLoading ? 'animate-spin' : ''}`} />
-              {configLoading ? 'Chargement…' : 'Réessayer le chargement'}
-            </button>
-          </section>
-        )}
-        {activeTab === 'infrastructure' && currentUser.role === 'SUPER_ADMIN' && masterConfig && (
+        {activeTab === 'infrastructure' && currentUser.role === 'SUPER_ADMIN' && (
           <div className="space-y-6 animate-fade-in font-mono text-xs">
-            <div className="p-6 rounded-2xl bg-[#060c18] border border-emerald-900/80 shadow-xl space-y-5">
-              <div className="pb-3 border-b border-emerald-950">
-                <div className="flex items-center gap-2">
-                  <Database className="w-5 h-5 text-amber-400" />
-                  <h2 className="text-base font-bold text-white">Infrastructure</h2>
+            <section className="rounded-2xl border border-emerald-900/80 bg-[#060c18] p-5 sm:p-6 shadow-xl space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-emerald-950 pb-3">
+                <div>
+                  <h2 className="text-base font-bold text-white flex items-center gap-2"><Database className="w-5 h-5 text-amber-400" />Configurations de protocoles</h2>
+                  <p className="text-slate-400 mt-1">Crée plusieurs profils, puis choisis le profil à associer à chaque token. Cette section et les paramètres Host/SNI sont réservés à l’administrateur principal.</p>
                 </div>
-
+                <button type="button" onClick={handleNewProtocolConfig} className="shrink-0 rounded-xl bg-emerald-600 px-4 py-2.5 text-black font-black flex items-center gap-2 hover:bg-emerald-500">
+                  <Plus className="w-4 h-4" /> Nouvelle configuration
+                </button>
               </div>
 
-              {configSuccess && (
-                <div className="p-3 bg-emerald-950/40 border border-emerald-500/50 rounded-xl text-emerald-300 flex items-center gap-2">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                  <span>Configuration du serveur maître mise à jour avec succès.</span>
+              {configLoading && <p className="text-cyan-300 flex items-center gap-2"><RefreshCw className="w-4 h-4 animate-spin" />Chargement des configurations…</p>}
+              {configLoadError && (
+                <div role="alert" className="rounded-xl border border-red-500/40 bg-red-950/30 p-4 text-red-200 space-y-3">
+                  <p className="font-bold">Impossible de charger les configurations.</p>
+                  <p className="break-words">{configLoadError}</p>
+                  <button type="button" onClick={() => void loadProtocolConfigData()} className="rounded-lg bg-red-900/60 px-3 py-2 font-bold">Réessayer</button>
                 </div>
               )}
-              {configError && (
-                <div role="alert" className="p-3 bg-red-950/40 border border-red-500/50 rounded-xl text-red-300">
-                  {configError}
-                </div>
-              )}
+              {configSuccess && <div role="status" className="rounded-xl border border-emerald-500/40 bg-emerald-950/30 p-3 text-emerald-300 flex items-center gap-2"><CheckCircle2 className="w-4 h-4" />Configuration enregistrée.</div>}
+              {configError && <div role="alert" className="rounded-xl border border-red-500/40 bg-red-950/30 p-3 text-red-200">{configError}</div>}
 
-              <form onSubmit={handleSaveConfig} className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                
-                <div>
-                  <label className="block text-slate-300 font-semibold mb-1">Adresse</label>
-                  <input
-                    type="text"
-                    value={masterConfig.serverHost}
-                    onChange={(e) => setMasterConfig({ ...masterConfig, serverHost: e.target.value })}
-                    className="w-full bg-[#03060e] border border-emerald-900 rounded-lg px-3 py-2 text-emerald-300 font-bold"
-                    placeholder="Domaine ou IP"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-slate-300 font-semibold mb-1">Port</label>
-                  <input
-                    type="number"
-                    value={masterConfig.serverPort}
-                    onChange={(e) => setMasterConfig({ ...masterConfig, serverPort: Number(e.target.value) })}
-                    className="w-full bg-[#03060e] border border-emerald-900 rounded-lg px-3 py-2 text-slate-200 cursor-not-allowed"
-                    readOnly
-                    required
-                  />
-                </div>
-
-                {/* Generated Xray profiles with TLS on TCP 443; native Shadowsocks TCP/UDP uses port 10050. */}
-                <div>
-                  <label className="block text-slate-300 font-semibold mb-1">Protocole</label>
-                  <select value={masterConfig.protocol} onChange={(e) => { const protocol = e.target.value; const transport = protocol === "shadowsocks" ? "native" : (masterConfig.transport === "native" || (protocol !== "vmess" && ["raw", "kcp"].includes(masterConfig.transport))) ? "ws" : masterConfig.transport; const serverPort = transport === "native" ? 10050 : transport === "raw" ? 10060 : transport === "kcp" ? 10061 : 443; setMasterConfig({ ...masterConfig, protocol, transport, serverPort }); }} className="w-full bg-[#03060e] border border-emerald-900 rounded-lg px-3 py-2 text-emerald-200">
-                    <option value="vless">VLESS</option><option value="vmess">VMess</option><option value="trojan">Trojan</option><option value="shadowsocks">Shadowsocks AEAD</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-slate-300 font-semibold mb-1">Transport</label>
-                  <select value={masterConfig.transport} onChange={(e) => { const transport = e.target.value; const serverPort = transport === "native" ? 10050 : transport === "raw" ? 10060 : transport === "kcp" ? 10061 : 443; setMasterConfig({ ...masterConfig, transport, serverPort }); }} className="w-full bg-[#03060e] border border-emerald-900 rounded-lg px-3 py-2 text-emerald-200">
-                    <option value="ws" disabled={masterConfig.protocol === "shadowsocks"}>WebSocket (WS)</option><option value="grpc" disabled={masterConfig.protocol === "shadowsocks"}>gRPC</option><option value="httpupgrade" disabled={masterConfig.protocol === "shadowsocks"}>HTTPUpgrade</option><option value="xhttp" disabled={masterConfig.protocol === "shadowsocks"}>XHTTP</option>
-                    <option value="raw" disabled={masterConfig.protocol !== "vmess"}>RAW / TCP direct (VMess)</option>
-                    <option value="kcp" disabled={masterConfig.protocol !== "vmess"}>mKCP / UDP (VMess)</option>
-                    <option value="native" disabled={masterConfig.protocol !== "shadowsocks"}>TCP + UDP natifs (Shadowsocks)</option>
-                  </select>
-                </div>
-                <div className="md:col-span-2">
-                  <label className="block text-slate-300 font-semibold mb-1">Host HTTP</label>
-                  <input
-                    type="text"
-                    value={masterConfig.host}
-                    onChange={(e) => setMasterConfig({ ...masterConfig, host: e.target.value })}
-                    className="w-full bg-[#03060e] border border-cyan-800 rounded-lg px-3 py-3 text-cyan-200"
-                    placeholder="Host HTTP"
-                    autoComplete="off"
-                  />
-                </div>
-                
-                <div className="md:col-span-2">
-                  <label className="block text-slate-300 font-semibold mb-1">Chemin</label>
-                  <input
-                    type="text"
-                    value={masterConfig.path}
-                    readOnly
-                    className="w-full bg-[#03060e] border border-emerald-900 rounded-lg px-3 py-2 text-slate-200"
-                    required
-                  />
-                </div>
-
-                <div className="md:col-span-2">
-                  <label className="block text-slate-300 font-semibold mb-1">SNI TLS</label>
-                  <input
-                    type="text"
-                    value={masterConfig.sniHost}
-                    onChange={(e) => setMasterConfig({ ...masterConfig, sniHost: e.target.value })}
-                    className="w-full bg-[#03060e] border border-amber-800 rounded-lg px-3 py-3 text-amber-300"
-                    placeholder="SNI"
-                    required
-                  />
-                </div>
-
-
-
-                <div className="md:col-span-2 rounded-xl border border-emerald-700/70 bg-emerald-950/20 p-3">
-                  <label className="block text-slate-300 font-semibold mb-2">TLS</label>
-                  {["ws", "grpc", "httpupgrade", "xhttp"].includes(masterConfig.transport) ? (
-                    <div className="flex items-center gap-2 text-emerald-300 font-bold">
-                      <span className="inline-block w-2 h-2 rounded-full bg-emerald-400" />
-                      Activé
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                {protocolConfigs.map((config) => (
+                  <div key={config.id || config.name} className={`rounded-xl border p-4 space-y-3 ${editingConfigId === config.id ? 'border-emerald-500/70 bg-emerald-950/20' : 'border-slate-800 bg-[#03060e]'}`}>
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-white font-bold break-words">{config.name}</p>
+                        <p className="mt-1 text-emerald-300 uppercase">{config.protocol} · {config.transport}</p>
+                      </div>
+                      <span className="shrink-0 rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-slate-300">{config.serverPort}</span>
                     </div>
-                  ) : (
-                    <div className="flex items-center gap-2 text-amber-300 font-bold">
-                      <span className="inline-block w-2 h-2 rounded-full bg-amber-400" />
-                      Désactivé
+                    <div className="text-slate-400 space-y-1 break-all">
+                      <p>Destination : <span className="text-slate-200">{config.serverHost}</span></p>
+                      <p>Host HTTP : <span className="text-cyan-200">{config.host || 'identique à la destination'}</span></p>
+                      <p>SNI : <span className="text-amber-200">{config.sniHost || 'non utilisé'}</span></p>
                     </div>
-                  )}
-                </div>
-                <div className="md:col-span-2">
-                  <label className="block text-slate-300 font-semibold mb-1">UUID</label>
-                  <input
-                    type="text"
-                    value={masterConfig.uuid}
-                    onChange={(e) => setMasterConfig({ ...masterConfig, uuid: e.target.value })}
-                    className="w-full bg-[#03060e] border border-emerald-900 rounded-lg px-3 py-2 text-indigo-300 font-mono"
-                    required
-                  />
+                    <div className="flex gap-2">
+                      <button type="button" onClick={() => handleSelectProtocolConfig(config)} className="flex-1 rounded-lg border border-emerald-800 bg-emerald-950/40 py-2 font-bold text-emerald-300 hover:bg-emerald-900/40">Modifier</button>
+                      <button type="button" onClick={() => void handleDeleteProtocolConfig(config)} className="rounded-lg border border-red-900/70 px-3 py-2 text-red-300 hover:bg-red-950/50" title="Supprimer"><Trash2 className="w-4 h-4" /></button>
+                    </div>
+                  </div>
+                ))}
+                {protocolConfigs.length === 0 && !configLoading && (
+                  <div className="md:col-span-2 xl:col-span-3 rounded-xl border border-dashed border-slate-700 p-6 text-center text-slate-400">
+                    Aucune configuration enregistrée. Clique sur « Nouvelle configuration » pour créer ton premier profil.
+                  </div>
+                )}
+              </div>
+            </section>
+
+            {masterConfig && (
+              <section className="rounded-2xl border border-emerald-900/80 bg-[#060c18] p-5 sm:p-6 shadow-xl space-y-5">
+                <div className="border-b border-emerald-950 pb-3">
+                  <h3 className="text-sm font-black text-white">{editingConfigId ? 'Modifier le profil sélectionné' : 'Créer une configuration'}</h3>
+                  <p className="mt-1 text-slate-400">L’adresse de destination, le Host HTTP et le SNI TLS sont trois champs distincts.</p>
                 </div>
 
-                <div className="md:col-span-2">
-                  <label className="block text-slate-300 font-semibold mb-1">Clé maître</label>
-                  <input
-                    type="text"
-                    value={masterConfig.secretPassphrase}
-                    onChange={(e) => setMasterConfig({ ...masterConfig, secretPassphrase: e.target.value })}
-                    className="w-full bg-[#03060e] border border-emerald-900 rounded-lg px-3 py-2 text-purple-300 font-mono"
-                    required
-                  />
-                </div>
-
-                <div className="md:col-span-2 flex justify-end">
-                  <button
-                    type="submit"
-                    disabled={configSaving}
-                    className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-black font-black rounded-xl text-xs flex items-center gap-2 shadow transition"
-                  >
-                    <Check className="w-4 h-4" />
-                    <span>{configSaving ? 'Sauvegarde...' : 'Enregistrer'}</span>
-                  </button>
-                </div>
-              </form>
-            </div>
+                <form onSubmit={handleSaveConfig} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="md:col-span-2">
+                    <label className="block text-slate-300 font-semibold mb-1">Nom de la configuration</label>
+                    <input type="text" value={masterConfig.name} onChange={(e) => setMasterConfig({ ...masterConfig, name: e.target.value })} className="w-full bg-[#03060e] border border-emerald-900 rounded-lg px-3 py-3 text-white" placeholder="Ex. VLESS Premium WS TLS" minLength={2} maxLength={80} required />
+                  </div>
+                  <div>
+                    <label className="block text-slate-300 font-semibold mb-1">Adresse de destination — domaine ou IP</label>
+                    <input type="text" value={masterConfig.serverHost} onChange={(e) => setMasterConfig({ ...masterConfig, serverHost: e.target.value })} className="w-full bg-[#03060e] border border-emerald-900 rounded-lg px-3 py-3 text-emerald-300 font-bold" placeholder="IP publique ou domaine pointant vers ton entrée VPN" required />
+                    <p className="mt-1 text-slate-500">C’est l’adresse à laquelle le client se connecte, pas le Host HTTP ni le SNI.</p>
+                  </div>
+                  <div>
+                    <label className="block text-slate-300 font-semibold mb-1">Port du service</label>
+                    <input type="number" value={masterConfig.serverPort} readOnly className="w-full bg-[#03060e] border border-slate-800 rounded-lg px-3 py-3 text-slate-300" />
+                    <p className="mt-1 text-slate-500">Calculé selon le transport : HTTPS, TCP direct ou UDP natif.</p>
+                  </div>
+                  <div>
+                    <label className="block text-slate-300 font-semibold mb-1">Protocole</label>
+                    <select value={masterConfig.protocol} onChange={(e) => {
+                      const protocol = e.target.value;
+                      const transport = protocol === 'shadowsocks' ? 'native' : (masterConfig.transport === 'native' || (protocol !== 'vmess' && ['raw', 'kcp'].includes(masterConfig.transport))) ? 'ws' : masterConfig.transport;
+                      const serverPort = transport === 'native' ? 10050 : transport === 'raw' ? 10060 : transport === 'kcp' ? 10061 : 443;
+                      setMasterConfig({ ...masterConfig, protocol, transport, serverPort, sniHost: ['native','raw','kcp'].includes(transport) ? '' : masterConfig.sniHost });
+                    }} className="w-full bg-[#03060e] border border-emerald-900 rounded-lg px-3 py-3 text-emerald-200">
+                      <option value="vless">VLESS</option><option value="vmess">VMess</option><option value="trojan">Trojan</option><option value="shadowsocks">Shadowsocks AEAD</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-slate-300 font-semibold mb-1">Transport</label>
+                    <select value={masterConfig.transport} onChange={(e) => {
+                      const transport = e.target.value;
+                      const serverPort = transport === 'native' ? 10050 : transport === 'raw' ? 10060 : transport === 'kcp' ? 10061 : 443;
+                      setMasterConfig({ ...masterConfig, transport, serverPort, sniHost: ['native','raw','kcp'].includes(transport) ? '' : masterConfig.sniHost });
+                    }} className="w-full bg-[#03060e] border border-emerald-900 rounded-lg px-3 py-3 text-emerald-200">
+                      <option value="ws" disabled={masterConfig.protocol === 'shadowsocks'}>WebSocket (WS)</option>
+                      <option value="grpc" disabled={masterConfig.protocol === 'shadowsocks'}>gRPC</option>
+                      <option value="httpupgrade" disabled={masterConfig.protocol === 'shadowsocks'}>HTTPUpgrade</option>
+                      <option value="xhttp" disabled={masterConfig.protocol === 'shadowsocks'}>XHTTP</option>
+                      <option value="raw" disabled={masterConfig.protocol !== 'vmess'}>RAW / TCP direct (VMess)</option>
+                      <option value="kcp" disabled={masterConfig.protocol !== 'vmess'}>mKCP / UDP (VMess)</option>
+                      <option value="native" disabled={masterConfig.protocol !== 'shadowsocks'}>TCP + UDP natifs (Shadowsocks)</option>
+                    </select>
+                  </div>
+                  <div className="md:col-span-2 rounded-xl border border-cyan-900/80 bg-cyan-950/20 p-3">
+                    <label className="block text-cyan-200 font-semibold mb-1">Host HTTP / WebSocket / :authority (facultatif)</label>
+                    <input type="text" value={masterConfig.host} onChange={(e) => setMasterConfig({ ...masterConfig, host: e.target.value })} className="w-full bg-[#03060e] border border-cyan-800 rounded-lg px-3 py-3 text-cyan-100" placeholder="Host distinct, sans http:// ni chemin" autoComplete="off" />
+                    <p className="mt-1 text-slate-400">Cet en-tête est séparé de l’adresse de destination et du SNI. Laisse vide pour utiliser l’adresse de destination.</p>
+                  </div>
+                  <div className="md:col-span-2 rounded-xl border border-amber-900/80 bg-amber-950/15 p-3">
+                    <label className="block text-amber-200 font-semibold mb-1">SNI TLS — nom présenté au serveur TLS</label>
+                    <input type="text" value={masterConfig.sniHost} onChange={(e) => setMasterConfig({ ...masterConfig, sniHost: e.target.value })} className="w-full bg-[#03060e] border border-amber-800 rounded-lg px-3 py-3 text-amber-100 disabled:opacity-50" placeholder={['native','raw','kcp'].includes(masterConfig.transport) ? 'Non utilisé pour ce transport' : 'Nom couvert par le certificat présenté'} disabled={['native','raw','kcp'].includes(masterConfig.transport)} required={!['native','raw','kcp'].includes(masterConfig.transport)} />
+                    <p className="mt-1 text-slate-400">Pour TLS, le serveur atteint par le client doit présenter un certificat compatible avec ce SNI. Une simple valeur saisie ici ne crée pas un certificat ni un DNS.</p>
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="block text-slate-300 font-semibold mb-1">Chemin de transport</label>
+                    <input type="text" value={masterConfig.path || '/@abess237'} readOnly className="w-full bg-[#03060e] border border-slate-800 rounded-lg px-3 py-2 text-slate-300" />
+                    <p className="mt-1 text-slate-500">Le chemin technique est généré par Xray selon le protocole et le transport.</p>
+                  </div>
+                  <div className="md:col-span-2 rounded-xl border border-slate-800 bg-black/20 p-3 text-slate-400">
+                    <span className={['native','raw','kcp'].includes(masterConfig.transport) ? 'text-amber-300' : 'text-emerald-300'}>{['native','raw','kcp'].includes(masterConfig.transport) ? 'Transport direct sans TLS sur ce socket' : 'TLS sur le point d’entrée HTTPS'}</span>
+                    <p className="mt-1">Les modifications du profil n’altèrent pas les paramètres déjà copiés dans les licences existantes : chaque token garde son instantané de configuration.</p>
+                  </div>
+                  <div className="md:col-span-2 flex flex-wrap justify-end gap-2 pt-2">
+                    <button type="button" onClick={handleNewProtocolConfig} className="rounded-xl border border-slate-700 px-4 py-2.5 text-slate-300 hover:bg-slate-900">Annuler / Nouveau</button>
+                    <button type="submit" disabled={configSaving} className="rounded-xl bg-emerald-600 px-6 py-2.5 font-black text-black flex items-center gap-2 disabled:opacity-60">
+                      {configSaving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                      {configSaving ? 'Sauvegarde…' : editingConfigId ? 'Enregistrer les modifications' : 'Créer la configuration'}
+                    </button>
+                  </div>
+                </form>
+              </section>
+            )}
           </div>
         )}
 
