@@ -68,6 +68,7 @@ interface ClientToken {
   expiresAt: string;
   days: number;
   deviceLimit: number;
+  allowedDeviceId?: string;
   connectionCount: number;
   lastSeenAt: string | null;
   lastSeenIp: string | null;
@@ -155,6 +156,7 @@ export default function App() {
     new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString().slice(0, 16)
   );
   const [newTokenDeviceLimit, setNewTokenDeviceLimit] = useState<number>(2);
+  const [newTokenAllowedDeviceId, setNewTokenAllowedDeviceId] = useState<string>('');
   const [newTokenConfigurationId, setNewTokenConfigurationId] = useState<string>('');
   const [tokenCreating, setTokenCreating] = useState<boolean>(false);
   const [tokenCreationError, setTokenCreationError] = useState<string | null>(null);
@@ -422,6 +424,7 @@ export default function App() {
           bandwidthGb: Number(newTokenBandwidth),
           expiresAt: new Date(newTokenExpiryDate).toISOString(),
           deviceLimit: Number(newTokenDeviceLimit),
+          allowedDeviceId: newTokenAllowedDeviceId.trim() || undefined,
           configurationId: newTokenConfigurationId
         })
       });
@@ -430,8 +433,9 @@ export default function App() {
       if (res.ok) {
         setTokenModalOpen(false);
         setNewTokenCode('');
+        setNewTokenAllowedDeviceId('');
         refreshData();
-        addLog(`[CLIENT TOKEN CREATE] Token client ${data.token} créé (${data.bandwidthGb} Go, profil ${data.configurationName || newTokenConfigurationId}).`);
+        addLog(`[CLIENT TOKEN CREATE] Token client ${data.token} créé (${data.bandwidthGb} Go, profil ${data.configurationName || newTokenConfigurationId}${data.allowedDeviceId ? ', ID lié' : ''}).`);
       } else {
         setTokenCreationError(data.error || 'Erreur lors de la création du token');
       }
@@ -1096,7 +1100,10 @@ export default function App() {
                           </div>
                         </td>
                         <td className="py-3 px-3 text-slate-300">{token.plan}</td>
-                        <td className="py-3 px-3"><span className="text-cyan-200 font-semibold">{token.configurationName || 'Configuration historique'}</span></td>
+                        <td className="py-3 px-3">
+                          <span className="text-cyan-200 font-semibold">{token.configurationName || 'Configuration historique'}</span>
+                          {token.allowedDeviceId && <div className="mt-1 text-[10px] text-amber-300 break-all">ID lié : {token.allowedDeviceId}</div>}
+                        </td>
                         {currentUser.role === 'SUPER_ADMIN' && (
                           <td className="py-3 px-3 text-cyan-400">{token.resellerName}</td>
                         )}
@@ -1587,6 +1594,23 @@ export default function App() {
                     max="10"
                   />
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-slate-300 mb-1 font-bold">ID d’installation ABESS autorisée (facultatif)</label>
+                <input
+                  type="text"
+                  value={newTokenAllowedDeviceId}
+                  onChange={(e) => setNewTokenAllowedDeviceId(e.target.value.trim())}
+                  className="w-full bg-[#03060e] border border-cyan-900 rounded-xl px-3 py-2 text-cyan-200 font-mono"
+                  placeholder="Ex. HWID-PHONE-CYBER-123456"
+                  maxLength={128}
+                  pattern="[A-Za-z0-9._:-]{8,128}"
+                  title="8 à 128 caractères sans espace : lettres, chiffres, point, tiret, underscore ou deux-points."
+                />
+                <p className="mt-1 text-[10px] leading-relaxed text-slate-500">
+                  Pour verrouiller cette licence à un seul téléphone, récupère son ID dans ABESS VPN → Mode manuel → ID d’installation et colle-le ici. Si tu laisses ce champ vide, la limite d’appareils classique continue de s’appliquer.
+                </p>
               </div>
 
               <div>
