@@ -58,6 +58,8 @@ interface Reseller {
 interface ClientToken {
   id: string;
   token: string;
+  configurationId?: string;
+  configurationName?: string;
   resellerId: string;
   resellerName: string;
   plan: string;
@@ -75,6 +77,8 @@ interface ClientToken {
 }
 
 interface MasterConfig {
+  id?: string;
+  name: string;
   serverHost: string;
   /** Optional HTTP Host/:authority header; independent from destination and SNI. */
   host: string;
@@ -83,11 +87,25 @@ interface MasterConfig {
   transport: string;
   path: string;
   sniHost: string;
-  uuid: string;
-  secretPassphrase: string;
-  systemName: string;
-  contactTelegram: string;
+  uuid?: string;
+  secretPassphrase?: string;
+  systemName?: string;
+  contactTelegram?: string;
 }
+
+interface AvailableProtocolConfig {
+  id: string;
+  name: string;
+  protocol: string;
+  transport: string;
+  serverPort: number;
+}
+
+const EMPTY_PROTOCOL_CONFIG: MasterConfig = {
+  name: '', serverHost: '', host: '', serverPort: 443, protocol: 'vless',
+  transport: 'ws', path: '/@abess237', sniHost: '', uuid: '',
+  secretPassphrase: '', systemName: 'AbessVpn', contactTelegram: '@abess237'
+};
 
 export default function App() {
   // Session State
@@ -108,6 +126,9 @@ export default function App() {
   const [resellers, setResellers] = useState<Reseller[]>([]);
   const [tokens, setTokens] = useState<ClientToken[]>([]);
   const [masterConfig, setMasterConfig] = useState<MasterConfig | null>(null);
+  const [protocolConfigs, setProtocolConfigs] = useState<MasterConfig[]>([]);
+  const [availableConfigs, setAvailableConfigs] = useState<AvailableProtocolConfig[]>([]);
+  const [editingConfigId, setEditingConfigId] = useState<string | null>(null);
   const [configLoading, setConfigLoading] = useState<boolean>(false);
   const [configLoadError, setConfigLoadError] = useState<string | null>(null);
   const [configSaving, setConfigSaving] = useState<boolean>(false);
@@ -134,6 +155,7 @@ export default function App() {
     new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString().slice(0, 16)
   );
   const [newTokenDeviceLimit, setNewTokenDeviceLimit] = useState<number>(2);
+  const [newTokenConfigurationId, setNewTokenConfigurationId] = useState<string>('');
   const [tokenCreating, setTokenCreating] = useState<boolean>(false);
   const [tokenCreationError, setTokenCreationError] = useState<string | null>(null);
 
@@ -189,31 +211,6 @@ export default function App() {
         const resellersRes = await fetch('/api/v1/admin/resellers', { headers });
         if (resellersRes.ok) setResellers(await resellersRes.json());
 
-        // Master config: report failures instead of leaving the Infrastructure tab blank.
-        if (!masterConfig) setConfigLoading(true);
-        try {
-          const configRes = await fetch('/api/v1/admin/server-config', { headers });
-          if (configRes.ok) {
-            const config = await configRes.json();
-            if (config && typeof config === 'object' && 'serverHost' in config && 'protocol' in config) {
-              setMasterConfig(config as MasterConfig);
-              setConfigLoadError(null);
-            } else {
-              setConfigLoadError('Le serveur a répondu, mais sa configuration est vide ou invalide. Réessayez ou consultez les journaux de l’API.');
-            }
-          } else {
-            const payload = await configRes.json().catch(() => ({}));
-            setConfigLoadError(
-              typeof payload.error === 'string'
-                ? payload.error
-                : `Impossible de charger la configuration maître (HTTP ${configRes.status}). Vérifiez votre session Super Admin et l’API.`
-            );
-          }
-        } catch (error) {
-          setConfigLoadError(error instanceof Error ? error.message : 'Erreur réseau lors du chargement de la configuration maître.');
-        } finally {
-          setConfigLoading(false);
-        }
       }
     } catch {
       if (!masterConfig) {
@@ -223,12 +220,49 @@ export default function App() {
     }
   };
 
+
+  // Load the non-sensitive configuration choices for every user, and full Host/SNI data only for Super Admin.
+  const loadProtocolConfigData = async () => {
+    if (!authToken) return;
+    setConfigLoading(true);
+    try {
+      const headers = { 'Authorization': `Bearer ${authToken}` };
+      const availableRes = await fetch('/api/v1/admin/available-configs', { headers });
+      if (availableRes.ok) {
+        const available = await availableRes.json();
+        setAvailableConfigs(Array.isArray(available) ? available : []);
+      } else {
+        const payload = await availableRes.json().catch(() => ({}));
+        throw new Error(payload.error || `Chargement des choix de configuration impossible (HTTP ${availableRes.status}).`);
+      }
+
+      if (currentUser?.role === 'SUPER_ADMIN') {
+        const response = await fetch('/api/v1/admin/protocol-configs', { headers });
+        const payload = await response.json().catch(() => []);
+        if (!response.ok) throw new Error(payload.error || `Chargement des configurations impossible (HTTP ${response.status}).`);
+        const configs = Array.isArray(payload) ? payload as MasterConfig[] : [];
+        setProtocolConfigs(configs);
+        setMasterConfig(current => current ?? (configs[0] || { ...EMPTY_PROTOCOL_CONFIG }));
+        setEditingConfigId(current => current ?? (configs[0]?.id || null));
+        setConfigLoadError(null);
+      }
+    } catch (error) {
+      setConfigLoadError(error instanceof Error ? error.message : 'Erreur réseau lors du chargement des configurations.');
+    } finally {
+      setConfigLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (authToken) {
       refreshData();
       const interval = setInterval(refreshData, 8000);
       return () => clearInterval(interval);
     }
+  }, [authToken, currentUser?.role]);
+
+  useEffect(() => {
+    if (authToken && currentUser?.role) void loadProtocolConfigData();
   }, [authToken, currentUser?.role]);
 
   // Handle Login
@@ -424,7 +458,46 @@ export default function App() {
     }
   };
 
-  // Save Master Config (Super Admin only)
+  // Start a fresh profile; the admin can store multiple independent protocol configurations.
+  const handleNewProtocolConfig = () => {
+    setEditingConfigId(null);
+    setMasterConfig({ ...EMPTY_PROTOCOL_CONFIG });
+    setConfigError(null);
+    setConfigSuccess(false);
+    setConfigLoadError(null);
+  };
+
+  const handleSelectProtocolConfig = (config: MasterConfig) => {
+    setEditingConfigId(config.id || null);
+    setMasterConfig({ ...EMPTY_PROTOCOL_CONFIG, ...config });
+    setConfigError(null);
+    setConfigSuccess(false);
+  };
+
+  const handleDeleteProtocolConfig = async (config: MasterConfig) => {
+    if (!config.id || !confirm(`Supprimer la configuration « ${config.name} » ? Les configurations utilisées par des tokens ne peuvent pas être supprimées.`)) return;
+    try {
+      const response = await fetch(`/api/v1/admin/protocol-configs/${encodeURIComponent(config.id)}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${authToken}` }
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || 'Suppression impossible.');
+      const next = Array.isArray(payload.configs) ? payload.configs as MasterConfig[] : protocolConfigs.filter(item => item.id !== config.id);
+      setProtocolConfigs(next);
+      setAvailableConfigs(next.map(item => ({ id: item.id || '', name: item.name, protocol: item.protocol, transport: item.transport, serverPort: item.serverPort })));
+      if (editingConfigId === config.id) {
+        setEditingConfigId(next[0]?.id || null);
+        setMasterConfig(next[0] ? { ...EMPTY_PROTOCOL_CONFIG, ...next[0] } : { ...EMPTY_PROTOCOL_CONFIG });
+      }
+      setConfigError(null);
+      setConfigSuccess(false);
+      addLog(`[CONFIG DELETE] Configuration « ${config.name} » supprimée.`);
+    } catch (error) {
+      setConfigError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
   const handleSaveConfig = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!masterConfig) return;
@@ -433,27 +506,40 @@ export default function App() {
     setConfigError(null);
 
     try {
-      const res = await fetch('/api/v1/admin/server-config', {
-        method: 'PUT',
+      const isEditing = Boolean(editingConfigId);
+      const url = isEditing
+        ? `/api/v1/admin/protocol-configs/${encodeURIComponent(editingConfigId as string)}`
+        : '/api/v1/admin/protocol-configs';
+      const response = await fetch(url, {
+        method: isEditing ? 'PUT' : 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${authToken}`
         },
-        body: JSON.stringify(masterConfig)
+        body: JSON.stringify({
+          name: masterConfig.name,
+          serverHost: masterConfig.serverHost,
+          host: masterConfig.host,
+          serverPort: masterConfig.serverPort,
+          protocol: masterConfig.protocol,
+          transport: masterConfig.transport,
+          path: masterConfig.path,
+          sniHost: masterConfig.sniHost
+        })
       });
-      if (res.ok) {
-        const payload = await res.json();
-        if (payload.config) setMasterConfig(payload.config as MasterConfig);
-        setConfigSuccess(true);
-        setTimeout(() => setConfigSuccess(false), 3000);
-        addLog(`[MASTER CONFIG] Configuration d'infrastructure sauvegardée.`);
-      } else {
-        const payload = await res.json().catch(() => ({}));
-        setConfigError(typeof payload.error === 'string' ? payload.error : 'La configuration n’a pas pu être sauvegardée.');
-      }
-    } catch (err) {
-      console.error(err);
-      setConfigError('Impossible de joindre le serveur. Vérifiez la connexion puis réessayez.');
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || 'La configuration n’a pas pu être sauvegardée.');
+      const config = payload.config as MasterConfig;
+      const configs = Array.isArray(payload.configs) ? payload.configs as MasterConfig[] : [...protocolConfigs.filter(item => item.id !== config.id), config];
+      setProtocolConfigs(configs);
+      setAvailableConfigs(configs.map(item => ({ id: item.id || '', name: item.name, protocol: item.protocol, transport: item.transport, serverPort: item.serverPort })));
+      setEditingConfigId(config.id || null);
+      setMasterConfig({ ...EMPTY_PROTOCOL_CONFIG, ...config });
+      setConfigSuccess(true);
+      setTimeout(() => setConfigSuccess(false), 3500);
+      addLog(`[PROTOCOL CONFIG] Configuration « ${config.name} » ${isEditing ? 'mise à jour' : 'créée'}.`);
+    } catch (error) {
+      setConfigError(error instanceof Error ? error.message : String(error));
     } finally {
       setConfigSaving(false);
     }
