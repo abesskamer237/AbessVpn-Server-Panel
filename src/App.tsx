@@ -153,7 +153,7 @@ export default function App() {
   const [newTokenPlan, setNewTokenPlan] = useState<string>('PASS COMMERCE 30J');
   const [newTokenBandwidth, setNewTokenBandwidth] = useState<number>(50); // Go
   const [newTokenExpiryDate, setNewTokenExpiryDate] = useState<string>(
-    new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString().slice(0, 16)
+    new Date(Date.now() + 30 * 24 * 3600 * 1000 - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)
   );
   const [newTokenDeviceLimit, setNewTokenDeviceLimit] = useState<number>(2);
   const [newTokenAllowedDeviceId, setNewTokenAllowedDeviceId] = useState<string>('');
