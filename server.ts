@@ -19,6 +19,7 @@ if (!fs.existsSync(dataDir)) {
 const usersFile = path.resolve(dataDir, 'users.json');
 const tokensFile = path.resolve(dataDir, 'tokens.json');
 const configFile = path.resolve(dataDir, 'config.json');
+const protocolConfigsFile = path.resolve(dataDir, 'protocol-configs.json');
 const xrayConfigFile = process.env.XRAY_CONFIG_PATH || path.resolve(dataDir, 'xray-config.json');
 const xrayStatusFile = process.env.XRAY_STATUS_FILE || path.resolve(dataDir, 'xray-ready');
 const xrayStatsFile = process.env.XRAY_STATS_FILE || path.resolve(dataDir, 'xray-stats.json');
@@ -58,6 +59,10 @@ export interface ClientToken {
   lastSeenAt: string | null;
   lastSeenIp: string | null;
   status: 'active' | 'revoked' | 'expired' | 'quota_exceeded';
+  configurationId?: string;
+  configurationName?: string;
+  /** Immutable server-side profile snapshot keeps existing licences stable after profile edits. */
+  configurationSnapshot?: ProtocolConfig;
   encryptedLink: string;
   createdAt: string;
 }
@@ -75,6 +80,20 @@ export interface MasterServerConfig {
   secretPassphrase: string;
   systemName: string;
   contactTelegram: string;
+}
+
+export interface ProtocolConfig {
+  id: string;
+  name: string;
+  serverHost: string;
+  host: string;
+  serverPort: number;
+  protocol: string;
+  transport: string;
+  path: string;
+  sniHost: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 // Master Configuration Helper
@@ -320,6 +339,101 @@ function xrayStreamSettings(transport: XrayTransport, profilePath: string): Reco
   }
 }
 
+
+function isTlsWebTransport(transport: string): boolean {
+  return ['ws', 'grpc', 'httpupgrade', 'xhttp'].includes(transport);
+}
+function publicProtocolConfig(config: ProtocolConfig): ProtocolConfig {
+  return {
+    id: config.id, name: config.name, serverHost: config.serverHost, host: config.host || '',
+    serverPort: config.serverPort, protocol: config.protocol, transport: config.transport,
+    path: config.path || '/@abess237', sniHost: config.sniHost || '',
+    createdAt: config.createdAt, updatedAt: config.updatedAt
+  };
+}
+function legacyProtocolConfig(): ProtocolConfig | null {
+  const legacy = loadMasterConfig();
+  if (!isValidPublicHost(legacy.serverHost) ||
+      (isTlsWebTransport(legacy.transport) && !isValidPublicHost(legacy.sniHost)) ||
+      !isXrayProtocol(legacy.protocol) || !isXrayTransport(legacy.transport)) return null;
+  const now = new Date().toISOString();
+  return {
+    id: 'cfg_legacy', name: legacy.systemName?.trim() || 'Configuration existante',
+    serverHost: legacy.serverHost, host: legacy.host || '',
+    serverPort: xrayPublicPort(legacy.protocol, legacy.transport, legacy.serverPort),
+    protocol: legacy.protocol, transport: legacy.transport, path: '/@abess237',
+    sniHost: legacy.sniHost || '', createdAt: now, updatedAt: now
+  };
+}
+function loadProtocolConfigs(): ProtocolConfig[] {
+  if (fs.existsSync(protocolConfigsFile)) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(protocolConfigsFile, 'utf8'));
+      if (!Array.isArray(parsed)) throw new Error('protocol-configs.json must contain an array');
+      return parsed.filter((item: any) =>
+        item && typeof item.id === 'string' && typeof item.name === 'string' &&
+        isValidPublicHost(item.serverHost) && isXrayProtocol(item.protocol) && isXrayTransport(item.transport)
+      ).map((item: any) => publicProtocolConfig({
+        ...item,
+        host: typeof item.host === 'string' ? item.host : '',
+        sniHost: typeof item.sniHost === 'string' ? item.sniHost : '',
+        serverPort: xrayPublicPort(item.protocol, item.transport, Number(item.serverPort) || 443),
+        path: '/@abess237',
+        createdAt: typeof item.createdAt === 'string' ? item.createdAt : new Date().toISOString(),
+        updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : new Date().toISOString()
+      } as ProtocolConfig));
+    } catch {
+      throw new Error('Le fichier data/protocol-configs.json est illisible. Restaurez une sauvegarde avant de continuer.');
+    }
+  }
+  const legacy = legacyProtocolConfig();
+  return legacy ? [legacy] : [];
+}
+function saveProtocolConfigs(configs: ProtocolConfig[]): void {
+  writeJsonAtomically(protocolConfigsFile, configs.map(publicProtocolConfig));
+}
+function normalizeProtocolConfig(input: any, existing?: ProtocolConfig): ProtocolConfig | null {
+  const name = String(input?.name ?? existing?.name ?? '').trim();
+  const serverHost = String(input?.serverHost ?? existing?.serverHost ?? '').trim();
+  const host = String(input?.host ?? existing?.host ?? '').trim();
+  const protocol = String(input?.protocol ?? existing?.protocol ?? 'vless').toLowerCase();
+  const transport = String(input?.transport ?? existing?.transport ?? 'ws').toLowerCase();
+  const sniHost = String(input?.sniHost ?? existing?.sniHost ?? '').trim();
+  if (name.length < 2 || name.length > 80) return null;
+  if (!isValidPublicHost(serverHost) || (host !== '' && !isValidPublicHost(host))) return null;
+  if (!isXrayProtocol(protocol) || !isXrayTransport(transport) ||
+      (protocol === 'shadowsocks' && transport !== 'native') ||
+      (transport === 'native' && protocol !== 'shadowsocks') ||
+      (['raw', 'kcp'].includes(transport) && protocol !== 'vmess')) return null;
+  if (isTlsWebTransport(transport) && !isValidPublicHost(sniHost)) return null;
+  if (sniHost && !isValidPublicHost(sniHost)) return null;
+  const now = new Date().toISOString();
+  return {
+    id: existing?.id || 'cfg_' + crypto.randomUUID(), name, serverHost, host,
+    serverPort: xrayPublicPort(protocol, transport, Number(input?.serverPort) || 443),
+    protocol, transport, path: '/@abess237', sniHost,
+    createdAt: existing?.createdAt || now, updatedAt: now
+  };
+}
+function protocolConfigForToken(token: ClientToken, configs = loadProtocolConfigs()): ProtocolConfig | null {
+  if (token.configurationSnapshot && isValidPublicHost(token.configurationSnapshot.serverHost)) {
+    return publicProtocolConfig(token.configurationSnapshot);
+  }
+  if (token.configurationId) {
+    const found = configs.find(config => config.id === token.configurationId);
+    if (found) return found;
+  }
+  if (!token.configurationId && !token.configurationSnapshot) {
+    const legacy = legacyProtocolConfig();
+    if (legacy) return legacy;
+  }
+  return configs[0] || null;
+}
+function safeClientToken(token: ClientToken): Omit<ClientToken, 'configurationSnapshot'> {
+  const { configurationSnapshot: _configurationSnapshot, ...safe } = token;
+  return safe;
+}
+
 function syncXrayConfig(tokens: ClientToken[] = loadTokens()): boolean {
   const masterConfig = loadMasterConfig();
   const now = Date.now();
@@ -327,23 +441,28 @@ function syncXrayConfig(tokens: ClientToken[] = loadTokens()): boolean {
     Number.isFinite(new Date(token.expiresAt).getTime()) && new Date(token.expiresAt).getTime() > now &&
     Number(token.bandwidthUsedGb) < Number(token.bandwidthGb) &&
     typeof token.clientUuid === 'string' && token.clientUuid.length > 0);
+  const profiles = loadProtocolConfigs();
   const inbounds: Array<Record<string, unknown>> = [];
   for (const protocol of XRAY_PROTOCOLS) {
     const transports = protocol === 'vmess' ? XRAY_TRANSPORTS : XRAY_WEB_TRANSPORTS;
     for (const transport of transports) {
       const profilePath = xrayProfilePath(protocol, transport, masterConfig.path);
-      const users = activeTokens.map(token => ({ id: token.clientUuid as string, email: xrayUserEmail(token), level: 0 }));
+      const profileTokens = activeTokens.filter(token => {
+        const profile = protocolConfigForToken(token, profiles);
+        return !!profile && profile.protocol === protocol && profile.transport === transport;
+      });
+      const users = profileTokens.map(token => ({ id: token.clientUuid as string, email: xrayUserEmail(token), level: 0 }));
       let settings: Record<string, unknown>;
       switch (protocol) {
         case 'vless': settings = { users, decryption: 'none' }; break;
         case 'vmess': settings = { users: users.map(user => ({ id: user.id, email: user.email, level: 0, alterId: 0, security: 'auto' })) }; break;
-        case 'trojan': settings = { users: activeTokens.map(token => ({ password: token.clientUuid as string, email: xrayUserEmail(token), level: 0 })) }; break;
+        case 'trojan': settings = { users: profileTokens.map(token => ({ password: token.clientUuid as string, email: xrayUserEmail(token), level: 0 })) }; break;
         case 'shadowsocks':
           settings = {
             network: 'tcp',
             method: 'aes-128-gcm',
             password: crypto.createHmac('sha256', masterConfig.secretPassphrase || 'abessvpn').update('abessvpn-shadowsocks-inbound').digest('hex'),
-            users: activeTokens.map(token => ({ method: 'aes-128-gcm', password: token.clientUuid as string, email: xrayUserEmail(token), level: 0 }))
+            users: profileTokens.map(token => ({ method: 'aes-128-gcm', password: token.clientUuid as string, email: xrayUserEmail(token), level: 0 }))
           };
           break;
       }
@@ -356,7 +475,7 @@ function syncXrayConfig(tokens: ClientToken[] = loadTokens()): boolean {
     settings: {
       network: 'tcp,udp', method: 'aes-128-gcm',
       password: crypto.createHmac('sha256', masterConfig.secretPassphrase || 'abessvpn').update('abessvpn-shadowsocks-native').digest('hex'),
-      users: activeTokens.map(token => ({ method: 'aes-128-gcm', password: token.clientUuid as string, email: xrayUserEmail(token), level: 0 }))
+      users: activeTokens.filter(token => { const profile = protocolConfigForToken(token, profiles); return !!profile && profile.protocol === 'shadowsocks' && profile.transport === 'native'; }).map(token => ({ method: 'aes-128-gcm', password: token.clientUuid as string, email: xrayUserEmail(token), level: 0 }))
     }
   });
   inbounds.push({ tag: 'api', listen: '127.0.0.1', port: 10085, protocol: 'dokodemo-door', settings: { address: '127.0.0.1' } });
@@ -842,102 +961,99 @@ async function startServer() {
 
     if (user.role === 'SUPER_ADMIN') {
       // Super Admin sees all tokens with full reseller visibility
-      res.json(tokens);
+      res.json(tokens.map(safeClientToken));
     } else {
       // Reseller sees ONLY his own tokens
       const myTokens = tokens.filter(t => t.resellerId === user.id);
-      res.json(myTokens);
+      res.json(myTokens.map(safeClientToken));
     }
   });
 
-  // Create Client Token (Deducts credits from Reseller)
+  // Create a token against a named configuration owned by the Super Admin.
   app.post('/api/v1/admin/tokens', authenticate, (req, res) => {
     const user: AppUser = (req as any).user;
-    const { token, plan, bandwidthGb, expiresAt, days, deviceLimit } = req.body;
-
+    const { token, plan, bandwidthGb, expiresAt, days, deviceLimit, configurationId } = req.body || {};
     const requestedGb = Number(bandwidthGb) || 50;
-
-    // Credit Verification for Resellers
-    if (user.role === 'RESELLER') {
-      if (user.credits < requestedGb) {
-        res.status(400).json({
-          error: `Crédits insuffisants ! Votre solde actuel est de ${user.credits} Go. Vous avez demandé ${requestedGb} Go. Veuillez contacter le Super Administrateur pour recharger votre compte.`
-        });
-        return;
-      }
+    if (!Number.isFinite(requestedGb) || requestedGb < 1 || requestedGb > 100000) {
+      res.status(400).json({ error: 'Le quota doit être compris entre 1 et 100000 Go.' });
+      return;
     }
-
-    const masterConfig = loadMasterConfig();
-    if (!isValidPublicHost(masterConfig.serverHost) || !isValidPublicHost(masterConfig.sniHost)) {
-      res.status(409).json({
-        error: 'Configurez d’abord l’hôte public et le SNI TLS dans le panneau Super Admin avant de créer des licences.'
+    if (user.role === 'RESELLER' && user.credits < requestedGb) {
+      res.status(400).json({
+        error: `Crédits insuffisants ! Votre solde actuel est de ${user.credits} Go. Vous avez demandé ${requestedGb} Go. Veuillez contacter le Super Administrateur pour recharger votre compte.`
       });
       return;
     }
+    const configs = loadProtocolConfigs();
+    const selected = typeof configurationId === 'string' ? configs.find(config => config.id === configurationId) : undefined;
+    const profile = selected || (configs.length === 1 && !configurationId ? configs[0] : undefined);
+    if (!profile) {
+      res.status(409).json({
+        error: configs.length === 0
+          ? 'Aucune configuration VPN n’est disponible. Le Super Administrateur doit en créer une dans Infrastructure.'
+          : 'Sélectionnez la configuration VPN à associer à ce token.'
+      });
+      return;
+    }
+    if (!isValidPublicHost(profile.serverHost) ||
+        (isTlsWebTransport(profile.transport) && !isValidPublicHost(profile.sniHost))) {
+      res.status(409).json({ error: 'Cette configuration ne dispose pas d’une adresse de destination et d’un SNI TLS valides.' });
+      return;
+    }
+    const finalToken = String(token || 'ABESS-' + crypto.randomBytes(5).toString('hex').toUpperCase()).trim().toUpperCase();
+    if (!/^[A-Z0-9][A-Z0-9_-]{3,63}$/.test(finalToken)) {
+      res.status(400).json({ error: 'Le code token doit contenir 4 à 64 caractères parmi A-Z, 0-9, tiret et soulignement.' });
+      return;
+    }
+    if (loadTokens().some(existing => existing.token.toUpperCase() === finalToken)) {
+      res.status(409).json({ error: 'Ce code token existe déjà. Générez-en un autre.' });
+      return;
+    }
     const clientUuid = crypto.randomUUID();
-    const finalToken = (token || 'ABESS-' + crypto.randomBytes(5).toString('hex').toUpperCase()).trim();
     const calculatedExpiresAt = expiresAt || new Date(Date.now() + (Number(days) || 30) * 24 * 3600 * 1000).toISOString();
-    const daysRemaining = Math.max(0, Math.ceil((new Date(calculatedExpiresAt).getTime() - Date.now()) / (1000 * 3600 * 24)));
-
-    // Generate Encrypted abess:// Link without exposing master host/ip to reseller UI
+    const expiryTimestamp = new Date(calculatedExpiresAt).getTime();
+    if (!Number.isFinite(expiryTimestamp) || expiryTimestamp <= Date.now()) {
+      res.status(400).json({ error: 'La date d’expiration doit être une date future valide.' });
+      return;
+    }
+    const daysRemaining = Math.max(1, Math.ceil((expiryTimestamp - Date.now()) / (1000 * 3600 * 24)));
+    const clientLimit = Math.max(1, Math.min(10, Math.floor(Number(deviceLimit) || 2)));
+    const masterSecret = process.env.MASTER_SECRET || loadMasterConfig().secretPassphrase;
+    if (!masterSecret || masterSecret.length < 32) {
+      res.status(503).json({ error: 'Le secret maître est absent ou invalide; aucune licence n’a été créée.' });
+      return;
+    }
     const encryptedPayload = {
-      vpnName: 'AbessVpn',
-      token: finalToken,
-      bandwidthGb: requestedGb,
-      expiresAt: calculatedExpiresAt,
-      serverHost: masterConfig.serverHost,
-      host: masterConfig.host || masterConfig.serverHost,
-      serverPort: xrayPublicPort(masterConfig.protocol, masterConfig.transport, masterConfig.serverPort),
-      path: isXrayProtocol(masterConfig.protocol) && isXrayTransport(masterConfig.transport)
-        ? xrayProfilePath(masterConfig.protocol, masterConfig.transport, masterConfig.path)
-        : '/@abess237',
-      sniHost: masterConfig.sniHost,
-      uuid: clientUuid,
-      protocol: masterConfig.protocol,
-      transport: masterConfig.transport,
-      // Make the effective client-side security explicit in the issued link.
-      security: ['native', 'raw', 'kcp'].includes(masterConfig.transport) ? 'none' : 'tls'
+      vpnName: 'AbessVpn', token: finalToken, bandwidthGb: requestedGb,
+      expiresAt: calculatedExpiresAt, configurationId: profile.id, configurationName: profile.name,
+      serverHost: profile.serverHost, host: profile.host || profile.serverHost,
+      serverPort: xrayPublicPort(profile.protocol, profile.transport, profile.serverPort),
+      path: xrayProfilePath(profile.protocol as XrayProtocol, profile.transport as XrayTransport, profile.path),
+      sniHost: profile.sniHost, uuid: clientUuid, protocol: profile.protocol, transport: profile.transport,
+      security: ['native', 'raw', 'kcp'].includes(profile.transport) ? 'none' : 'tls'
     };
-    const encryptedLink = encryptConfig(encryptedPayload, masterConfig.secretPassphrase);
-
+    const encryptedLink = encryptConfig(encryptedPayload, masterSecret);
     const tokens = loadTokens();
     const newToken: ClientToken = {
-      id: 'tok_' + Math.random().toString(36).substring(2, 9),
-      token: finalToken,
-      clientUuid,
-      resellerId: user.id,
-      resellerName: user.name,
-      plan: plan || `${requestedGb} GO CYBER VIP`,
-      bandwidthGb: requestedGb,
-      bandwidthUsedGb: 0,
-      expiresAt: calculatedExpiresAt,
-      days: daysRemaining,
-      deviceLimit: Math.max(1, Math.min(10, Math.floor(Number(deviceLimit) || 2))),
-      deviceIds: [],
-      connectionCount: 0,
-      lastSeenAt: null,
-      lastSeenIp: null,
-      status: 'active',
-      encryptedLink,
-      createdAt: new Date().toISOString()
+      id: 'tok_' + crypto.randomUUID().slice(0, 8), token: finalToken, clientUuid,
+      resellerId: user.id, resellerName: user.name,
+      plan: String(plan || `${requestedGb} GO CYBER VIP`).trim().slice(0, 80),
+      bandwidthGb: requestedGb, bandwidthUsedGb: 0, expiresAt: calculatedExpiresAt, days: daysRemaining,
+      deviceLimit: clientLimit, deviceIds: [], connectionCount: 0, lastSeenAt: null, lastSeenIp: null,
+      status: 'active', configurationId: profile.id, configurationName: profile.name,
+      configurationSnapshot: publicProtocolConfig(profile), encryptedLink, createdAt: new Date().toISOString()
     };
-
     tokens.unshift(newToken);
     saveTokens(tokens);
-
-    // Deduct credits from reseller & update stats
     const users = loadUsers();
     const currentUser = users.find(u => u.id === user.id);
     if (currentUser) {
-      if (user.role === 'RESELLER') {
-        currentUser.credits = Math.max(0, currentUser.credits - requestedGb);
-      }
+      if (user.role === 'RESELLER') currentUser.credits = Math.max(0, currentUser.credits - requestedGb);
       currentUser.totalTokensCreated = (currentUser.totalTokensCreated || 0) + 1;
       currentUser.totalBandwidthAllocatedGb = (currentUser.totalBandwidthAllocatedGb || 0) + requestedGb;
       saveUsers(users);
     }
-
-    res.status(201).json(newToken);
+    res.status(201).json(safeClientToken(newToken));
   });
 
   // Revoke / Delete Token
@@ -972,6 +1088,92 @@ async function startServer() {
       return;
     }
     res.json(loadMasterConfig());
+  });
+
+  // Named protocol configurations: only the Super Administrator can create, edit or delete them.
+  // The selector endpoint exposes labels only; reseller accounts never receive Host/IP/SNI values.
+  app.get('/api/v1/admin/available-configs', authenticate, (_req, res) => {
+    res.json(loadProtocolConfigs().map(({ id, name, protocol, transport, serverPort }) => ({ id, name, protocol, transport, serverPort })));
+  });
+  app.get('/api/v1/admin/protocol-configs', authenticate, (req, res) => {
+    const user: AppUser = (req as any).user;
+    if (user.role !== 'SUPER_ADMIN') {
+      res.status(403).json({ error: 'Seul le Super Administrateur peut consulter les paramètres Host/SNI/IP.' });
+      return;
+    }
+    res.json(loadProtocolConfigs().map(publicProtocolConfig));
+  });
+  app.post('/api/v1/admin/protocol-configs', authenticate, (req, res) => {
+    const user: AppUser = (req as any).user;
+    if (user.role !== 'SUPER_ADMIN') {
+      res.status(403).json({ error: 'Seul le Super Administrateur peut créer une configuration.' });
+      return;
+    }
+    const configs = loadProtocolConfigs();
+    const created = normalizeProtocolConfig(req.body);
+    if (!created) {
+      res.status(400).json({ error: 'Configuration invalide : nom (2–80 caractères), destination, Host facultatif, protocole/transport compatibles et SNI valide pour TLS requis.' });
+      return;
+    }
+    if (configs.some(config => config.name.toLowerCase() === created.name.toLowerCase())) {
+      res.status(409).json({ error: 'Une configuration porte déjà ce nom.' });
+      return;
+    }
+    configs.push(created);
+    saveProtocolConfigs(configs);
+    syncXrayConfig();
+    res.status(201).json({ success: true, config: publicProtocolConfig(created), configs: configs.map(publicProtocolConfig) });
+  });
+  app.put('/api/v1/admin/protocol-configs/:id', authenticate, (req, res) => {
+    const user: AppUser = (req as any).user;
+    if (user.role !== 'SUPER_ADMIN') {
+      res.status(403).json({ error: 'Seul le Super Administrateur peut modifier une configuration.' });
+      return;
+    }
+    const configs = loadProtocolConfigs();
+    const index = configs.findIndex(config => config.id === req.params.id);
+    if (index < 0) {
+      res.status(404).json({ error: 'Configuration introuvable.' });
+      return;
+    }
+    const updated = normalizeProtocolConfig(req.body, configs[index]);
+    if (!updated) {
+      res.status(400).json({ error: 'Configuration invalide : vérifiez le nom, la destination, le Host, le protocole, le transport et le SNI TLS.' });
+      return;
+    }
+    if (configs.some((config, idx) => idx !== index && config.name.toLowerCase() === updated.name.toLowerCase())) {
+      res.status(409).json({ error: 'Une autre configuration porte déjà ce nom.' });
+      return;
+    }
+    configs[index] = updated;
+    saveProtocolConfigs(configs);
+    syncXrayConfig();
+    res.json({ success: true, config: publicProtocolConfig(updated), configs: configs.map(publicProtocolConfig) });
+  });
+  app.delete('/api/v1/admin/protocol-configs/:id', authenticate, (req, res) => {
+    const user: AppUser = (req as any).user;
+    if (user.role !== 'SUPER_ADMIN') {
+      res.status(403).json({ error: 'Seul le Super Administrateur peut supprimer une configuration.' });
+      return;
+    }
+    const configs = loadProtocolConfigs();
+    if (!configs.some(config => config.id === req.params.id)) {
+      res.status(404).json({ error: 'Configuration introuvable.' });
+      return;
+    }
+    const tokens = loadTokens();
+    const assigned = tokens.some(token =>
+      token.configurationId === req.params.id || token.configurationSnapshot?.id === req.params.id ||
+      (!token.configurationId && !token.configurationSnapshot && req.params.id === 'cfg_legacy')
+    );
+    if (assigned) {
+      res.status(409).json({ error: 'Cette configuration est encore associée à des licences. Révoquez ou supprimez ces licences avant de supprimer la configuration.' });
+      return;
+    }
+    const remaining = configs.filter(config => config.id !== req.params.id);
+    saveProtocolConfigs(remaining);
+    syncXrayConfig(tokens);
+    res.json({ success: true, configs: remaining.map(publicProtocolConfig) });
   });
 
   app.put('/api/v1/admin/server-config', authenticate, (req, res) => {
@@ -1095,15 +1297,6 @@ async function startServer() {
       return;
     }
 
-    const masterConfig = loadMasterConfig();
-    if (!isValidPublicHost(masterConfig.serverHost) || !isValidPublicHost(masterConfig.sniHost)) {
-      res.status(503).json({
-        valid: false,
-        error: 'Le serveur VPN n’est pas configuré. Le Super Administrateur doit renseigner l’hôte et le SNI dans le panneau.'
-      });
-      return;
-    }
-
     const tokens = loadTokens();
     const found = tokens.find(t => t.token.toUpperCase() === rawToken.toUpperCase());
     const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim()
@@ -1116,6 +1309,15 @@ async function startServer() {
     }
 
     const now = Date.now();
+    const profile = protocolConfigForToken(found, loadProtocolConfigs());
+    if (!profile || !isValidPublicHost(profile.serverHost) ||
+        (isTlsWebTransport(profile.transport) && !isValidPublicHost(profile.sniHost))) {
+      res.status(503).json({
+        valid: false,
+        error: 'La configuration VPN associée à cette licence est indisponible. Contactez le Super Administrateur.'
+      });
+      return;
+    }
     const expiryTime = new Date(found.expiresAt).getTime();
 
     if (!Number.isFinite(expiryTime) || now >= expiryTime || found.status === 'expired') {
@@ -1175,7 +1377,6 @@ async function startServer() {
     found.lastSeenIp = clientIp;
     saveTokens(tokens);
 
-    const host = masterConfig.serverHost;
     const msRemaining = Math.max(0, expiryTime - now);
     const daysRemaining = Math.ceil(msRemaining / (1000 * 3600 * 24));
 
@@ -1192,20 +1393,20 @@ async function startServer() {
       bandwidthUsedGb: Number(found.bandwidthUsedGb.toFixed(2)),
       bandwidthRemainingGb: Number(Math.max(0, found.bandwidthGb - found.bandwidthUsedGb).toFixed(2)),
       status: found.status,
+      configurationId: profile.id,
+      configurationName: profile.name,
       serverConfig: {
-        address: host,
-        port: xrayPublicPort(masterConfig.protocol, masterConfig.transport, masterConfig.serverPort),
-        path: isXrayProtocol(masterConfig.protocol) && isXrayTransport(masterConfig.transport)
-          ? xrayProfilePath(masterConfig.protocol, masterConfig.transport, masterConfig.path)
-          : '/@abess237',
-        uuid: found.clientUuid || masterConfig.uuid,
-        sni: masterConfig.sniHost,
-        host: masterConfig.host || host,
-        wsHost: masterConfig.host || host,
-        method: masterConfig.protocol === 'shadowsocks' ? 'aes-128-gcm' : undefined,
-        protocol: masterConfig.protocol,
-        transport: masterConfig.transport,
-        security: ['native', 'raw', 'kcp'].includes(masterConfig.transport) ? 'none' : 'tls'
+        address: profile.serverHost,
+        port: xrayPublicPort(profile.protocol, profile.transport, profile.serverPort),
+        path: xrayProfilePath(profile.protocol as XrayProtocol, profile.transport as XrayTransport, profile.path),
+        uuid: found.clientUuid || crypto.randomUUID(),
+        sni: profile.sniHost,
+        host: profile.host || profile.serverHost,
+        wsHost: profile.host || profile.serverHost,
+        method: profile.protocol === 'shadowsocks' ? 'aes-128-gcm' : undefined,
+        protocol: profile.protocol,
+        transport: profile.transport,
+        security: ['native', 'raw', 'kcp'].includes(profile.transport) ? 'none' : 'tls'
       }
     });
   };
