@@ -187,10 +187,50 @@ jobs:
           assert.equal(savedProtocolConfig.serverHost, 'profile.example.test');
           assert.equal(savedProtocolConfig.host, 'header.example.test');
           assert.equal(savedProtocolConfig.sniHost, 'tls.example.test');
+
+          // Multiple named profiles are managed only by the Super Admin and tokens select one profile.
+          const legacyProfilesResponse = await fetch(`${base}/api/v1/admin/protocol-configs`, {
+            headers: { Authorization: `Bearer ${login.token}` },
+          });
+          assert.equal(legacyProfilesResponse.status, 200);
+          const legacyProfiles = await legacyProfilesResponse.json();
+          assert.equal(legacyProfiles.length, 1);
+          const legacyProfile = legacyProfiles[0];
+          assert.equal(legacyProfile.id, 'cfg_legacy');
+          assert.equal(legacyProfile.serverHost, 'profile.example.test');
+
+          const createVmessProfileResponse = await fetch(`${base}/api/v1/admin/protocol-configs`, {
+            method: 'POST',
+            headers: adminHeaders,
+            body: JSON.stringify({
+              name: 'CI VMess TCP Profile',
+              serverHost: 'profile-vmess.example.test',
+              host: 'header-vmess.example.test',
+              sniHost: '',
+              protocol: 'vmess',
+              transport: 'raw',
+            }),
+          });
+          assert.equal(createVmessProfileResponse.status, 201);
+          const vmessProfile = (await createVmessProfileResponse.json()).config;
+          assert.equal(vmessProfile.protocol, 'vmess');
+          assert.equal(vmessProfile.transport, 'raw');
+          assert.equal(vmessProfile.serverPort, 10060);
+
+          const availableProfilesResponse = await fetch(`${base}/api/v1/admin/available-configs`, {
+            headers: { Authorization: `Bearer ${login.token}` },
+          });
+          assert.equal(availableProfilesResponse.status, 200);
+          const availableProfiles = await availableProfilesResponse.json();
+          assert.equal(availableProfiles.length, 2);
+          assert.ok(!('serverHost' in availableProfiles[0]), 'profile chooser must not expose destination IP/host');
+          assert.ok(!('host' in availableProfiles[0]), 'profile chooser must not expose HTTP Host');
+          assert.ok(!('sniHost' in availableProfiles[0]), 'profile chooser must not expose TLS SNI');
+
           const createA = await fetch(`${base}/api/v1/admin/tokens`, {
             method: 'POST',
             headers: adminHeaders,
-            body: JSON.stringify({ plan: 'CI Xray UUID A', bandwidthGb: 2, days: 1, deviceLimit: 2 }),
+            body: JSON.stringify({ plan: 'CI Xray UUID A', bandwidthGb: 2, days: 1, deviceLimit: 2, configurationId: legacyProfile.id }),
           });
           assert.equal(createA.status, 201);
           const licenceA = await createA.json();
@@ -242,7 +282,7 @@ jobs:
           const createB = await fetch(`${base}/api/v1/admin/tokens`, {
             method: 'POST',
             headers: adminHeaders,
-            body: JSON.stringify({ plan: 'CI Xray UUID B', bandwidthGb: 2, days: 1, deviceLimit: 1 }),
+            body: JSON.stringify({ plan: 'CI Xray UUID B', bandwidthGb: 2, days: 1, deviceLimit: 1, configurationId: legacyProfile.id }),
           });
           assert.equal(createB.status, 201);
           const licenceB = await createB.json();
@@ -254,6 +294,30 @@ jobs:
             body: JSON.stringify({ token: licenceB.token, deviceId: 'CI-B-DEVICE' }),
           });
           assert.equal(createdTokenValidation.status, 200);
+          const createC = await fetch(`${base}/api/v1/admin/tokens`, {
+            method: 'POST',
+            headers: adminHeaders,
+            body: JSON.stringify({ plan: 'CI VMess RAW', bandwidthGb: 2, days: 1, deviceLimit: 1, configurationId: vmessProfile.id }),
+          });
+          assert.equal(createC.status, 201);
+          const licenceC = await createC.json();
+          assert.equal(licenceC.configurationId, vmessProfile.id);
+          assert.equal(licenceC.configurationName, 'CI VMess TCP Profile');
+          assert.ok(!('configurationSnapshot' in licenceC), 'licence API must not expose private profile snapshot');
+
+          const tokenCValidation = await fetch(`${base}/api/v1/auth/token`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token: licenceC.token, deviceId: 'CI-C-DEVICE' }),
+          });
+          assert.equal(tokenCValidation.status, 200);
+          const configC = await tokenCValidation.json();
+          assert.equal(configC.serverConfig.protocol, 'vmess');
+          assert.equal(configC.serverConfig.transport, 'raw');
+          assert.equal(configC.serverConfig.address, 'profile-vmess.example.test');
+          assert.equal(configC.serverConfig.port, 10060);
+          assert.equal(configC.serverConfig.host, 'header-vmess.example.test');
+
           const configResponse = JSON.parse(fs.readFileSync(`${dataDir}/xray-config.json`, 'utf8'));
           assert.equal(configResponse.outbounds[0].tag, 'direct', 'default VPN traffic must egress through the direct outbound');
           assert.ok(configResponse.outbounds.some(outbound => outbound.tag === 'api'), 'Xray control API outbound must exist');
@@ -264,12 +328,15 @@ jobs:
           const xrayUsers = configResponse.inbounds[0].settings.users;
           assert.ok(xrayUsers.some(user => user.id === licenceA.clientUuid));
           assert.ok(xrayUsers.some(user => user.id === licenceB.clientUuid));
+          assert.ok(!xrayUsers.some(user => user.id === licenceC.clientUuid), 'a VMess RAW licence must not be added to the VLESS WS inbound');
 
           const vmessRawInbound = configResponse.inbounds.find(inbound => inbound.tag === 'vmess-raw-in');
           const vmessKcpInbound = configResponse.inbounds.find(inbound => inbound.tag === 'vmess-kcp-in');
           assert.ok(vmessRawInbound, 'VMess RAW/TCP inbound must be generated');
           assert.equal(vmessRawInbound.port, 10060);
           assert.equal(vmessRawInbound.streamSettings.network, 'raw');
+          assert.ok(vmessRawInbound.settings.users.some(user => user.id === licenceC.clientUuid), 'the assigned VMess RAW licence must be present in its own inbound');
+          assert.ok(!vmessRawInbound.settings.users.some(user => user.id === licenceA.clientUuid), 'VLESS WS licences must not be added to VMess RAW');
           assert.ok(vmessKcpInbound, 'VMess mKCP/UDP inbound must be generated');
           assert.equal(vmessKcpInbound.port, 10061);
           assert.equal(vmessKcpInbound.streamSettings.network, 'kcp');
