@@ -421,7 +421,8 @@ export default function App() {
           plan: newTokenPlan,
           bandwidthGb: Number(newTokenBandwidth),
           expiresAt: new Date(newTokenExpiryDate).toISOString(),
-          deviceLimit: Number(newTokenDeviceLimit)
+          deviceLimit: Number(newTokenDeviceLimit),
+          configurationId: newTokenConfigurationId
         })
       });
 
@@ -430,7 +431,7 @@ export default function App() {
         setTokenModalOpen(false);
         setNewTokenCode('');
         refreshData();
-        addLog(`[CLIENT TOKEN CREATE] Token client ${data.token} créé (${data.bandwidthGb} Go).`);
+        addLog(`[CLIENT TOKEN CREATE] Token client ${data.token} créé (${data.bandwidthGb} Go, profil ${data.configurationName || newTokenConfigurationId}).`);
       } else {
         setTokenCreationError(data.error || 'Erreur lors de la création du token');
       }
@@ -438,6 +439,25 @@ export default function App() {
       setTokenCreationError(err instanceof Error ? err.message : String(err));
     } finally {
       setTokenCreating(false);
+    }
+  };
+
+  const handleToggleTokenStatus = async (id: string, token: string, currentStatus: ClientToken['status']) => {
+    const nextStatus = currentStatus === 'active' ? 'revoked' : 'active';
+    const action = nextStatus === 'revoked' ? 'suspendre' : 'réactiver';
+    if (!confirm(`Voulez-vous ${action} le token ${token} ?`)) return;
+    try {
+      const response = await fetch(`/api/v1/admin/tokens/${id}/status`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
+        body: JSON.stringify({ status: nextStatus })
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || 'Modification du statut impossible.');
+      await refreshData();
+      addLog(`[TOKEN STATUS] Token ${token} : ${nextStatus}.`);
+    } catch (error) {
+      alert(error instanceof Error ? error.message : String(error));
     }
   };
 
@@ -737,6 +757,8 @@ export default function App() {
               onClick={() => {
                 setNewTokenCode('ABESS-' + Math.random().toString(36).substring(2, 8).toUpperCase());
                 setTokenCreationError(null);
+                setNewTokenConfigurationId(current => current && availableConfigs.some(config => config.id === current) ? current : (availableConfigs[0]?.id || ''));
+                setTokenCreationError(null);
                 setTokenModalOpen(true);
               }}
               className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-black font-black rounded-xl text-xs flex items-center gap-1.5 shadow-[0_0_15px_rgba(16,185,129,0.3)] transition"
@@ -881,7 +903,9 @@ export default function App() {
                 <button
                   onClick={() => {
                     setNewTokenCode('ABESS-' + Math.random().toString(36).substring(2, 8).toUpperCase());
-                    setTokenModalOpen(true);
+                    setNewTokenConfigurationId(current => current && availableConfigs.some(config => config.id === current) ? current : (availableConfigs[0]?.id || ''));
+                setTokenCreationError(null);
+                setTokenModalOpen(true);
                   }}
                   className="p-4 rounded-xl bg-black/60 border border-emerald-900/60 hover:border-emerald-500 text-left transition group"
                 >
@@ -1029,7 +1053,9 @@ export default function App() {
                   onClick={() => {
                     setNewTokenCode('ABESS-' + Math.random().toString(36).substring(2, 8).toUpperCase());
                     setTokenCreationError(null);
-                    setTokenModalOpen(true);
+                    setNewTokenConfigurationId(current => current && availableConfigs.some(config => config.id === current) ? current : (availableConfigs[0]?.id || ''));
+                setTokenCreationError(null);
+                setTokenModalOpen(true);
                   }}
                   className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-black font-black rounded-xl text-xs flex items-center gap-1.5 transition shrink-0"
                 >
@@ -1045,6 +1071,7 @@ export default function App() {
                     <tr className="border-b border-emerald-950 text-slate-500 text-[10px] uppercase">
                       <th className="py-2.5 px-3">Token Client</th>
                       <th className="py-2.5 px-3">Plan Commercial</th>
+                      <th className="py-2.5 px-3">Configuration</th>
                       {currentUser.role === 'SUPER_ADMIN' && <th className="py-2.5 px-3">Revendeur</th>}
                       <th className="py-2.5 px-3">Quota Go</th>
                       <th className="py-2.5 px-3">Consommé</th>
@@ -1069,6 +1096,7 @@ export default function App() {
                           </div>
                         </td>
                         <td className="py-3 px-3 text-slate-300">{token.plan}</td>
+                        <td className="py-3 px-3"><span className="text-cyan-200 font-semibold">{token.configurationName || 'Configuration historique'}</span></td>
                         {currentUser.role === 'SUPER_ADMIN' && (
                           <td className="py-3 px-3 text-cyan-400">{token.resellerName}</td>
                         )}
@@ -1081,9 +1109,11 @@ export default function App() {
                           <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
                             token.status === 'active'
                               ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
-                              : 'bg-red-500/20 text-red-300 border border-red-500/40'
+                              : token.status === 'revoked'
+                                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                                : 'bg-red-500/20 text-red-300 border border-red-500/40'
                           }`}>
-                            {token.status === 'active' ? 'ACTIF' : 'EXPIRÉ'}
+                            {token.status === 'active' ? 'ACTIF' : token.status === 'revoked' ? 'SUSPENDU' : token.status === 'quota_exceeded' ? 'QUOTA ÉPUISÉ' : 'EXPIRÉ'}
                           </span>
                         </td>
                         <td className="py-3 px-3 text-right">
@@ -1105,10 +1135,19 @@ export default function App() {
                               <Zap className="w-3.5 h-3.5 text-cyan-400" />
                             </button>
 
+                            {(token.status === 'active' || token.status === 'revoked') && (
+                              <button
+                                onClick={() => void handleToggleTokenStatus(token.id, token.token, token.status)}
+                                className={`p-1.5 rounded ${token.status === 'active' ? 'text-amber-300 hover:bg-amber-950/50' : 'text-emerald-300 hover:bg-emerald-950/50'}`}
+                                title={token.status === 'active' ? 'Suspendre le token sans le supprimer' : 'Réactiver le token'}
+                              >
+                                {token.status === 'active' ? <Lock className="w-3.5 h-3.5" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
+                              </button>
+                            )}
                             <button
                               onClick={() => handleDeleteToken(token.id, token.token)}
                               className="p-1.5 text-red-400 hover:text-red-300"
-                              title="Révoquer ce token"
+                              title="Supprimer définitivement ce token"
                             >
                               <Trash2 className="w-3.5 h-3.5" />
                             </button>
@@ -1505,6 +1544,25 @@ export default function App() {
                 />
               </div>
 
+              <div>
+                <label className="block text-slate-300 mb-1 font-bold">Configuration VPN associée</label>
+                <select
+                  value={newTokenConfigurationId}
+                  onChange={(e) => setNewTokenConfigurationId(e.target.value)}
+                  className="w-full bg-[#03060e] border border-cyan-900 rounded-xl px-3 py-2 text-cyan-200"
+                  required
+                  disabled={availableConfigs.length === 0}
+                >
+                  <option value="">Choisir une configuration…</option>
+                  {availableConfigs.map((config) => (
+                    <option key={config.id} value={config.id}>{config.name} — {config.protocol.toUpperCase()} / {config.transport.toUpperCase()} · {config.serverPort}</option>
+                  ))}
+                </select>
+                {availableConfigs.length === 0 && (
+                  <p className="mt-1 text-amber-300">Aucune configuration disponible. L’administrateur principal doit d’abord créer un profil dans Infrastructure.</p>
+                )}
+              </div>
+
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-slate-300 mb-1 font-bold">Quota Gigas (Go)</label>
@@ -1552,8 +1610,8 @@ export default function App() {
                 </button>
                 <button
                   type="submit"
-                  disabled={tokenCreating}
-                  className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-black font-black rounded-xl shadow"
+                  disabled={tokenCreating || !newTokenConfigurationId || availableConfigs.length === 0}
+                  className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-black font-black rounded-xl shadow disabled:opacity-50"
                 >
                   {tokenCreating ? 'Création...' : 'Valider & Déduire'}
                 </button>
