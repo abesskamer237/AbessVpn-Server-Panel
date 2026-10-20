@@ -593,14 +593,18 @@ function saveTokens(tokens: ClientToken[]) {
   syncXrayConfig(tokens);
 }
 
-// AES-256 Encryption Helper
+// Versioned authenticated encryption. The master key never leaves the server.
+// AES-256-GCM detects both disclosure attempts and any modification of the payload.
 function encryptConfig(plainJson: object, secret: string): string {
   const key = crypto.createHash('sha256').update(secret).digest();
-  const iv = crypto.randomBytes(16);
-  const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
-  let encrypted = cipher.update(JSON.stringify(plainJson), 'utf8', 'base64');
-  encrypted += cipher.final('base64');
-  return `abess://${iv.toString('base64')}.${encrypted}`;
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const encrypted = Buffer.concat([
+    cipher.update(JSON.stringify(plainJson), 'utf8'),
+    cipher.final()
+  ]);
+  const tag = cipher.getAuthTag();
+  return `abess://v2.${iv.toString('base64url')}.${tag.toString('base64url')}.${encrypted.toString('base64url')}`;
 }
 
 // Telemetry & metrics
@@ -1530,17 +1534,32 @@ async function startServer() {
 
     try {
       const linkPayload = link.slice('abess://'.length);
-      const separator = linkPayload.indexOf('.');
-      if (separator <= 0 || separator === linkPayload.length - 1) throw new Error('Invalid encrypted payload');
-      const iv = Buffer.from(linkPayload.slice(0, separator), 'base64');
-      const ciphertext = linkPayload.slice(separator + 1);
-      if (iv.length !== 16 || !ciphertext) throw new Error('Invalid IV or ciphertext');
-
       const masterConfig = loadMasterConfig();
       const key = crypto.createHash('sha256').update(masterConfig.secretPassphrase).digest();
-      const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
-      let plaintext = decipher.update(ciphertext, 'base64', 'utf8');
-      plaintext += decipher.final('utf8');
+      let plaintext: string;
+
+      if (linkPayload.startsWith('v2.')) {
+        // New links use AES-256-GCM with authentication; altered links fail closed.
+        const parts = linkPayload.split('.');
+        if (parts.length !== 4) throw new Error('Invalid v2 payload');
+        const iv = Buffer.from(parts[1], 'base64url');
+        const tag = Buffer.from(parts[2], 'base64url');
+        const ciphertext = Buffer.from(parts[3], 'base64url');
+        if (iv.length !== 12 || tag.length !== 16 || ciphertext.length === 0) throw new Error('Invalid v2 fields');
+        const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+        decipher.setAuthTag(tag);
+        plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8');
+      } else {
+        // Backward compatibility: existing AES-CBC links continue to import.
+        const separator = linkPayload.indexOf('.');
+        if (separator <= 0 || separator === linkPayload.length - 1) throw new Error('Invalid legacy payload');
+        const iv = Buffer.from(linkPayload.slice(0, separator), 'base64');
+        const ciphertext = linkPayload.slice(separator + 1);
+        if (iv.length !== 16 || !ciphertext) throw new Error('Invalid legacy IV or ciphertext');
+        const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
+        plaintext = decipher.update(ciphertext, 'base64', 'utf8') + decipher.final('utf8');
+      }
+
       const decoded = JSON.parse(plaintext) as { token?: unknown };
       if (typeof decoded.token !== 'string' || !decoded.token.trim()) throw new Error('Missing token in encrypted payload');
       validateMobileToken(req, res, decoded.token, req.body?.deviceId);
