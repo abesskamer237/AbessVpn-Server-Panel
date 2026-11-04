@@ -29,7 +29,15 @@ import {
   ExternalLink,
   DollarSign,
   TrendingUp,
-  FileKey
+  FileKey,
+  Sparkles,
+  RotateCcw,
+  FileText,
+  Download,
+  Upload,
+  Search,
+  Filter,
+  History
 } from 'lucide-react';
 
 interface UserSession {
@@ -73,8 +81,23 @@ interface ClientToken {
   lastSeenAt: string | null;
   lastSeenIp: string | null;
   status: 'active' | 'revoked' | 'expired' | 'quota_exceeded';
+  customerNote?: string;
+  customerContact?: string;
+  deviceIds?: string[];
   encryptedLink: string;
   createdAt: string;
+}
+
+interface TransactionLog {
+  id: string;
+  resellerId: string;
+  resellerName: string;
+  type: string;
+  amountGb: number;
+  balanceBefore: number;
+  balanceAfter: number;
+  note: string;
+  timestamp: string;
 }
 
 interface MasterConfig {
@@ -119,7 +142,7 @@ export default function App() {
   const [showPassword, setShowPassword] = useState<boolean>(false);
 
   // Active Tab
-  const [activeTab, setActiveTab] = useState<'overview' | 'resellers' | 'tokens' | 'infrastructure' | 'logs'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'resellers' | 'tokens' | 'transactions' | 'infrastructure' | 'logs'>('overview');
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   // Stats & Lists
@@ -163,6 +186,30 @@ export default function App() {
 
   // Display QR Code Modal
   const [qrModalToken, setQrModalToken] = useState<ClientToken | null>(null);
+
+  // Commercial Batch Generation State
+  const [batchModalOpen, setBatchModalOpen] = useState<boolean>(false);
+  const [batchCount, setBatchCount] = useState<number>(10);
+  const [batchGb, setBatchGb] = useState<number>(50);
+  const [batchDays, setBatchDays] = useState<number>(30);
+  const [batchDeviceLimit, setBatchDeviceLimit] = useState<number>(2);
+  const [batchVoucherPrefix, setBatchVoucherPrefix] = useState<string>('VIP');
+  const [batchNotePrefix, setBatchNotePrefix] = useState<string>('');
+  const [batchConfigId, setBatchConfigId] = useState<string>('');
+  const [batchLoading, setBatchLoading] = useState<boolean>(false);
+  const [batchError, setBatchError] = useState<string | null>(null);
+  const [batchResult, setBatchResult] = useState<ClientToken[] | null>(null);
+
+  // Single Token Customer Note
+  const [newTokenCustomerNote, setNewTokenCustomerNote] = useState<string>('');
+
+  // Search & Filter State
+  const [tokenSearchQuery, setTokenSearchQuery] = useState<string>('');
+  const [tokenStatusFilter, setTokenStatusFilter] = useState<'ALL' | 'active' | 'expired' | 'quota_exceeded' | 'revoked'>('ALL');
+
+  // Transaction Ledger State
+  const [transactions, setTransactions] = useState<TransactionLog[]>([]);
+  const [backupLoading, setBackupLoading] = useState<boolean>(false);
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState<string>('');
 
   // Server logs are populated by real actions; do not seed simulated startup status.
@@ -212,8 +259,11 @@ export default function App() {
       if (currentUser?.role === 'SUPER_ADMIN') {
         const resellersRes = await fetch('/api/v1/admin/resellers', { headers });
         if (resellersRes.ok) setResellers(await resellersRes.json());
-
       }
+
+      // Transactions Ledger
+      const txRes = await fetch('/api/v1/admin/transactions', { headers });
+      if (txRes.ok) setTransactions(await txRes.json());
     } catch {
       if (!masterConfig) {
         setConfigLoadError('Impossible de joindre l’API pour charger les données du panneau.');
@@ -425,6 +475,7 @@ export default function App() {
           expiresAt: new Date(newTokenExpiryDate).toISOString(),
           deviceLimit: Number(newTokenDeviceLimit),
           allowedDeviceId: newTokenAllowedDeviceId.trim() || undefined,
+          customerNote: newTokenCustomerNote.trim() || undefined,
           configurationId: newTokenConfigurationId
         })
       });
@@ -434,6 +485,7 @@ export default function App() {
         setTokenModalOpen(false);
         setNewTokenCode('');
         setNewTokenAllowedDeviceId('');
+        setNewTokenCustomerNote('');
         refreshData();
         addLog(`[CLIENT TOKEN CREATE] Token client ${data.token} créé (${data.bandwidthGb} Go, profil ${data.configurationName || newTokenConfigurationId}${data.allowedDeviceId ? ', ID lié' : ''}).`);
       } else {
@@ -463,6 +515,109 @@ export default function App() {
     } catch (error) {
       alert(error instanceof Error ? error.message : String(error));
     }
+  };
+
+  // 1-Click Reset Device Slots for customer
+  const handleResetDevices = async (id: string, token: string) => {
+    if (!confirm(`Réinitialiser les appareils pour le token ${token} ?\nLe client pourra alors activer son nouveau smartphone.`)) return;
+    try {
+      const res = await fetch(`/api/v1/admin/tokens/${id}/reset-devices`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${authToken}` }
+      });
+      const data = await res.json();
+      if (res.ok) {
+        alert(data.message || 'Appareils réinitialisés avec succès !');
+        refreshData();
+        addLog(`[DEVICE RESET] Token ${token} : appareils réinitialisés.`);
+      } else {
+        alert(data.error || 'Erreur lors de la réinitialisation.');
+      }
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  // Batch / Bulk Token Generator
+  const handleBatchTokenCreate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBatchLoading(true);
+    setBatchError(null);
+    try {
+      const res = await fetch('/api/v1/admin/tokens/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
+        body: JSON.stringify({
+          count: batchCount,
+          bandwidthGb: batchGb,
+          days: batchDays,
+          deviceLimit: batchDeviceLimit,
+          voucherPrefix: batchVoucherPrefix,
+          customerNotePrefix: batchNotePrefix,
+          configurationId: batchConfigId || (availableConfigs[0]?.id || '')
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setBatchResult(data.tokens);
+        refreshData();
+        addLog(`[BATCH CREATE] Lot de ${data.count} vouchers généré avec succès (${data.totalBandwidthGb} Go).`);
+      } else {
+        setBatchError(data.error || 'Erreur lors de la génération du lot.');
+      }
+    } catch (err: unknown) {
+      setBatchError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBatchLoading(false);
+    }
+  };
+
+  // Export Tokens to CSV
+  const exportTokensCsv = () => {
+    if (tokens.length === 0) {
+      alert('Aucune licence à exporter.');
+      return;
+    }
+    const headers = ['Token', 'Plan', 'Configuration', 'Revendeur', 'Quota_Go', 'Consomme_Go', 'Expiration', 'Statut', 'Appareils_Max', 'Note_Client', 'Lien_ABESS'];
+    const rows = tokens.map(t => [
+      `"${t.token}"`,
+      `"${t.plan || ''}"`,
+      `"${t.configurationName || ''}"`,
+      `"${t.resellerName || ''}"`,
+      t.bandwidthGb,
+      t.bandwidthUsedGb.toFixed(2),
+      `"${t.expiresAt}"`,
+      t.status,
+      t.deviceLimit,
+      `"${t.customerNote || ''}"`,
+      `"${t.encryptedLink || ''}"`
+    ]);
+    const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `abessvpn-licences-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // Download Backup
+  const handleDownloadBackup = () => {
+    const link = document.createElement('a');
+    link.href = '/api/v1/admin/backup';
+    link.setAttribute('download', `abessvpn-backup-${new Date().toISOString().slice(0, 10)}.json`);
+    fetch('/api/v1/admin/backup', {
+      headers: { 'Authorization': `Bearer ${authToken}` }
+    })
+      .then(res => res.blob())
+      .then(blob => {
+        const u = URL.createObjectURL(blob);
+        link.href = u;
+        link.click();
+        URL.revokeObjectURL(u);
+      })
+      .catch(() => alert('Erreur lors du téléchargement de la sauvegarde.'));
   };
 
   // Delete / Revoke Token
@@ -784,8 +939,9 @@ export default function App() {
                     { id: 'infrastructure', label: '🔒 Infrastructure Maître (Confidentiel)', icon: Database },
                   ]
                 : []),
-              { id: 'tokens', label: '🔑 Clients & Licences Générées', icon: Key },
-              { id: 'logs', label: '💻 Journal Serveur & Télémétrie', icon: Terminal },
+              { id: 'tokens', label: '🔑 Clients & Licences', icon: Key },
+              { id: 'transactions', label: '📜 Registre & Crédits', icon: History },
+              { id: 'logs', label: '💻 Journal & Télémétrie', icon: Terminal },
             ].map((tab) => {
               const Icon = tab.icon;
               const isActive = activeTab === tab.id;
@@ -1053,19 +1209,72 @@ export default function App() {
                   </p>
                 </div>
 
-                <button
-                  onClick={() => {
-                    setNewTokenCode('ABESS-' + Math.random().toString(36).substring(2, 8).toUpperCase());
-                    setTokenCreationError(null);
-                    setNewTokenConfigurationId(current => current && availableConfigs.some(config => config.id === current) ? current : (availableConfigs[0]?.id || ''));
-                setTokenCreationError(null);
-                setTokenModalOpen(true);
-                  }}
-                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-black font-black rounded-xl text-xs flex items-center gap-1.5 transition shrink-0"
-                >
-                  <Plus className="w-4 h-4" />
-                  <span>Créer un Token Client</span>
-                </button>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    onClick={exportTokensCsv}
+                    className="px-3 py-2 bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700 font-bold rounded-xl text-xs flex items-center gap-1.5 transition shrink-0"
+                    title="Télécharger la liste au format CSV"
+                  >
+                    <FileText className="w-4 h-4 text-slate-400" />
+                    <span>Export CSV</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setBatchModalOpen(true);
+                      setBatchError(null);
+                      setBatchResult(null);
+                      setBatchConfigId(availableConfigs[0]?.id || '');
+                    }}
+                    className="px-3.5 py-2 bg-cyan-500 hover:bg-cyan-400 text-black font-black rounded-xl text-xs flex items-center gap-1.5 transition shrink-0 shadow-[0_0_15px_rgba(6,182,212,0.3)]"
+                  >
+                    <Sparkles className="w-4 h-4" />
+                    <span>Génération en Masse (Vouchers)</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setNewTokenCode('ABESS-' + Math.random().toString(36).substring(2, 8).toUpperCase());
+                      setTokenCreationError(null);
+                      setNewTokenConfigurationId(current => current && availableConfigs.some(config => config.id === current) ? current : (availableConfigs[0]?.id || ''));
+                      setNewTokenCustomerNote('');
+                      setTokenModalOpen(true);
+                    }}
+                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-black font-black rounded-xl text-xs flex items-center gap-1.5 transition shrink-0"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>Créer un Token Client</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Search & Filter Toolbar */}
+              <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center justify-between bg-[#040812] p-3 rounded-xl border border-emerald-950">
+                <div className="relative flex-1">
+                  <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+                  <input
+                    type="text"
+                    value={tokenSearchQuery}
+                    onChange={(e) => setTokenSearchQuery(e.target.value)}
+                    placeholder="Filtrer par code token, client, note, ou revendeur..."
+                    className="w-full bg-black/60 border border-emerald-950/80 rounded-lg pl-9 pr-3 py-1.5 text-slate-200 placeholder-slate-600 focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
+                <div className="flex items-center gap-1 overflow-x-auto text-[11px]">
+                  {(['ALL', 'active', 'expired', 'quota_exceeded', 'revoked'] as const).map(statusKey => (
+                    <button
+                      key={statusKey}
+                      onClick={() => setTokenStatusFilter(statusKey)}
+                      className={`px-2.5 py-1 rounded-md font-bold transition whitespace-nowrap ${
+                        tokenStatusFilter === statusKey
+                          ? 'bg-emerald-500 text-black'
+                          : 'text-slate-400 hover:text-white bg-slate-900/60'
+                      }`}
+                    >
+                      {statusKey === 'ALL' ? 'Tous' : statusKey === 'active' ? 'Actifs' : statusKey === 'expired' ? 'Expirés' : statusKey === 'quota_exceeded' ? 'Quota Atteint' : 'Suspendus'}
+                    </button>
+                  ))}
+                </div>
               </div>
 
               {/* Tokens Table */}
@@ -1085,7 +1294,19 @@ export default function App() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-emerald-950/60">
-                    {tokens.map((token) => (
+                    {tokens
+                    .filter(t => {
+                      if (tokenStatusFilter !== 'ALL' && t.status !== tokenStatusFilter) return false;
+                      if (!tokenSearchQuery.trim()) return true;
+                      const q = tokenSearchQuery.toLowerCase().trim();
+                      return (
+                        t.token.toLowerCase().includes(q) ||
+                        (t.customerNote && t.customerNote.toLowerCase().includes(q)) ||
+                        (t.resellerName && t.resellerName.toLowerCase().includes(q)) ||
+                        (t.plan && t.plan.toLowerCase().includes(q))
+                      );
+                    })
+                    .map((token) => (
                       <tr key={token.id} className="hover:bg-emerald-950/20 transition">
                         <td className="py-3 px-3 font-bold text-emerald-300">
                           <div className="flex items-center gap-1.5">
@@ -1098,6 +1319,12 @@ export default function App() {
                               {copiedKey === token.id ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
                             </button>
                           </div>
+                          {token.customerNote && (
+                            <div className="text-[10px] text-amber-300/90 font-sans mt-0.5 flex items-center gap-1">
+                              <span>👤</span>
+                              <span>{token.customerNote}</span>
+                            </div>
+                          )}
                         </td>
                         <td className="py-3 px-3 text-slate-300">{token.plan}</td>
                         <td className="py-3 px-3">
@@ -1140,6 +1367,14 @@ export default function App() {
                               title="Afficher QR Code"
                             >
                               <Zap className="w-3.5 h-3.5 text-cyan-400" />
+                            </button>
+
+                            <button
+                              onClick={() => handleResetDevices(token.id, token.token)}
+                              className="p-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-700 rounded text-cyan-400 hover:text-cyan-300"
+                              title="Réinitialiser les appareils liés à ce client (changement de téléphone)"
+                            >
+                              <RotateCcw className="w-3.5 h-3.5" />
                             </button>
 
                             {(token.status === 'active' || token.status === 'revoked') && (
@@ -1307,6 +1542,90 @@ export default function App() {
         )}
 
         {/* ========================================================================= */}
+        
+        {/* ========================================================================= */}
+        {/* TAB: AUDIT LEDGER & TRANSACTIONS */}
+        {/* ========================================================================= */}
+        {activeTab === 'transactions' && (
+          <div className="space-y-6 animate-fade-in font-mono text-xs">
+            <div className="p-6 rounded-2xl bg-[#060c18] border border-emerald-900/80 shadow-xl space-y-4">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-3 border-b border-emerald-950">
+                <div>
+                  <h2 className="text-base font-bold text-white flex items-center gap-2">
+                    <History className="w-5 h-5 text-emerald-400" />
+                    <span>Registre des Transactions &amp; Audit de Crédits</span>
+                  </h2>
+                  <p className="text-slate-400 text-xs mt-0.5">
+                    Historique complet et infalsifiable des recharges, créations de licences et déductions de solde.
+                  </p>
+                </div>
+                <button
+                  onClick={refreshData}
+                  className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-slate-300 rounded-lg flex items-center gap-1.5 border border-slate-700"
+                >
+                  <RefreshCw className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Actualiser</span>
+                </button>
+              </div>
+
+              {transactions.length === 0 ? (
+                <div className="py-12 text-center text-slate-500">
+                  Aucune transaction enregistrée pour le moment.
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left">
+                    <thead>
+                      <tr className="border-b border-emerald-950 text-slate-500 text-[10px] uppercase">
+                        <th className="py-2.5 px-3">Date &amp; Heure</th>
+                        <th className="py-2.5 px-3">Revendeur</th>
+                        <th className="py-2.5 px-3">Opération</th>
+                        <th className="py-2.5 px-3">Volume (Go)</th>
+                        <th className="py-2.5 px-3">Solde Avant / Après</th>
+                        <th className="py-2.5 px-3">Détails &amp; Note</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-emerald-950/60">
+                      {transactions.map(tx => (
+                        <tr key={tx.id} className="hover:bg-emerald-950/20 transition">
+                          <td className="py-3 px-3 text-slate-400 whitespace-nowrap">
+                            {new Date(tx.timestamp).toLocaleString()}
+                          </td>
+                          <td className="py-3 px-3 font-bold text-cyan-300">
+                            {tx.resellerName}
+                          </td>
+                          <td className="py-3 px-3">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                              tx.type === 'CREDIT_ADD'
+                                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                                : tx.type === 'BATCH_CREATE'
+                                  ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40'
+                                  : tx.type === 'RESET_DEVICES'
+                                    ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                                    : 'bg-slate-800 text-slate-300'
+                            }`}>
+                              {tx.type}
+                            </span>
+                          </td>
+                          <td className="py-3 px-3 font-bold text-white">
+                            {tx.amountGb > 0 ? `${tx.amountGb} Go` : '-'}
+                          </td>
+                          <td className="py-3 px-3 text-slate-300 font-mono">
+                            {tx.balanceBefore} Go → <span className="text-emerald-400 font-bold">{tx.balanceAfter} Go</span>
+                          </td>
+                          <td className="py-3 px-3 text-slate-400">
+                            {tx.note}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* TAB 5: SYSTEM LOGS & TELEMETRY */}
         {activeTab === 'logs' && (
           <div className="space-y-6 animate-fade-in font-mono text-xs">
@@ -1542,6 +1861,19 @@ export default function App() {
               </div>
 
               <div>
+                <label className="block text-slate-300 mb-1 font-bold">Nom / Référence Client (Facultatif)</label>
+                <input
+                  type="text"
+                  value={newTokenCustomerNote}
+                  onChange={(e) => setNewTokenCustomerNote(e.target.value)}
+                  placeholder="Ex. Client Paul - Yaoundé - 695140419"
+                  maxLength={100}
+                  className="w-full bg-[#03060e] border border-emerald-950 rounded-xl px-3 py-2 text-slate-200"
+                />
+                <p className="mt-1 text-[10px] text-slate-500">Permet d'associer un nom ou contact client à ce token dans la table de gestion.</p>
+              </div>
+
+              <div>
                 <label className="block text-slate-300 mb-1">Nom du Plan Commercial</label>
                 <input
                   type="text"
@@ -1646,6 +1978,200 @@ export default function App() {
       )}
 
       {/* ========================================================================= */}
+      
+      {/* ========================================================================= */}
+      {/* MODAL: BATCH / BULK TOKEN GENERATION (COMMERCIAL VOUCHERS) */}
+      {/* ========================================================================= */}
+      {batchModalOpen && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="w-full max-w-2xl bg-[#060c18] border border-cyan-500/40 rounded-3xl p-6 shadow-2xl space-y-4 font-mono text-xs max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-2 border-b border-cyan-950">
+              <h3 className="text-base font-bold text-white flex items-center gap-2">
+                <Sparkles className="w-5 h-5 text-cyan-400" />
+                <span>Génération en Masse de Vouchers / Cartes d'Accès</span>
+              </h3>
+              <button onClick={() => setBatchModalOpen(false)} className="text-slate-500 hover:text-white">✕</button>
+            </div>
+
+            {batchError && (
+              <div className="p-3 bg-red-950/40 border border-red-500/50 rounded-xl text-red-300 text-xs flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 text-red-400 shrink-0" />
+                <span>{batchError}</span>
+              </div>
+            )}
+
+            {!batchResult ? (
+              <form onSubmit={handleBatchTokenCreate} className="space-y-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-slate-300 mb-1 font-bold">Nombre de Licences à Générer</label>
+                    <input
+                      type="number"
+                      value={batchCount}
+                      onChange={(e) => setBatchCount(Math.min(200, Math.max(1, Number(e.target.value))))}
+                      className="w-full bg-[#03060e] border border-cyan-950 rounded-xl px-3 py-2 text-cyan-300 font-bold text-sm"
+                      min="1"
+                      max="200"
+                      required
+                    />
+                    <p className="text-[10px] text-slate-500 mt-1">Maximum : 200 par lot.</p>
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-300 mb-1 font-bold">Quota par Licence (Go)</label>
+                    <input
+                      type="number"
+                      value={batchGb}
+                      onChange={(e) => setBatchGb(Math.max(1, Number(e.target.value)))}
+                      className="w-full bg-[#03060e] border border-cyan-950 rounded-xl px-3 py-2 text-cyan-300 font-bold text-sm"
+                      min="1"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div className="p-3 rounded-xl bg-cyan-950/20 border border-cyan-900/60 flex items-center justify-between text-xs">
+                  <span className="text-slate-400">Total crédits déduits :</span>
+                  <span className="text-cyan-400 font-bold text-sm">
+                    {batchCount * batchGb} Go
+                    {currentUser.role === 'RESELLER' && (
+                      <span className="text-slate-500 font-normal ml-2">
+                        (Votre solde : {currentUser.credits} Go)
+                      </span>
+                    )}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-slate-300 mb-1 font-bold">Validité (Jours)</label>
+                    <input
+                      type="number"
+                      value={batchDays}
+                      onChange={(e) => setBatchDays(Math.max(1, Number(e.target.value)))}
+                      className="w-full bg-[#03060e] border border-cyan-950 rounded-xl px-3 py-2 text-slate-200"
+                      min="1"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-slate-300 mb-1 font-bold">Limite Appareils</label>
+                    <input
+                      type="number"
+                      value={batchDeviceLimit}
+                      onChange={(e) => setBatchDeviceLimit(Math.max(1, Math.min(10, Number(e.target.value))))}
+                      className="w-full bg-[#03060e] border border-cyan-950 rounded-xl px-3 py-2 text-slate-200"
+                      min="1"
+                      max="10"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-slate-300 mb-1 font-bold">Préfixe Code</label>
+                    <input
+                      type="text"
+                      value={batchVoucherPrefix}
+                      onChange={(e) => setBatchVoucherPrefix(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))}
+                      placeholder="VIP"
+                      className="w-full bg-[#03060e] border border-cyan-950 rounded-xl px-3 py-2 text-cyan-300 font-bold"
+                      maxLength={8}
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-slate-300 mb-1 font-bold">Configuration / Serveur Associé</label>
+                  <select
+                    value={batchConfigId}
+                    onChange={(e) => setBatchConfigId(e.target.value)}
+                    className="w-full bg-[#03060e] border border-cyan-950 rounded-xl px-3 py-2 text-cyan-200"
+                  >
+                    {availableConfigs.map(c => (
+                      <option key={c.id} value={c.id}>
+                        {c.name} ({c.protocol.toUpperCase()} / {c.transport.toUpperCase()})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-slate-300 mb-1 font-bold">Préfixe Note Client (Facultatif)</label>
+                  <input
+                    type="text"
+                    value={batchNotePrefix}
+                    onChange={(e) => setBatchNotePrefix(e.target.value)}
+                    placeholder="Ex: Lot Cyber Vente N°1"
+                    className="w-full bg-[#03060e] border border-cyan-950 rounded-xl px-3 py-2 text-slate-200"
+                  />
+                </div>
+
+                <div className="pt-2 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setBatchModalOpen(false)}
+                    className="flex-1 py-2.5 bg-slate-900 hover:bg-slate-800 text-slate-300 rounded-xl"
+                  >
+                    Annuler
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={batchLoading}
+                    className="flex-1 py-2.5 bg-cyan-500 hover:bg-cyan-400 text-black font-black rounded-xl shadow disabled:opacity-50"
+                  >
+                    {batchLoading ? 'Génération du lot...' : `Générer ${batchCount} Vouchers (${batchCount * batchGb} Go)`}
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <div className="space-y-4">
+                <div className="p-3 rounded-xl bg-emerald-950/40 border border-emerald-500/40 text-emerald-300 flex items-center justify-between">
+                  <span className="font-bold">✅ {batchResult.length} Vouchers générés avec succès !</span>
+                  <button
+                    onClick={() => {
+                      const allLinks = batchResult.map(t => `${t.token} : ${t.encryptedLink}`).join('\n');
+                      navigator.clipboard.writeText(allLinks);
+                      alert('Tous les liens ont été copiés dans le presse-papier !');
+                    }}
+                    className="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-black font-bold rounded-lg text-xs flex items-center gap-1"
+                  >
+                    <Copy className="w-3.5 h-3.5" />
+                    <span>Copier Tout</span>
+                  </button>
+                </div>
+
+                <div className="max-h-60 overflow-y-auto space-y-2 pr-1">
+                  {batchResult.map((t, idx) => (
+                    <div key={t.id} className="p-2.5 bg-black/60 rounded-xl border border-cyan-950 flex items-center justify-between gap-2">
+                      <div>
+                        <span className="text-slate-500 text-[10px] mr-2">#{idx + 1}</span>
+                        <span className="font-bold text-cyan-300">{t.token}</span>
+                        <span className="text-slate-400 text-[10px] ml-2">({t.bandwidthGb} Go • {t.days}j)</span>
+                      </div>
+                      <button
+                        onClick={() => copyToClipboard(t.encryptedLink, `batch_${t.id}`)}
+                        className="px-2 py-1 bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 rounded text-[10px] flex items-center gap-1"
+                      >
+                        {copiedKey === `batch_${t.id}` ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                        <span>{copiedKey === `batch_${t.id}` ? 'Copié' : 'Copier Lien'}</span>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+
+                <button
+                  onClick={() => {
+                    setBatchResult(null);
+                    setBatchModalOpen(false);
+                  }}
+                  className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 text-slate-200 font-bold rounded-xl"
+                >
+                  Fermer
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* MODAL: QR CODE DISPLAY FOR CLIENT */}
       {/* ========================================================================= */}
       {qrModalToken && (

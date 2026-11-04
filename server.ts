@@ -20,10 +20,67 @@ const usersFile = path.resolve(dataDir, 'users.json');
 const tokensFile = path.resolve(dataDir, 'tokens.json');
 const configFile = path.resolve(dataDir, 'config.json');
 const protocolConfigsFile = path.resolve(dataDir, 'protocol-configs.json');
+const transactionsFile = path.resolve(dataDir, 'transactions.json');
+const backupsDir = path.resolve(dataDir, 'backups');
+if (!fs.existsSync(backupsDir)) {
+  fs.mkdirSync(backupsDir, { recursive: true });
+}
+
 const xrayConfigFile = process.env.XRAY_CONFIG_PATH || path.resolve(dataDir, 'xray-config.json');
 const xrayStatusFile = process.env.XRAY_STATUS_FILE || path.resolve(dataDir, 'xray-ready');
 const xrayStatsFile = process.env.XRAY_STATS_FILE || path.resolve(dataDir, 'xray-stats.json');
 const xrayUsageStateFile = process.env.XRAY_USAGE_STATE_FILE || path.resolve(dataDir, 'xray-usage-state.json');
+
+// Atomic File Persistence Helper
+function writeJsonAtomically(filePath: string, value: unknown): boolean {
+  const contents = JSON.stringify(value, null, 2) + '\n';
+  if (fs.existsSync(filePath)) {
+    try {
+      if (fs.readFileSync(filePath, 'utf8') === contents) return false;
+    } catch {
+      // Rewrite an unreadable or incomplete file atomically.
+    }
+  }
+  const tempPath = `${filePath}.${process.pid}.${Math.random().toString(36).substring(2, 7)}.tmp`;
+  fs.writeFileSync(tempPath, contents, { encoding: 'utf8', mode: 0o640 });
+  fs.renameSync(tempPath, filePath);
+  return true;
+}
+
+// Commercial Transaction & Audit Log
+export interface TransactionLog {
+  id: string;
+  resellerId: string;
+  resellerName: string;
+  type: 'CREDIT_ADD' | 'TOKEN_CREATE' | 'BATCH_CREATE' | 'TOKEN_REVOKE' | 'RESET_DEVICES';
+  amountGb: number;
+  balanceBefore: number;
+  balanceAfter: number;
+  note: string;
+  timestamp: string;
+}
+
+function loadTransactions(): TransactionLog[] {
+  if (fs.existsSync(transactionsFile)) {
+    try {
+      return JSON.parse(fs.readFileSync(transactionsFile, 'utf8')) as TransactionLog[];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+function logTransaction(tx: Omit<TransactionLog, 'id' | 'timestamp'>): void {
+  const list = loadTransactions();
+  list.unshift({
+    id: `tx_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+    ...tx,
+    timestamp: new Date().toISOString()
+  });
+  if (list.length > 1000) list.length = 1000;
+  writeJsonAtomically(transactionsFile, list);
+}
 
 // Interfaces
 export interface AppUser {
@@ -65,6 +122,9 @@ export interface ClientToken {
   configurationName?: string;
   /** Immutable server-side profile snapshot keeps existing licences stable after profile edits. */
   configurationSnapshot?: ProtocolConfig;
+  /** Optional customer name or contact information for reseller management */
+  customerNote?: string;
+  customerContact?: string;
   encryptedLink: string;
   createdAt: string;
 }
@@ -171,7 +231,7 @@ function loadMasterConfig(): MasterServerConfig {
   return defaults;
 }
 function saveMasterConfig(cfg: MasterServerConfig) {
-  fs.writeFileSync(configFile, JSON.stringify(cfg, null, 2), 'utf8');
+  writeJsonAtomically(configFile, cfg);
 }
 
 // User Storage with Initial Super Admin
@@ -233,7 +293,7 @@ function loadUsers(): AppUser[] {
   return initial;
 }
 function saveUsers(users: AppUser[]) {
-  fs.writeFileSync(usersFile, JSON.stringify(users, null, 2), 'utf8');
+  writeJsonAtomically(usersFile, users);
 }
 
 // Tokens Storage
@@ -263,20 +323,7 @@ function loadTokens(): ClientToken[] {
   fs.writeFileSync(tokensFile, JSON.stringify(initial, null, 2), 'utf8');
   return initial;
 }
-function writeJsonAtomically(filePath: string, value: unknown) {
-  const contents = JSON.stringify(value, null, 2) + '\n';
-  if (fs.existsSync(filePath)) {
-    try {
-      if (fs.readFileSync(filePath, 'utf8') === contents) return false;
-    } catch {
-      // Rewrite an unreadable or incomplete file atomically.
-    }
-  }
-  const tempPath = `${filePath}.${process.pid}.tmp`;
-  fs.writeFileSync(tempPath, contents, { encoding: 'utf8', mode: 0o640 });
-  fs.renameSync(tempPath, filePath);
-  return true;
-}
+
 
 function xrayUserEmail(token: ClientToken): string {
   return 'abess-' + token.id.replace(/[^a-zA-Z0-9_.@-]/g, '_');
@@ -589,7 +636,7 @@ function reconcileXrayUsage(): boolean {
 }
 
 function saveTokens(tokens: ClientToken[]) {
-  fs.writeFileSync(tokensFile, JSON.stringify(tokens, null, 2), 'utf8');
+  writeJsonAtomically(tokensFile, tokens);
   syncXrayConfig(tokens);
 }
 
@@ -612,8 +659,60 @@ let activeTunnelConnections = 0;
 let totalBytesTransferred = 0;
 const startTime = Date.now();
 
-// Sessions in memory for token authentication
-const activeSessions = new Map<string, { userId: string; role: string; email: string }>();
+// Sessions in memory for token authentication with TTL (24h)
+export interface SessionData {
+  userId: string;
+  role: string;
+  email: string;
+  createdAt: number;
+}
+const activeSessions = new Map<string, SessionData>();
+
+// Anti-Brute-Force Rate Limiting for Authentication
+const loginAttempts = new Map<string, { count: number; blockedUntil: number }>();
+
+function checkLoginRateLimit(ip: string): { allowed: boolean; remainingSec?: number } {
+  const now = Date.now();
+  const record = loginAttempts.get(ip);
+  if (record) {
+    if (record.blockedUntil > now) {
+      return { allowed: false, remainingSec: Math.ceil((record.blockedUntil - now) / 1000) };
+    }
+    if (record.blockedUntil > 0 && now >= record.blockedUntil) {
+      loginAttempts.delete(ip);
+    }
+  }
+  return { allowed: true };
+}
+
+function recordLoginAttempt(ip: string, success: boolean): void {
+  const now = Date.now();
+  if (success) {
+    loginAttempts.delete(ip);
+    return;
+  }
+  const record = loginAttempts.get(ip) || { count: 0, blockedUntil: 0 };
+  record.count += 1;
+  if (record.count >= 5) {
+    record.blockedUntil = now + 15 * 60 * 1000; // 15 minutes ban
+  }
+  loginAttempts.set(ip, record);
+}
+
+// Periodic TTL session and rate limiter cleanup
+setInterval(() => {
+  const now = Date.now();
+  for (const [token, session] of activeSessions.entries()) {
+    if (now - session.createdAt > 24 * 3600 * 1000) {
+      activeSessions.delete(token);
+    }
+  }
+  for (const [ip, record] of loginAttempts.entries()) {
+    if (record.blockedUntil > 0 && now >= record.blockedUntil) {
+      loginAttempts.delete(ip);
+    }
+  }
+}, 60 * 60 * 1000);
 
 async function startServer() {
   const vpnDomain = process.env.VPN_DOMAIN?.trim();
@@ -787,6 +886,12 @@ async function startServer() {
       return;
     }
 
+    if (Date.now() - session.createdAt > 24 * 3600 * 1000) {
+      activeSessions.delete(token);
+      res.status(401).json({ error: 'Session expirée (délai de 24h dépassé). Veuillez vous reconnecter.' });
+      return;
+    }
+
     const users = loadUsers();
     const user = users.find(u => u.id === session.userId && u.status === 'active');
     if (!user) {
@@ -802,6 +907,18 @@ async function startServer() {
   // 1. AUTHENTICATION & LOGIN (Admin & Reseller)
   // ==========================================
   app.post('/api/v1/auth/login', (req, res) => {
+    const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim()
+      || req.socket.remoteAddress
+      || 'unknown';
+
+    const rateCheck = checkLoginRateLimit(clientIp);
+    if (!rateCheck.allowed) {
+      res.status(429).json({
+        error: `Trop de tentatives échouées. Veuillez patienter ${rateCheck.remainingSec}s avant de réessayer.`
+      });
+      return;
+    }
+
     const { email, password } = req.body;
     if (!email || !password) {
       res.status(400).json({ error: 'Email et mot de passe requis' });
@@ -811,6 +928,7 @@ async function startServer() {
     const users = loadUsers();
     const user = users.find(u => u.email.toLowerCase().trim() === String(email).toLowerCase().trim());
     if (!user || !verifyPassword(String(password), user.passwordHash)) {
+      recordLoginAttempt(clientIp, false);
       res.status(401).json({ error: 'Identifiants incorrects (Email ou mot de passe invalide)' });
       return;
     }
@@ -818,6 +936,8 @@ async function startServer() {
       res.status(403).json({ error: 'Ce compte a été suspendu par l\'administrateur principal.' });
       return;
     }
+
+    recordLoginAttempt(clientIp, true);
 
     // Upgrade credentials created by older releases after the first successful login.
     if (!user.passwordHash.startsWith('scrypt' + String.fromCharCode(36))) {
@@ -827,7 +947,12 @@ async function startServer() {
     saveUsers(users);
 
     const sessionToken = 'sess_' + crypto.randomBytes(32).toString('hex');
-    activeSessions.set(sessionToken, { userId: user.id, role: user.role, email: user.email });
+    activeSessions.set(sessionToken, {
+      userId: user.id,
+      role: user.role,
+      email: user.email,
+      createdAt: Date.now()
+    });
     res.json({
       success: true,
       token: sessionToken,
@@ -931,8 +1056,19 @@ async function startServer() {
       return;
     }
 
+    const prev = reseller.credits;
     reseller.credits = Math.max(0, reseller.credits + amount);
     saveUsers(users);
+
+    logTransaction({
+      resellerId: reseller.id,
+      resellerName: reseller.name,
+      type: 'CREDIT_ADD',
+      amountGb: amount,
+      balanceBefore: prev,
+      balanceAfter: reseller.credits,
+      note: req.body?.note || `Recharge de ${amount} Go par ${user.name}`
+    });
 
     res.json({
       success: true,
@@ -1062,6 +1198,9 @@ async function startServer() {
       res.status(503).json({ error: 'Le secret maître est absent ou invalide; aucune licence n’a été créée.' });
       return;
     }
+    const customerNote = req.body?.customerNote?.toString()?.trim() || undefined;
+    const customerContact = req.body?.customerContact?.toString()?.trim() || undefined;
+
     const encryptedPayload = {
       vpnName: 'AbessVpn', token: finalToken, bandwidthGb: requestedGb,
       expiresAt: calculatedExpiresAt, allowedDeviceId: allowedDeviceId || undefined,
@@ -1080,6 +1219,7 @@ async function startServer() {
       plan: String(plan || `${requestedGb} GO CYBER VIP`).trim().slice(0, 80),
       bandwidthGb: requestedGb, bandwidthUsedGb: 0, expiresAt: calculatedExpiresAt, days: daysRemaining,
       deviceLimit: clientLimit, deviceIds: [], allowedDeviceId: allowedDeviceId || undefined,
+      customerNote, customerContact,
       connectionCount: 0, lastSeenAt: null, lastSeenIp: null,
       status: 'active', configurationId: profile.id, configurationName: profile.name,
       configurationSnapshot: publicProtocolConfig(profile), encryptedLink, createdAt: new Date().toISOString()
@@ -1089,12 +1229,252 @@ async function startServer() {
     const users = loadUsers();
     const currentUser = users.find(u => u.id === user.id);
     if (currentUser) {
+      const prevCredits = currentUser.credits;
       if (user.role === 'RESELLER') currentUser.credits = Math.max(0, currentUser.credits - requestedGb);
       currentUser.totalTokensCreated = (currentUser.totalTokensCreated || 0) + 1;
       currentUser.totalBandwidthAllocatedGb = (currentUser.totalBandwidthAllocatedGb || 0) + requestedGb;
       saveUsers(users);
+
+      logTransaction({
+        resellerId: user.id,
+        resellerName: user.name,
+        type: 'TOKEN_CREATE',
+        amountGb: requestedGb,
+        balanceBefore: prevCredits,
+        balanceAfter: currentUser.credits,
+        note: `Création du token ${finalToken} (${requestedGb} Go)`
+      });
     }
     res.status(201).json(safeClientToken(newToken));
+  });
+
+  // Batch / Bulk Token Generation for commercial vouchers & scratch cards
+  app.post('/api/v1/admin/tokens/batch', authenticate, (req, res) => {
+    const user: AppUser = (req as any).user;
+    const count = Math.min(200, Math.max(1, Number(req.body?.count) || 5));
+    const requestedGb = Math.max(1, Number(req.body?.bandwidthGb) || 50);
+    const days = Math.max(1, Number(req.body?.days) || 30);
+    const clientLimit = Math.max(1, Math.min(10, Math.floor(Number(req.body?.deviceLimit) || 2)));
+    const voucherPrefix = (req.body?.voucherPrefix?.toString()?.trim() || 'VIP').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const plan = req.body?.plan?.toString()?.trim() || `${requestedGb} GO CYBER VIP`;
+    const customerNotePrefix = req.body?.customerNotePrefix?.toString()?.trim() || '';
+
+    const totalRequiredGb = requestedGb * count;
+
+    if (user.role === 'RESELLER' && user.credits < totalRequiredGb) {
+      res.status(400).json({
+        error: `Crédits insuffisants pour ce lot ! Requis : ${totalRequiredGb} Go (${count} x ${requestedGb} Go). Votre solde : ${user.credits} Go.`
+      });
+      return;
+    }
+
+    const configs = loadProtocolConfigs();
+    const configId = typeof req.body?.configurationId === 'string' ? req.body.configurationId.trim() : '';
+    const profile = (configId ? configs.find(c => c.id === configId) : null) || configs[0] || legacyProtocolConfig();
+    if (!profile) {
+      res.status(400).json({ error: 'Aucun protocole de connexion configuré.' });
+      return;
+    }
+
+    const masterSecret = process.env.MASTER_SECRET || loadMasterConfig().secretPassphrase;
+    if (!masterSecret || masterSecret.length < 32) {
+      res.status(503).json({ error: 'Le secret maître est absent ou invalide.' });
+      return;
+    }
+
+    const calculatedExpiresAt = new Date(Date.now() + days * 24 * 3600 * 1000).toISOString();
+    const daysRemaining = days;
+    const tokens = loadTokens();
+    const createdTokens: ClientToken[] = [];
+
+    for (let i = 0; i < count; i++) {
+      const randomSuffix = crypto.randomBytes(3).toString('hex').toUpperCase();
+      const finalToken = `ABESS-${voucherPrefix}-${randomSuffix}`;
+      const clientUuid = crypto.randomUUID();
+
+      const encryptedPayload = {
+        vpnName: 'AbessVpn', token: finalToken, bandwidthGb: requestedGb,
+        expiresAt: calculatedExpiresAt,
+        configurationId: profile.id, configurationName: profile.name,
+        serverHost: profile.serverHost, host: profile.host || profile.serverHost,
+        serverPort: xrayPublicPort(profile.protocol, profile.transport, profile.serverPort),
+        path: xrayProfilePath(profile.protocol as XrayProtocol, profile.transport as XrayTransport, profile.path),
+        sniHost: profile.sniHost, uuid: clientUuid, protocol: profile.protocol, transport: profile.transport,
+        security: ['native', 'raw', 'kcp'].includes(profile.transport) ? 'none' : 'tls'
+      };
+      const encryptedLink = encryptConfig(encryptedPayload, masterSecret);
+
+      const newToken: ClientToken = {
+        id: 'tok_' + crypto.randomUUID().slice(0, 8),
+        token: finalToken,
+        clientUuid,
+        resellerId: user.id,
+        resellerName: user.name,
+        plan,
+        bandwidthGb: requestedGb,
+        bandwidthUsedGb: 0,
+        expiresAt: calculatedExpiresAt,
+        days: daysRemaining,
+        deviceLimit: clientLimit,
+        deviceIds: [],
+        customerNote: customerNotePrefix ? `${customerNotePrefix} #${i + 1}` : undefined,
+        connectionCount: 0,
+        lastSeenAt: null,
+        lastSeenIp: null,
+        status: 'active',
+        configurationId: profile.id,
+        configurationName: profile.name,
+        configurationSnapshot: publicProtocolConfig(profile),
+        encryptedLink,
+        createdAt: new Date().toISOString()
+      };
+
+      createdTokens.push(newToken);
+      tokens.unshift(newToken);
+    }
+
+    saveTokens(tokens);
+
+    const users = loadUsers();
+    const currentUser = users.find(u => u.id === user.id);
+    if (currentUser) {
+      const prevCredits = currentUser.credits;
+      if (user.role === 'RESELLER') {
+        currentUser.credits = Math.max(0, currentUser.credits - totalRequiredGb);
+      }
+      currentUser.totalTokensCreated = (currentUser.totalTokensCreated || 0) + count;
+      currentUser.totalBandwidthAllocatedGb = (currentUser.totalBandwidthAllocatedGb || 0) + totalRequiredGb;
+      saveUsers(users);
+
+      logTransaction({
+        resellerId: user.id,
+        resellerName: user.name,
+        type: 'BATCH_CREATE',
+        amountGb: totalRequiredGb,
+        balanceBefore: prevCredits,
+        balanceAfter: currentUser.credits,
+        note: `Création de lot de ${count} vouchers (${requestedGb} Go chacun)`
+      });
+    }
+
+    res.status(201).json({
+      success: true,
+      count,
+      totalBandwidthGb: totalRequiredGb,
+      tokens: createdTokens.map(safeClientToken)
+    });
+  });
+
+  // 1-Click Device Slot Reset for customers who replaced or wiped their phone
+  app.post('/api/v1/admin/tokens/:id/reset-devices', authenticate, (req, res) => {
+    const user: AppUser = (req as any).user;
+    const tokens = loadTokens();
+    const target = tokens.find(item => item.id === req.params.id);
+    if (!target) {
+      res.status(404).json({ error: 'Token introuvable.' });
+      return;
+    }
+    if (user.role !== 'SUPER_ADMIN' && target.resellerId !== user.id) {
+      res.status(403).json({ error: 'Vous ne pouvez réinitialiser que vos propres licences.' });
+      return;
+    }
+
+    const previousCount = target.deviceIds ? target.deviceIds.length : 0;
+    target.deviceIds = [];
+    target.allowedDeviceId = undefined;
+    saveTokens(tokens);
+
+    logTransaction({
+      resellerId: user.id,
+      resellerName: user.name,
+      type: 'RESET_DEVICES',
+      amountGb: 0,
+      balanceBefore: user.credits,
+      balanceAfter: user.credits,
+      note: `Réinitialisation des appareils pour le token ${target.token} (${previousCount} appareil(s) libéré(s))`
+    });
+
+    res.json({
+      success: true,
+      token: target.token,
+      message: `Tous les appareils liés à la licence ${target.token} ont été réinitialisés avec succès.`
+    });
+  });
+
+  // Transaction Ledger (Audit trail for recharges & token creation)
+  app.get('/api/v1/admin/transactions', authenticate, (req, res) => {
+    const user: AppUser = (req as any).user;
+    const all = loadTransactions();
+    if (user.role === 'SUPER_ADMIN') {
+      res.json(all);
+    } else {
+      res.json(all.filter(t => t.resellerId === user.id));
+    }
+  });
+
+  // 1-Click System Backup Export (Super Admin only)
+  app.get('/api/v1/admin/backup', authenticate, (req, res) => {
+    const user: AppUser = (req as any).user;
+    if (user.role !== 'SUPER_ADMIN') {
+      res.status(403).json({ error: 'Accès réservé au Super Administrateur.' });
+      return;
+    }
+
+    const backupData = {
+      timestamp: new Date().toISOString(),
+      version: '2.5.0-commercial',
+      masterConfig: loadMasterConfig(),
+      protocolConfigs: loadProtocolConfigs(),
+      users: loadUsers().map(u => ({ ...u, passwordHash: u.passwordHash })),
+      tokens: loadTokens(),
+      transactions: loadTransactions()
+    };
+
+    const dateStr = new Date().toISOString().slice(0, 10);
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', `attachment; filename="abessvpn-backup-${dateStr}.json"`);
+    res.send(JSON.stringify(backupData, null, 2));
+  });
+
+  // System Backup Restore (Super Admin only)
+  app.post('/api/v1/admin/backup/restore', authenticate, (req, res) => {
+    const user: AppUser = (req as any).user;
+    if (user.role !== 'SUPER_ADMIN') {
+      res.status(403).json({ error: 'Accès réservé au Super Administrateur.' });
+      return;
+    }
+
+    const payload = req.body;
+    if (!payload || !Array.isArray(payload.users) || !Array.isArray(payload.tokens)) {
+      res.status(400).json({ error: 'Fichier de sauvegarde invalide (structure users/tokens manquante).' });
+      return;
+    }
+
+    // Safety snapshot before restoring
+    const safetyBackupPath = path.resolve(backupsDir, `pre-restore-${Date.now()}.json`);
+    const currentSnapshot = {
+      timestamp: new Date().toISOString(),
+      masterConfig: loadMasterConfig(),
+      protocolConfigs: loadProtocolConfigs(),
+      users: loadUsers(),
+      tokens: loadTokens(),
+      transactions: loadTransactions()
+    };
+    writeJsonAtomically(safetyBackupPath, currentSnapshot);
+
+    // Apply restore
+    if (payload.masterConfig) saveMasterConfig(payload.masterConfig);
+    if (Array.isArray(payload.protocolConfigs)) saveProtocolConfigs(payload.protocolConfigs);
+    saveUsers(payload.users);
+    saveTokens(payload.tokens);
+    if (Array.isArray(payload.transactions)) writeJsonAtomically(transactionsFile, payload.transactions);
+
+    res.json({
+      success: true,
+      message: 'Sauvegarde restaurée avec succès. Un instantané de sécurité a été créé.',
+      usersCount: payload.users.length,
+      tokensCount: payload.tokens.length
+    });
   });
 
   // Suspend/reactivate a licence without deleting its audit history.
