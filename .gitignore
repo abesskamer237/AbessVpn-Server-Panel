@@ -11,3 +11,7 @@ coverage/
 data/*
 !data/african-countries.json
 !data/.gitkeep
+
+# Large distribution binaries served locally
+static/*.exe
+static/*.apk

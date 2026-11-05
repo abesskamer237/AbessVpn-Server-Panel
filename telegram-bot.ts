@@ -18,7 +18,8 @@ import type {
   AppVersionConfig,
   ServerUpdateStatus,
   PricingPlan,
-  MembershipRequest
+  MembershipRequest,
+  Announcement
 } from './server.js';
 
 export interface TelegramBotContext {
@@ -46,6 +47,8 @@ export interface TelegramBotContext {
   safeClientToken: (token: ClientToken) => any;
   loadAppVersionConfig: () => AppVersionConfig;
   saveAppVersionConfig: (config: AppVersionConfig) => void;
+  loadAnnouncements?: () => Announcement[];
+  saveAnnouncements?: (announcements: Announcement[]) => void;
   getServerUpdateStatus: () => Promise<ServerUpdateStatus>;
   executeServerUpdate: () => Promise<{ success: boolean; output: string; currentCommit: string }>;
   xrayStatusFile: string;
@@ -1616,6 +1619,91 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
       await sendMessage(chatId, getVersionMenuText(), {
         reply_markup: getVersionMenuKeyboard()
       });
+      return;
+    }
+
+    if (text === '/announcements' || text === '/annonces') {
+      if (!ctx.loadAnnouncements) {
+        await sendMessage(chatId, '❌ Système d\'annonces non configuré.');
+        return;
+      }
+      const list = ctx.loadAnnouncements();
+      if (!list.length) {
+        await sendMessage(chatId, '📢 *AUCUNE ANNONCE ACTIVE*\n\nUtilisez `/announce <Titre> | <Message> | [TYPE] | [URL]` pour en créer une.');
+        return;
+      }
+      let msg = `📢 *GESTION DES ANNONCES EN DIRECT (${list.length})*\n\n`;
+      list.slice(0, 5).forEach((a, i) => {
+        msg += `*${i + 1}. ${a.title}*\n` +
+          `• Type : \`${a.type}\` | Cible : \`${a.targetPlatform}\`\n` +
+          `• Statut : *${a.isActive ? '🟢 ACTIF' : '🔴 DÉSACTIVÉ'}*\n` +
+          `• Obligatoire : ${a.isMandatory ? '⚠️ OUI' : 'NON'}\n` +
+          `• Message : _${a.message.substring(0, 80)}..._\n\n`;
+      });
+      await sendMessage(chatId, msg, {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '⬅️ Menu Principal', callback_data: 'menu_main' }]
+          ]
+        }
+      });
+      return;
+    }
+
+    if (text.startsWith('/announce')) {
+      if (!ctx.loadAnnouncements || !ctx.saveAnnouncements) {
+        await sendMessage(chatId, '❌ Système d\'annonces indisponible.');
+        return;
+      }
+      const raw = text.replace('/announce', '').trim();
+      const parts = raw.split('|').map(p => p.trim());
+      if (parts.length < 2) {
+        await sendMessage(chatId, 'ℹ️ *Syntaxe de publication d\'annonce :*\n\n' +
+          '`/announce Titre | Message | [TYPE] | [URL_ACTION] | [PLATEFORME: ALL/ANDROID/WINDOWS]`\n\n' +
+          '_Exemple :_\n' +
+          '`/announce ⚡ Maintenance Nocturne | Nouveaux serveurs VLESS ajoutés | INFO | https://t.me/Abess_Vpn | ALL`');
+        return;
+      }
+
+      const title = parts[0];
+      const message = parts[1];
+      const type = (parts[2] && ['INFO', 'WARNING', 'CRITICAL', 'PROMO', 'UPDATE'].includes(parts[2].toUpperCase()))
+        ? parts[2].toUpperCase() as any
+        : 'INFO';
+      const actionUrl = parts[3] || 'https://t.me/Abess_Vpn';
+      const platform = (parts[4] && ['ALL', 'ANDROID', 'WINDOWS'].includes(parts[4].toUpperCase()))
+        ? parts[4].toUpperCase() as any
+        : 'ALL';
+
+      const isMandatory = type === 'CRITICAL';
+      const newAnn: Announcement = {
+        id: `ann-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        title,
+        message,
+        type,
+        targetPlatform: platform,
+        isMandatory,
+        dismissible: !isMandatory,
+        actionButtonText: 'Consulter / Agir',
+        actionButtonUrl: actionUrl,
+        publishedAt: new Date().toISOString(),
+        isActive: true,
+        priority: isMandatory ? 100 : 10,
+        showMode: isMandatory ? 'EVERY_LAUNCH' : 'ONCE_PER_USER',
+        createdBy: msg.from?.username || msg.from?.first_name || 'Telegram Admin'
+      };
+
+      const existing = ctx.loadAnnouncements();
+      existing.unshift(newAnn);
+      ctx.saveAnnouncements(existing);
+
+      await sendMessage(chatId, `✅ *ANNONCE PUBLIÉE SUR TOUT LE RÉSEAU !*\n\n` +
+        `• *Titre :* ${title}\n` +
+        `• *Type :* \`${type}\`\n` +
+        `• *Plateforme :* \`${platform}\`\n` +
+        `• *Obligatoire :* *${isMandatory ? 'OUI (Bloquante)' : 'NON'}*\n` +
+        `• *Action :* \`${actionUrl}\`\n\n` +
+        `_L'annonce s'affichera instantanément sur l'écran des utilisateurs sur Android et Windows._`);
       return;
     }
 

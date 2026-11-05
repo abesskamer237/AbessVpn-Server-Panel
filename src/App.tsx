@@ -46,8 +46,29 @@ import {
   Radio,
   CheckCheck,
   XCircle,
-  Globe
+  Globe,
+  Megaphone,
+  Bell
 } from 'lucide-react';
+
+interface Announcement {
+  id: string;
+  title: string;
+  message: string;
+  type: 'INFO' | 'WARNING' | 'CRITICAL' | 'PROMO' | 'UPDATE';
+  targetPlatform: 'ALL' | 'ANDROID' | 'WINDOWS';
+  isMandatory: boolean;
+  dismissible: boolean;
+  actionButtonText?: string;
+  actionButtonUrl?: string;
+  bannerImageUrl?: string;
+  publishedAt: string;
+  expiresAt?: string;
+  isActive: boolean;
+  priority: number;
+  showMode: 'EVERY_LAUNCH' | 'ONCE_PER_USER';
+  createdBy?: string;
+}
 
 interface UserSession {
   id: string;
@@ -233,8 +254,22 @@ export default function App() {
   const [showPassword, setShowPassword] = useState<boolean>(false);
 
   // Active Tab
-  const [activeTab, setActiveTab] = useState<'overview' | 'resellers' | 'tokens' | 'plans' | 'requests' | 'diagnostics' | 'transactions' | 'infrastructure' | 'logs'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'resellers' | 'tokens' | 'plans' | 'requests' | 'diagnostics' | 'transactions' | 'infrastructure' | 'logs' | 'announcements'>('overview');
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+  // Announcements State
+  const [announcements, setAnnouncements] = useState<Announcement[]>([]);
+  const [announcementModalOpen, setAnnouncementModalOpen] = useState<boolean>(false);
+  const [annTitle, setAnnTitle] = useState<string>('');
+  const [annMessage, setAnnMessage] = useState<string>('');
+  const [annType, setAnnType] = useState<'INFO' | 'WARNING' | 'CRITICAL' | 'PROMO' | 'UPDATE'>('INFO');
+  const [annPlatform, setAnnPlatform] = useState<'ALL' | 'ANDROID' | 'WINDOWS'>('ALL');
+  const [annIsMandatory, setAnnIsMandatory] = useState<boolean>(false);
+  const [annBtnText, setAnnBtnText] = useState<string>('En savoir plus');
+  const [annBtnUrl, setAnnBtnUrl] = useState<string>('https://t.me/Abess_Vpn');
+  const [annShowMode, setAnnShowMode] = useState<'EVERY_LAUNCH' | 'ONCE_PER_USER'>('ONCE_PER_USER');
+  const [annLoading, setAnnLoading] = useState<boolean>(false);
+  const [previewAnnouncement, setPreviewAnnouncement] = useState<Announcement | null>(null);
 
   // Stats & Lists
   const [stats, setStats] = useState<any>(null);
@@ -426,6 +461,12 @@ export default function App() {
 
         const diagRes = await fetch('/api/v1/system/diagnostics', { headers });
         if (diagRes.ok) setDiagnostics(await diagRes.json());
+
+        const annRes = await fetch('/api/v1/admin/announcements', { headers });
+        if (annRes.ok) {
+          const annData = await annRes.json();
+          setAnnouncements(annData.announcements || []);
+        }
       }
     } catch {
       if (!masterConfig) {
@@ -1123,6 +1164,100 @@ export default function App() {
     }
   };
 
+  // Announcements Handlers
+  const fetchAnnouncements = async () => {
+    if (!authToken || currentUser?.role !== 'SUPER_ADMIN') return;
+    try {
+      const res = await fetch('/api/v1/admin/announcements', {
+        headers: { 'Authorization': `Bearer ${authToken}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setAnnouncements(data.announcements || []);
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleCreateAnnouncement = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!annTitle.trim() || !annMessage.trim()) return;
+    setAnnLoading(true);
+    try {
+      const res = await fetch('/api/v1/admin/announcements', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${authToken}`
+        },
+        body: JSON.stringify({
+          title: annTitle.trim(),
+          message: annMessage.trim(),
+          type: annType,
+          targetPlatform: annPlatform,
+          isMandatory: annIsMandatory,
+          actionButtonText: annBtnText.trim() || undefined,
+          actionButtonUrl: annBtnUrl.trim() || undefined,
+          showMode: annShowMode,
+          priority: annIsMandatory ? 100 : 10
+        })
+      });
+      if (res.ok) {
+        setAnnouncementModalOpen(false);
+        setAnnTitle('');
+        setAnnMessage('');
+        setAnnType('INFO');
+        setAnnPlatform('ALL');
+        setAnnIsMandatory(false);
+        setAnnBtnText('En savoir plus');
+        setAnnBtnUrl('https://t.me/Abess_Vpn');
+        setAnnShowMode('ONCE_PER_USER');
+        await fetchAnnouncements();
+        addLog(`[ANNONCE PUBLIÉE] "${annTitle}" diffusée vers ${annPlatform}`);
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setAnnLoading(false);
+    }
+  };
+
+  const handleToggleAnnouncement = async (id: string, currentActive: boolean) => {
+    try {
+      const res = await fetch(`/api/v1/admin/announcements/${id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${authToken}`
+        },
+        body: JSON.stringify({ isActive: !currentActive })
+      });
+      if (res.ok) {
+        await fetchAnnouncements();
+        addLog(`[ANNONCE STATUT] ${id} -> ${!currentActive ? 'ACTIVÉE' : 'DÉSACTIVÉE'}`);
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleDeleteAnnouncement = async (id: string, title: string) => {
+    if (!confirm(`Supprimer définitivement l'annonce "${title}" ?`)) return;
+    try {
+      const res = await fetch(`/api/v1/admin/announcements/${id}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${authToken}` }
+      });
+      if (res.ok) {
+        await fetchAnnouncements();
+        addLog(`[ANNONCE SUPPRIMÉE] "${title}"`);
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   // ==========================================
   // LOGIN SCREEN
   // ==========================================
@@ -1336,6 +1471,11 @@ export default function App() {
                       icon: PhoneCall
                     },
                     { id: 'diagnostics', label: '🩺 Diagnostics & Sonde', icon: Gauge },
+                    {
+                      id: 'announcements',
+                      label: `📢 Annonces Réseau${announcements.filter(a => a.isActive).length > 0 ? ` (${announcements.filter(a => a.isActive).length})` : ''}`,
+                      icon: Megaphone
+                    },
                   ]
                 : []),
               { id: 'transactions', label: '📜 Registre & Crédits', icon: History },
@@ -2682,6 +2822,208 @@ export default function App() {
             </div>
           </div>
         )}
+
+        {/* ========================================================================= */}
+        {/* TAB: ANNOUNCEMENTS MANAGEMENT (ANDROID & WINDOWS NETWORK BROADCAST) */}
+        {/* ========================================================================= */}
+        {activeTab === 'announcements' && currentUser.role === 'SUPER_ADMIN' && (
+          <div className="space-y-6">
+            {/* Header / Actions Card */}
+            <div className="bg-[#060c18] border border-emerald-900/80 p-5 rounded-2xl shadow-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <Megaphone className="w-5 h-5 text-emerald-400" />
+                  <h2 className="text-base font-bold text-white tracking-wide">
+                    Système d'Annonces & Push Popups Multi-Plateformes (AbessVpn)
+                  </h2>
+                </div>
+                <p className="text-slate-400 text-xs">
+                  Diffusez des alertes en temps réel sur l'écran des utilisateurs de l'application Android et du logiciel Windows.
+                  Les annonces obligatoires bloquent l'écran jusqu'à acquittement par l'utilisateur.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setAnnouncementModalOpen(true)}
+                  className="px-4 py-2.5 bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-black font-black rounded-xl text-xs flex items-center gap-2 shadow-[0_0_20px_rgba(16,185,129,0.35)] transition cursor-pointer"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Diffuser une Nouvelle Annonce</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Quick Metrics */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="bg-[#060c18] border border-emerald-900/80 p-4 rounded-2xl space-y-2">
+                <div className="flex items-center justify-between text-slate-400 text-[10px] font-bold uppercase">
+                  <span>Total Annonces Créées</span>
+                  <Megaphone className="w-4 h-4 text-emerald-400" />
+                </div>
+                <div className="text-2xl font-black text-white">{announcements.length}</div>
+                <div className="text-[10px] text-slate-400">Historique et annonces actives</div>
+              </div>
+
+              <div className="bg-[#060c18] border border-cyan-900/80 p-4 rounded-2xl space-y-2">
+                <div className="flex items-center justify-between text-slate-400 text-[10px] font-bold uppercase">
+                  <span>En Diffusion Directe</span>
+                  <Radio className="w-4 h-4 text-cyan-400" />
+                </div>
+                <div className="text-2xl font-black text-cyan-300">
+                  {announcements.filter(a => a.isActive).length}
+                </div>
+                <div className="text-[10px] text-slate-400">Reçues instantanément sur Android & Windows</div>
+              </div>
+
+              <div className="bg-[#060c18] border border-red-900/80 p-4 rounded-2xl space-y-2">
+                <div className="flex items-center justify-between text-slate-400 text-[10px] font-bold uppercase">
+                  <span>Annonces Bloquantes / Critiques</span>
+                  <AlertTriangle className="w-4 h-4 text-red-400" />
+                </div>
+                <div className="text-2xl font-black text-red-400">
+                  {announcements.filter(a => a.isMandatory && a.isActive).length}
+                </div>
+                <div className="text-[10px] text-slate-400">Écran forcé jusqu'à validation</div>
+              </div>
+            </div>
+
+            {/* Announcements List */}
+            <div className="space-y-4">
+              {announcements.length === 0 ? (
+                <div className="bg-[#060c18] border border-emerald-950 p-8 rounded-2xl text-center space-y-3">
+                  <Megaphone className="w-10 h-10 text-slate-600 mx-auto" />
+                  <p className="text-slate-400 text-sm">Aucune annonce n'a encore été diffusée sur le réseau.</p>
+                  <button
+                    onClick={() => setAnnouncementModalOpen(true)}
+                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-black font-bold rounded-xl text-xs inline-flex items-center gap-1.5"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>Créer la Première Annonce</span>
+                  </button>
+                </div>
+              ) : (
+                announcements.map((ann) => {
+                  const typeColors = {
+                    CRITICAL: 'border-red-500/60 bg-red-950/20 shadow-[0_0_20px_rgba(239,68,68,0.15)] text-red-300',
+                    WARNING: 'border-amber-500/60 bg-amber-950/20 text-amber-300',
+                    PROMO: 'border-purple-500/60 bg-purple-950/20 shadow-[0_0_20px_rgba(168,85,247,0.15)] text-purple-300',
+                    UPDATE: 'border-blue-500/60 bg-blue-950/20 text-blue-300',
+                    INFO: 'border-emerald-500/60 bg-emerald-950/20 text-emerald-300'
+                  };
+                  const badgeColors = {
+                    CRITICAL: 'bg-red-500/20 border-red-500/40 text-red-300',
+                    WARNING: 'bg-amber-500/20 border-amber-500/40 text-amber-300',
+                    PROMO: 'bg-purple-500/20 border-purple-500/40 text-purple-300',
+                    UPDATE: 'bg-blue-500/20 border-blue-500/40 text-blue-300',
+                    INFO: 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
+                  };
+
+                  return (
+                    <div
+                      key={ann.id}
+                      className={`p-5 rounded-2xl border transition-all ${
+                        ann.isActive ? typeColors[ann.type] : 'border-slate-800 bg-[#060c18]/50 opacity-60'
+                      } space-y-3 font-mono`}
+                    >
+                      {/* Top Badges & Status */}
+                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/5 pb-3">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black border uppercase ${badgeColors[ann.type]}`}>
+                            {ann.type === 'CRITICAL' && '⚠️ '}
+                            {ann.type === 'WARNING' && '⚡ '}
+                            {ann.type === 'PROMO' && '🎁 '}
+                            {ann.type === 'UPDATE' && '🚀 '}
+                            {ann.type === 'INFO' && 'ℹ️ '}
+                            {ann.type}
+                          </span>
+
+                          <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-slate-900 border border-slate-700 text-slate-300">
+                            {ann.targetPlatform === 'ALL' && '🌐 Android + Windows'}
+                            {ann.targetPlatform === 'ANDROID' && '📱 Android uniquement'}
+                            {ann.targetPlatform === 'WINDOWS' && '💻 Windows PC uniquement'}
+                          </span>
+
+                          {ann.isMandatory && (
+                            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-red-600/30 border border-red-500 text-red-200 animate-pulse">
+                              🔒 OBLIGATOIRE (Écran Bloqué)
+                            </span>
+                          )}
+
+                          <span className="px-2.5 py-0.5 rounded-full text-[10px] bg-slate-900 text-slate-400">
+                            {ann.showMode === 'EVERY_LAUNCH' ? '🔁 À chaque lancement' : '1️⃣ Une seule fois'}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => handleToggleAnnouncement(ann.id, ann.isActive)}
+                            className={`px-3 py-1 rounded-lg text-[10px] font-black transition cursor-pointer ${
+                              ann.isActive
+                                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/30'
+                                : 'bg-slate-800 text-slate-400 border border-slate-700 hover:bg-slate-700'
+                            }`}
+                          >
+                            {ann.isActive ? '🟢 ACTIF (En diffusion)' : '🔴 DÉSACTIVÉ'}
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Title & Body */}
+                      <div className="space-y-1.5">
+                        <h3 className="text-base font-black text-white">{ann.title}</h3>
+                        <p className="text-slate-300 text-xs leading-relaxed whitespace-pre-wrap">{ann.message}</p>
+                      </div>
+
+                      {/* Action Button Link Preview */}
+                      {ann.actionButtonText && ann.actionButtonUrl && (
+                        <div className="p-2.5 rounded-xl bg-black/40 border border-white/10 flex items-center justify-between text-xs">
+                          <span className="text-slate-400 text-[11px] flex items-center gap-1.5">
+                            <ExternalLink className="w-3.5 h-3.5 text-cyan-400" />
+                            Bouton d'action : <strong className="text-white">{ann.actionButtonText}</strong>
+                          </span>
+                          <a
+                            href={ann.actionButtonUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-cyan-400 hover:underline text-[10px] truncate max-w-xs"
+                          >
+                            {ann.actionButtonUrl}
+                          </a>
+                        </div>
+                      )}
+
+                      {/* Footer Actions */}
+                      <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-white/5 text-[10px] text-slate-500">
+                        <span>
+                          Publié le {new Date(ann.publishedAt).toLocaleString('fr-FR')} par {ann.createdBy || 'Super Admin'}
+                        </span>
+
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => setPreviewAnnouncement(ann)}
+                            className="px-2.5 py-1 rounded bg-cyan-950/40 border border-cyan-500/40 text-cyan-300 hover:bg-cyan-900/60 transition cursor-pointer flex items-center gap-1"
+                          >
+                            <Eye className="w-3 h-3" />
+                            <span>Aperçu Écran Utilisateur</span>
+                          </button>
+
+                          <button
+                            onClick={() => handleDeleteAnnouncement(ann.id, ann.title)}
+                            className="px-2.5 py-1 rounded bg-red-950/40 border border-red-500/40 text-red-300 hover:bg-red-900/60 transition cursor-pointer flex items-center gap-1"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                            <span>Supprimer</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        )}
       </main>
 
       {/* ========================================================================= */}
@@ -3466,6 +3808,231 @@ export default function App() {
                 Fermer
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL: CREATE NEW ANNOUNCEMENT */}
+      {/* ========================================================================= */}
+      {announcementModalOpen && (
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-4">
+          <div className="w-full max-w-xl bg-[#060c18] border border-emerald-900 rounded-3xl p-6 shadow-2xl space-y-4 font-mono text-xs max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-emerald-950">
+              <div className="flex items-center gap-2">
+                <Megaphone className="w-5 h-5 text-emerald-400" />
+                <h3 className="text-base font-bold text-white">
+                  Diffuser une Nouvelle Annonce Réseau
+                </h3>
+              </div>
+              <button onClick={() => setAnnouncementModalOpen(false)} className="text-slate-500 hover:text-white text-base">✕</button>
+            </div>
+
+            <form onSubmit={handleCreateAnnouncement} className="space-y-4">
+              <div>
+                <label className="block text-slate-300 mb-1 font-bold">Titre de l'Annonce *</label>
+                <input
+                  type="text"
+                  value={annTitle}
+                  onChange={(e) => setAnnTitle(e.target.value)}
+                  placeholder="ex: ⚡ Maintenance Serveur ou 🎁 Promo Forfait Illimité"
+                  className="w-full bg-[#03060e] border border-emerald-950 rounded-xl px-3 py-2 text-white font-sans text-sm focus:border-emerald-400 focus:outline-none"
+                  required
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-slate-300 mb-1 font-bold">Type d'Annonce</label>
+                  <select
+                    value={annType}
+                    onChange={(e) => setAnnType(e.target.value as any)}
+                    className="w-full bg-[#03060e] border border-emerald-950 rounded-xl px-3 py-2 text-white"
+                  >
+                    <option value="INFO">ℹ️ Information Générale</option>
+                    <option value="PROMO">🎁 Promotion / Offre Commerciale</option>
+                    <option value="UPDATE">🚀 Nouvelle Version Disponible</option>
+                    <option value="WARNING">⚡ Avertissement Réseau</option>
+                    <option value="CRITICAL">⚠️ Critique (Bloquante / Urgente)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-slate-300 mb-1 font-bold">Plateforme Destinataire</label>
+                  <select
+                    value={annPlatform}
+                    onChange={(e) => setAnnPlatform(e.target.value as any)}
+                    className="w-full bg-[#03060e] border border-emerald-950 rounded-xl px-3 py-2 text-white"
+                  >
+                    <option value="ALL">🌐 Tous les Utilisateurs (Android + Windows)</option>
+                    <option value="ANDROID">📱 Application Android uniquement</option>
+                    <option value="WINDOWS">💻 Logiciel Windows PC uniquement</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-slate-300 mb-1 font-bold">Message Complet *</label>
+                <textarea
+                  value={annMessage}
+                  onChange={(e) => setAnnMessage(e.target.value)}
+                  placeholder="Rédigez le texte clair de l'annonce qui s'affichera au premier plan sur l'écran..."
+                  rows={4}
+                  className="w-full bg-[#03060e] border border-emerald-950 rounded-xl px-3 py-2 text-white font-sans text-sm focus:border-emerald-400 focus:outline-none"
+                  required
+                />
+              </div>
+
+              <div className="p-3 bg-black/40 rounded-xl border border-emerald-950 space-y-3">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    id="isMandatory"
+                    checked={annIsMandatory}
+                    onChange={(e) => setAnnIsMandatory(e.target.checked)}
+                    className="w-4 h-4 rounded text-emerald-500 focus:ring-0 bg-[#03060e] border-slate-700"
+                  />
+                  <label htmlFor="isMandatory" className="text-slate-200 font-bold cursor-pointer">
+                    Annonce Obligatoire / Bloquante (Force l'utilisateur à voir et cliquer avant de continuer)
+                  </label>
+                </div>
+
+                <div>
+                  <label className="block text-slate-400 text-[11px] mb-1">Fréquence d'Affichage :</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setAnnShowMode('ONCE_PER_USER')}
+                      className={`p-2 rounded-lg border text-left transition ${
+                        annShowMode === 'ONCE_PER_USER'
+                          ? 'border-emerald-500 bg-emerald-950/30 text-emerald-300 font-bold'
+                          : 'border-slate-800 text-slate-400 hover:bg-slate-900'
+                      }`}
+                    >
+                      1️⃣ Une seule fois par utilisateur
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAnnShowMode('EVERY_LAUNCH')}
+                      className={`p-2 rounded-lg border text-left transition ${
+                        annShowMode === 'EVERY_LAUNCH'
+                          ? 'border-emerald-500 bg-emerald-950/30 text-emerald-300 font-bold'
+                          : 'border-slate-800 text-slate-400 hover:bg-slate-900'
+                      }`}
+                    >
+                      🔁 À chaque ouverture de l'application
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Action Button Settings */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 bg-black/40 rounded-xl border border-emerald-950">
+                <div>
+                  <label className="block text-slate-300 mb-1 text-[11px] font-bold">
+                    Texte du Bouton d'Action (Optionnel)
+                  </label>
+                  <input
+                    type="text"
+                    value={annBtnText}
+                    onChange={(e) => setAnnBtnText(e.target.value)}
+                    placeholder="ex: Mettre à jour, Voir l'offre, Ouvrir Telegram"
+                    className="w-full bg-[#03060e] border border-emerald-950 rounded-xl px-3 py-2 text-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-slate-300 mb-1 text-[11px] font-bold">
+                    Lien / URL du Bouton (Optionnel)
+                  </label>
+                  <input
+                    type="url"
+                    value={annBtnUrl}
+                    onChange={(e) => setAnnBtnUrl(e.target.value)}
+                    placeholder="https://t.me/Abess_Vpn"
+                    className="w-full bg-[#03060e] border border-emerald-950 rounded-xl px-3 py-2 text-white"
+                  />
+                </div>
+              </div>
+
+              <div className="pt-2 flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setAnnouncementModalOpen(false)}
+                  className="flex-1 py-2.5 bg-slate-900 hover:bg-slate-800 text-slate-300 rounded-xl font-bold cursor-pointer"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  disabled={annLoading}
+                  className="flex-1 py-2.5 bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-black font-black rounded-xl shadow-[0_0_20px_rgba(16,185,129,0.3)] transition cursor-pointer flex items-center justify-center gap-2"
+                >
+                  <Megaphone className={`w-4 h-4 ${annLoading ? 'animate-spin' : ''}`} />
+                  <span>{annLoading ? 'Diffusion...' : 'Diffuser sur tout le Réseau'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL: LIVE PREVIEW OF POPUP ON USER SCREEN */}
+      {/* ========================================================================= */}
+      {previewAnnouncement && (
+        <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-50 flex items-center justify-center p-4">
+          <div className="w-full max-w-md bg-[#0a101f] border-2 border-emerald-500 rounded-3xl p-6 shadow-[0_0_50px_rgba(16,185,129,0.35)] space-y-4 font-mono relative animate-in fade-in zoom-in-95 duration-200">
+            {/* Top Bar with Badge & Dismiss button */}
+            <div className="flex items-center justify-between pb-3 border-b border-white/10">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-xl bg-emerald-500/20 border border-emerald-400 flex items-center justify-center">
+                  <Shield className="w-4 h-4 text-emerald-300" />
+                </div>
+                <div>
+                  <h4 className="font-black text-white text-sm">AbessVpn Annonce</h4>
+                  <span className="text-[10px] text-emerald-400 font-bold uppercase">{previewAnnouncement.type}</span>
+                </div>
+              </div>
+
+              {!previewAnnouncement.isMandatory && (
+                <button
+                  onClick={() => setPreviewAnnouncement(null)}
+                  className="text-slate-400 hover:text-white p-1 rounded-lg"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+
+            {/* Title & Body */}
+            <div className="space-y-2">
+              <h3 className="text-base font-black text-white leading-snug">{previewAnnouncement.title}</h3>
+              <p className="text-slate-300 text-xs leading-relaxed whitespace-pre-wrap font-sans">
+                {previewAnnouncement.message}
+              </p>
+            </div>
+
+            {/* Action Button */}
+            {previewAnnouncement.actionButtonText && (
+              <a
+                href={previewAnnouncement.actionButtonUrl || '#'}
+                target="_blank"
+                rel="noreferrer"
+                className="w-full py-3 bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 text-black font-black text-xs rounded-xl flex items-center justify-center gap-2 shadow-[0_0_20px_rgba(16,185,129,0.4)] transition text-center block"
+              >
+                <span>{previewAnnouncement.actionButtonText}</span>
+                <ExternalLink className="w-3.5 h-3.5" />
+              </a>
+            )}
+
+            {/* Close / Acknowledge */}
+            <button
+              onClick={() => setPreviewAnnouncement(null)}
+              className="w-full py-2 bg-slate-900 hover:bg-slate-800 text-slate-400 text-xs rounded-xl font-bold transition"
+            >
+              {previewAnnouncement.isMandatory ? 'J\'ai compris et je poursuis' : 'Fermer l\'annonce'}
+            </button>
           </div>
         </div>
       )}

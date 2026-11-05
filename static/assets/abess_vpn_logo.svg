@@ -1,0 +1,99 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <!-- Background Outer Glow -->
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#040813"/>
+      <stop offset="45%" stop-color="#091322"/>
+      <stop offset="100%" stop-color="#03060D"/>
+    </linearGradient>
+
+    <!-- Outer Bezel Stroke -->
+    <linearGradient id="bezelGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00F0FF" stop-opacity="0.8"/>
+      <stop offset="50%" stop-color="#00FF66" stop-opacity="0.3"/>
+      <stop offset="100%" stop-color="#00F0FF" stop-opacity="0.8"/>
+    </linearGradient>
+
+    <!-- Shield Face Gradient -->
+    <linearGradient id="shieldFace" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0E2238"/>
+      <stop offset="50%" stop-color="#091728"/>
+      <stop offset="100%" stop-color="#050C16"/>
+    </linearGradient>
+
+    <!-- Neon Cyber Ribbon Gradient -->
+    <linearGradient id="cyberNeon" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00F0FF"/>
+      <stop offset="100%" stop-color="#00FF66"/>
+    </linearGradient>
+
+    <!-- Inner Core Gradient -->
+    <linearGradient id="coreNeon" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#00FF66"/>
+      <stop offset="100%" stop-color="#00F0FF"/>
+    </linearGradient>
+
+    <!-- Glow Filter -->
+    <filter id="cyberGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="14" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- Deep Ambient Glow Filter -->
+    <filter id="ambientGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="32" result="blur1"/>
+      <feGaussianBlur stdDeviation="12" result="blur2"/>
+      <feMerge>
+        <feMergeNode in="blur1"/>
+        <feMergeNode in="blur2"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Base Squircle Container -->
+  <rect width="1024" height="1024" rx="228" fill="url(#bgGrad)"/>
+  <rect x="14" y="14" width="996" height="996" rx="218" fill="none" stroke="url(#bezelGrad)" stroke-width="6" opacity="0.7"/>
+
+  <!-- Radial Cyber Aura -->
+  <circle cx="512" cy="480" r="340" fill="#00FF66" opacity="0.08" filter="url(#ambientGlow)"/>
+
+  <!-- Outer Cybernetic Shield -->
+  <path d="M512 150 L770 256 L770 514 C770 678 654 798 512 858 C370 798 254 678 254 514 L254 256 Z"
+        fill="url(#shieldFace)" stroke="url(#cyberNeon)" stroke-width="20" stroke-linejoin="round" filter="url(#cyberGlow)"/>
+
+  <!-- Inner High-Tech Shield Contour Lines -->
+  <path d="M512 196 L726 284 L726 504 C726 642 626 746 512 800 C398 746 298 642 298 504 L298 284 Z"
+        fill="none" stroke="#00F0FF" stroke-width="4" stroke-dasharray="14 10" opacity="0.45"/>
+
+  <!-- Stylized Monogram 'A' Interlocking with Cyber Security Padlock -->
+  <!-- Outer Arch of 'A' -->
+  <path d="M512 284 L356 676 L420 676 L468 554 L556 554 L604 676 L668 676 Z"
+        fill="none" stroke="url(#cyberNeon)" stroke-width="28" stroke-linejoin="round" stroke-linecap="round" filter="url(#cyberGlow)"/>
+
+  <!-- Padlock Curved Shackle (Top of 'A' aperture) -->
+  <path d="M452 450 C452 396 480 358 512 358 C544 358 572 396 572 450"
+        fill="none" stroke="#FFFFFF" stroke-width="24" stroke-linecap="round" filter="url(#cyberGlow)"/>
+
+  <!-- Padlock Core Vault Box -->
+  <rect x="442" y="442" width="140" height="114" rx="26" fill="#081422" stroke="url(#coreNeon)" stroke-width="12" filter="url(#cyberGlow)"/>
+
+  <!-- Crossbar Energy Circuit -->
+  <path d="M434 554 L590 554" stroke="#00F0FF" stroke-width="22" stroke-linecap="round"/>
+
+  <!-- Luminous Quantum Keyhole Core -->
+  <circle cx="512" cy="486" r="15" fill="#00FF66" filter="url(#cyberGlow)"/>
+  <path d="M506 486 L518 486 L515 518 L509 518 Z" fill="#00FF66"/>
+
+  <!-- Hexagonal Defense Nodes on Shield Vertices -->
+  <circle cx="512" cy="150" r="14" fill="#00FF66" filter="url(#cyberGlow)"/>
+  <circle cx="770" cy="256" r="14" fill="#00F0FF" filter="url(#cyberGlow)"/>
+  <circle cx="254" cy="256" r="14" fill="#00F0FF" filter="url(#cyberGlow)"/>
+  <circle cx="512" cy="858" r="14" fill="#00FF66" filter="url(#cyberGlow)"/>
+
+  <!-- Top Crown Accent Notch -->
+  <path d="M480 134 L544 134" stroke="#00FF66" stroke-width="10" stroke-linecap="round" filter="url(#cyberGlow)"/>
+</svg>

@@ -31,6 +31,7 @@ const configFile = path.resolve(dataDir, 'config.json');
 const protocolConfigsFile = path.resolve(dataDir, 'protocol-configs.json');
 const transactionsFile = path.resolve(dataDir, 'transactions.json');
 const appVersionFile = path.resolve(dataDir, 'app-version.json');
+const announcementsFile = path.resolve(dataDir, 'announcements.json');
 const plansFile = path.resolve(dataDir, 'plans.json');
 const requestsFile = path.resolve(dataDir, 'requests.json');
 const auditLogsFile = path.resolve(dataDir, 'audit-logs.json');
@@ -69,7 +70,7 @@ export interface TransactionLog {
   id: string;
   resellerId: string;
   resellerName: string;
-  type: 'CREDIT_ADD' | 'TOKEN_CREATE' | 'BATCH_CREATE' | 'TOKEN_REVOKE' | 'RESET_DEVICES' | 'SERVER_UPDATE' | 'APP_VERSION_UPDATE';
+  type: 'CREDIT_ADD' | 'TOKEN_CREATE' | 'BATCH_CREATE' | 'TOKEN_REVOKE' | 'RESET_DEVICES' | 'SERVER_UPDATE' | 'APP_VERSION_UPDATE' | 'ANNOUNCEMENT_PUBLISH';
   amountGb: number;
   balanceBefore: number;
   balanceAfter: number;
@@ -219,6 +220,61 @@ export function loadAppVersionConfig(): AppVersionConfig {
 
 export function saveAppVersionConfig(config: AppVersionConfig): void {
   writeJsonAtomically(appVersionFile, config);
+}
+
+// ==========================================
+// ANNOUNCEMENTS & BROADCASTING SYSTEM
+// ==========================================
+export interface Announcement {
+  id: string;
+  title: string;
+  message: string;
+  type: 'INFO' | 'WARNING' | 'CRITICAL' | 'PROMO' | 'UPDATE';
+  targetPlatform: 'ALL' | 'ANDROID' | 'WINDOWS';
+  isMandatory: boolean;
+  dismissible: boolean;
+  actionButtonText?: string;
+  actionButtonUrl?: string;
+  bannerImageUrl?: string;
+  publishedAt: string;
+  expiresAt?: string;
+  isActive: boolean;
+  priority: number;
+  showMode: 'EVERY_LAUNCH' | 'ONCE_PER_USER';
+  createdBy?: string;
+}
+
+export function loadAnnouncements(): Announcement[] {
+  if (fs.existsSync(announcementsFile)) {
+    try {
+      const data = JSON.parse(fs.readFileSync(announcementsFile, 'utf8'));
+      if (Array.isArray(data)) return data;
+    } catch {}
+  }
+  const defaultAnnouncements: Announcement[] = [
+    {
+      id: 'ann-welcome-01',
+      title: '🛡️ Bienvenue sur AbessVpn v2.1.0',
+      message: 'Votre infrastructure commerciale haute vitesse est pleinement active. Profitez de nos serveurs VLESS Reality, VMess et Trojan sans aucune restriction. Rejoignez le canal officiel pour les dernières actualités !',
+      type: 'INFO',
+      targetPlatform: 'ALL',
+      isMandatory: false,
+      dismissible: true,
+      actionButtonText: '📢 Canal Telegram Officiel',
+      actionButtonUrl: 'https://t.me/Abess_Vpn',
+      publishedAt: new Date().toISOString(),
+      isActive: true,
+      priority: 10,
+      showMode: 'ONCE_PER_USER',
+      createdBy: 'System'
+    }
+  ];
+  writeJsonAtomically(announcementsFile, defaultAnnouncements);
+  return defaultAnnouncements;
+}
+
+export function saveAnnouncements(announcements: Announcement[]): void {
+  writeJsonAtomically(announcementsFile, announcements);
 }
 
 // Commercial Pricing Plans & Tiers
@@ -1566,6 +1622,29 @@ async function startServer() {
     });
   });
 
+  // Public Announcements endpoint for Mobile App and Desktop Software
+  app.get(['/api/v1/announcements/active', '/api/v1/app/announcements'], (req, res) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    const platform = String(req.query.platform || 'all').toLowerCase();
+    const all = loadAnnouncements();
+    const now = new Date();
+
+    const active = all.filter(a => {
+      if (!a.isActive) return false;
+      if (a.expiresAt && new Date(a.expiresAt) < now) return false;
+      if (platform !== 'all' && a.targetPlatform !== 'ALL') {
+        if (a.targetPlatform.toLowerCase() !== platform) return false;
+      }
+      return true;
+    }).sort((a, b) => (b.priority || 0) - (a.priority || 0) || new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime());
+
+    res.json({
+      ok: true,
+      count: active.length,
+      announcements: active
+    });
+  });
+
   // Public health check used by the mobile client before token operations.
   app.get('/api/v1/ping', (_req, res) => {
     res.setHeader('Cache-Control', 'no-store');
@@ -2615,6 +2694,138 @@ async function startServer() {
     });
 
     res.json({ ok: true, config });
+  });
+
+  // ==========================================
+  // ANNOUNCEMENTS MANAGEMENT (ADMIN)
+  // ==========================================
+  app.get('/api/v1/admin/announcements', authenticate, (req, res) => {
+    const user: AppUser = (req as any).user;
+    if (user.role !== 'SUPER_ADMIN') {
+      res.status(403).json({ error: 'Accès réservé au Super Administrateur.' });
+      return;
+    }
+    const announcements = loadAnnouncements();
+    res.json({ ok: true, announcements });
+  });
+
+  app.post('/api/v1/admin/announcements', authenticate, (req, res) => {
+    const user: AppUser = (req as any).user;
+    if (user.role !== 'SUPER_ADMIN') {
+      res.status(403).json({ error: 'Accès réservé au Super Administrateur.' });
+      return;
+    }
+
+    const title = String(req.body?.title || '').trim();
+    const message = String(req.body?.message || '').trim();
+    if (!title || !message) {
+      res.status(400).json({ error: 'Titre et message requis pour publier une annonce.' });
+      return;
+    }
+
+    const type = ['INFO', 'WARNING', 'CRITICAL', 'PROMO', 'UPDATE'].includes(req.body?.type)
+      ? req.body.type
+      : 'INFO';
+
+    const targetPlatform = ['ALL', 'ANDROID', 'WINDOWS'].includes(req.body?.targetPlatform)
+      ? req.body.targetPlatform
+      : 'ALL';
+
+    const isMandatory = Boolean(req.body?.isMandatory);
+    const dismissible = req.body?.dismissible !== undefined ? Boolean(req.body?.dismissible) : !isMandatory;
+    const actionButtonText = req.body?.actionButtonText ? String(req.body.actionButtonText).trim() : undefined;
+    const actionButtonUrl = req.body?.actionButtonUrl ? String(req.body.actionButtonUrl).trim() : undefined;
+    const bannerImageUrl = req.body?.bannerImageUrl ? String(req.body.bannerImageUrl).trim() : undefined;
+    const expiresAt = req.body?.expiresAt ? String(req.body.expiresAt).trim() : undefined;
+    const priority = Number(req.body?.priority || 0);
+    const showMode = req.body?.showMode === 'EVERY_LAUNCH' ? 'EVERY_LAUNCH' : 'ONCE_PER_USER';
+
+    const newAnnouncement: Announcement = {
+      id: `ann-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      title,
+      message,
+      type,
+      targetPlatform,
+      isMandatory,
+      dismissible,
+      actionButtonText,
+      actionButtonUrl,
+      bannerImageUrl,
+      publishedAt: new Date().toISOString(),
+      expiresAt,
+      isActive: true,
+      priority,
+      showMode,
+      createdBy: user.name || user.id
+    };
+
+    const announcements = loadAnnouncements();
+    announcements.unshift(newAnnouncement);
+    saveAnnouncements(announcements);
+
+    logTransaction({
+      resellerId: user.id,
+      resellerName: user.name,
+      type: 'ANNOUNCEMENT_PUBLISH',
+      amountGb: 0,
+      balanceBefore: 0,
+      balanceAfter: 0,
+      note: `Publication annonce "${title}" [${type}] pour ${targetPlatform}`
+    });
+
+    res.json({ ok: true, announcement: newAnnouncement });
+  });
+
+  app.put('/api/v1/admin/announcements/:id', authenticate, (req, res) => {
+    const user: AppUser = (req as any).user;
+    if (user.role !== 'SUPER_ADMIN') {
+      res.status(403).json({ error: 'Accès réservé au Super Administrateur.' });
+      return;
+    }
+
+    const { id } = req.params;
+    const announcements = loadAnnouncements();
+    const idx = announcements.findIndex(a => a.id === id);
+    if (idx === -1) {
+      res.status(404).json({ error: 'Annonce introuvable.' });
+      return;
+    }
+
+    const existing = announcements[idx];
+    announcements[idx] = {
+      ...existing,
+      title: req.body?.title !== undefined ? String(req.body.title).trim() : existing.title,
+      message: req.body?.message !== undefined ? String(req.body.message).trim() : existing.message,
+      type: req.body?.type || existing.type,
+      targetPlatform: req.body?.targetPlatform || existing.targetPlatform,
+      isMandatory: req.body?.isMandatory !== undefined ? Boolean(req.body.isMandatory) : existing.isMandatory,
+      dismissible: req.body?.dismissible !== undefined ? Boolean(req.body.dismissible) : existing.dismissible,
+      actionButtonText: req.body?.actionButtonText !== undefined ? String(req.body.actionButtonText).trim() : existing.actionButtonText,
+      actionButtonUrl: req.body?.actionButtonUrl !== undefined ? String(req.body.actionButtonUrl).trim() : existing.actionButtonUrl,
+      bannerImageUrl: req.body?.bannerImageUrl !== undefined ? String(req.body.bannerImageUrl).trim() : existing.bannerImageUrl,
+      isActive: req.body?.isActive !== undefined ? Boolean(req.body.isActive) : existing.isActive,
+      priority: req.body?.priority !== undefined ? Number(req.body.priority) : existing.priority,
+      showMode: req.body?.showMode || existing.showMode,
+      expiresAt: req.body?.expiresAt !== undefined ? String(req.body.expiresAt).trim() : existing.expiresAt
+    };
+
+    saveAnnouncements(announcements);
+    res.json({ ok: true, announcement: announcements[idx] });
+  });
+
+  app.delete('/api/v1/admin/announcements/:id', authenticate, (req, res) => {
+    const user: AppUser = (req as any).user;
+    if (user.role !== 'SUPER_ADMIN') {
+      res.status(403).json({ error: 'Accès réservé au Super Administrateur.' });
+      return;
+    }
+
+    const { id } = req.params;
+    let announcements = loadAnnouncements();
+    announcements = announcements.filter(a => a.id !== id);
+    saveAnnouncements(announcements);
+
+    res.json({ ok: true });
   });
 
   // ==========================================
@@ -3675,6 +3886,8 @@ async function startServer() {
     safeClientToken,
     loadAppVersionConfig,
     saveAppVersionConfig,
+    loadAnnouncements,
+    saveAnnouncements,
     getServerUpdateStatus,
     executeServerUpdate,
     xrayStatusFile,
