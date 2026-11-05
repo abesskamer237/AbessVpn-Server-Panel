@@ -1264,12 +1264,7 @@ function loadProtocolConfigs(): ProtocolConfig[] {
     }
   }
   const legacy = legacyProtocolConfig();
-  if (legacy) return [legacy];
-
-  // Seed default enterprise multi-protocol configurations
-  const seeded = seedDefaultProtocolConfigs(process.env.VPN_DOMAIN);
-  saveProtocolConfigs(seeded);
-  return seeded;
+  return legacy ? [legacy] : [];
 }
 function saveProtocolConfigs(configs: ProtocolConfig[]): void {
   writeJsonAtomically(protocolConfigsFile, configs.map(publicProtocolConfig));
