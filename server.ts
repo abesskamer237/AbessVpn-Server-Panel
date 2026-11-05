@@ -2986,7 +2986,7 @@ async function startServer() {
       filename: 'AbessVpn.apk',
       version: version.latestVersion,
       sizeBytes,
-      sizeFormatted: sizeBytes > 0 ? `${(sizeBytes / (1024 * 1024)).toFixed(1)} Mo` : '68 Mo',
+      sizeFormatted: sizeBytes > 0 ? `${(sizeBytes / (1024 * 1024)).toFixed(1)} Mo` : '20 Mo',
       downloadUrl: '/download/AbessVpn.apk',
       checksum: 'sha256-verified-release',
       publishedAt: version.publishedAt
