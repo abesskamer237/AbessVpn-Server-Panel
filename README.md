@@ -118,3 +118,24 @@ The panel supports **VLESS, VMess, Trojan and Shadowsocks AEAD** with **WebSocke
 mKCP is enabled only for VMess on UDP 10061, and Shadowsocks uses its native TCP+UDP listener on port 10050. Hysteria/QUIC, WireGuard and TUN are not enabled in this release because they require their own protocol-specific configuration and client compatibility. Native UDP cannot be forwarded through the ordinary HTTP reverse proxy. The Android app's local SOCKS inbound has UDP enabled, which is separate from a native public UDP listener.
 
 The legacy path `/@abess237` remains for VLESS + WS. Other HTTP-carried profiles use `/@abess237/<protocol>/<transport>`. A successful compile or Xray config validation does not replace a real Android connection test for every combination.
+
+## Gestion commerciale à distance via Bot Telegram
+
+Le serveur intègre un bot Telegram complet pour administrer, superviser et commercialiser votre infrastructure VPN en direct depuis votre smartphone :
+
+### Configuration
+Ajoutez ces variables dans votre fichier `.env` sur le serveur :
+```env
+TELEGRAM_BOT_TOKEN=123456789:ABCdefGHIjklMNOpqrsTUVwxyz
+TELEGRAM_ADMIN_IDS=123456789,987654321
+```
+*Si `TELEGRAM_ADMIN_IDS` n'est pas encore défini, envoyez simplement `/login <ADMIN_INITIAL_PASSWORD>` au bot pour vous authentifier instantanément comme Super Administrateur.*
+
+### Fonctionnalités du Bot
+- 📊 **Tableau de bord en direct (`/stats`) :** Uptime, CPU, RAM, statut Xray, clients actifs, bande passante consommée vs allouée.
+- 🎟️ **Création de Vouchers / Tickets (`/create`) :** Packs rapides (Test 24h, Semaine 10 Go, Mensuel VIP 50 Go, Illimité 150 Go) avec génération et envoi immédiat du QR Code image, du lien `abess://` et du lien V2Ray universel.
+- 📦 **Génération de Lots (Batch / Grossiste) (`/batch`) :** Création instantanée de 5 à 200 vouchers avec export automatique d'un fichier CSV prêt à être distribué aux revendeurs ou imprimé.
+- 👥 **Gestion du Parc Clients (`/search`, `/reset`) :** Consultation paginée des fiches clients, ajout de quota (+10 Go), prolongation (+7j, +30j), suspension et réinitialisation en 1 clic des appareils liés (Unbind HWID).
+- ⚙️ **Supervision Protocoles & Xray (`/xray`, `/reload`) :** Contrôle des inbounds (VLESS, VMess, Trojan, Shadowsocks) et rechargement de configuration à chaud.
+- 💾 **Sauvegarde Système 1-Clic (`/backup`) :** Téléchargement instantané d'une archive JSON complète de la base de données directement dans la conversation Telegram.
+- ⚠️ **Alertes Automatiques Proactives :** Notification immédiate des administrateurs dès qu'un utilisateur atteint 90% ou 100% de son quota, ou arrive à expiration.

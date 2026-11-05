@@ -37,7 +37,8 @@ import {
   Upload,
   Search,
   Filter,
-  History
+  History,
+  Share2
 } from 'lucide-react';
 
 interface UserSession {
@@ -85,6 +86,7 @@ interface ClientToken {
   customerContact?: string;
   deviceIds?: string[];
   encryptedLink: string;
+  directLink?: string;
   createdAt: string;
 }
 
@@ -1361,6 +1363,17 @@ export default function App() {
                               <span>{copiedKey === `link_${token.id}` ? 'Copié !' : 'Lien abess://'}</span>
                             </button>
 
+                            {token.directLink && (
+                              <button
+                                onClick={() => copyToClipboard(token.directLink!, `dir_${token.id}`)}
+                                className="px-2 py-1 bg-cyan-950/60 hover:bg-cyan-900/60 border border-cyan-800 text-cyan-300 rounded text-[11px] flex items-center gap-1"
+                                title="Copier le lien direct V2Ray / Universel"
+                              >
+                                {copiedKey === `dir_${token.id}` ? <Check className="w-3 h-3 text-cyan-400" /> : <Share2 className="w-3 h-3 text-cyan-400" />}
+                                <span>{copiedKey === `dir_${token.id}` ? 'Copié !' : 'Lien V2Ray'}</span>
+                              </button>
+                            )}
+
                             <button
                               onClick={() => openQrModal(token)}
                               className="p-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-700 rounded text-slate-300"
@@ -2201,6 +2214,16 @@ export default function App() {
               {copiedKey === 'modal_link' ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
               <span>{copiedKey === 'modal_link' ? 'Lien Copié !' : 'Copier Lien Crypté abess://'}</span>
             </button>
+
+            {qrModalToken.directLink && (
+              <button
+                onClick={() => copyToClipboard(qrModalToken.directLink!, 'modal_direct_link')}
+                className="w-full py-2 bg-cyan-600 hover:bg-cyan-500 text-black font-bold rounded-xl flex items-center justify-center gap-1.5"
+              >
+                {copiedKey === 'modal_direct_link' ? <Check className="w-4 h-4" /> : <Share2 className="w-4 h-4" />}
+                <span>{copiedKey === 'modal_direct_link' ? 'Lien Direct Copié !' : 'Copier Lien Direct (V2Ray / Clash)'}</span>
+              </button>
+            )}
           </div>
         </div>
       )}

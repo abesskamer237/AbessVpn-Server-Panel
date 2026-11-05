@@ -4,6 +4,7 @@ import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
+import { startTelegramBot } from './telegram-bot.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -126,6 +127,7 @@ export interface ClientToken {
   customerNote?: string;
   customerContact?: string;
   encryptedLink: string;
+  directLink?: string;
   createdAt: string;
 }
 
@@ -435,29 +437,163 @@ function legacyProtocolConfig(): ProtocolConfig | null {
     sniHost: legacy.sniHost || '', createdAt: now, updatedAt: now
   };
 }
+function seedDefaultProtocolConfigs(vpnDomain?: string): ProtocolConfig[] {
+  const domain = (vpnDomain && isValidPublicHost(vpnDomain)) ? vpnDomain : (process.env.VPN_DOMAIN || 'vpn.example.com');
+  const now = new Date().toISOString();
+  return [
+    {
+      id: 'cfg_vless_ws',
+      name: 'VLESS WebSocket (Cloudflare CDN)',
+      serverHost: domain,
+      host: domain,
+      serverPort: 443,
+      protocol: 'vless',
+      transport: 'ws',
+      path: '/@abess237',
+      sniHost: domain,
+      createdAt: now,
+      updatedAt: now
+    },
+    {
+      id: 'cfg_vmess_ws',
+      name: 'VMess WebSocket (Stealth TLS)',
+      serverHost: domain,
+      host: domain,
+      serverPort: 443,
+      protocol: 'vmess',
+      transport: 'ws',
+      path: '/@abess237/vmess/ws',
+      sniHost: domain,
+      createdAt: now,
+      updatedAt: now
+    },
+    {
+      id: 'cfg_trojan_ws',
+      name: 'Trojan WebSocket (HTTPS Stealth)',
+      serverHost: domain,
+      host: domain,
+      serverPort: 443,
+      protocol: 'trojan',
+      transport: 'ws',
+      path: '/@abess237/trojan/ws',
+      sniHost: domain,
+      createdAt: now,
+      updatedAt: now
+    },
+    {
+      id: 'cfg_vless_grpc',
+      name: 'VLESS gRPC (High Speed)',
+      serverHost: domain,
+      host: domain,
+      serverPort: 443,
+      protocol: 'vless',
+      transport: 'grpc',
+      path: '/@abess237/vless/grpc',
+      sniHost: domain,
+      createdAt: now,
+      updatedAt: now
+    },
+    {
+      id: 'cfg_ss_native',
+      name: 'Shadowsocks Direct (Low Latency TCP/UDP)',
+      serverHost: domain,
+      host: domain,
+      serverPort: 10050,
+      protocol: 'shadowsocks',
+      transport: 'native',
+      path: '',
+      sniHost: '',
+      createdAt: now,
+      updatedAt: now
+    }
+  ];
+}
+
+export function buildDirectProtocolUrl(token: ClientToken, profile: ProtocolConfig): string {
+  const host = profile.serverHost;
+  const port = xrayPublicPort(profile.protocol, profile.transport, profile.serverPort);
+  const sni = profile.sniHost || host;
+  const wsHost = profile.host || host;
+  const path = xrayProfilePath(profile.protocol as XrayProtocol, profile.transport as XrayTransport, profile.path);
+  const name = `${profile.name} - ${token.token}`;
+  const uuid = token.clientUuid || token.token;
+
+  switch (profile.protocol) {
+    case 'vless': {
+      const security = ['native', 'raw', 'kcp'].includes(profile.transport) ? 'none' : 'tls';
+      const encName = encodeURIComponent(name);
+      if (profile.transport === 'grpc') {
+        const serviceName = encodeURIComponent(path.replace(/^\/+/, ''));
+        return `vless://${uuid}@${host}:${port}?encryption=none&security=${security}&type=grpc&serviceName=${serviceName}&mode=gun&sni=${encodeURIComponent(sni)}#${encName}`;
+      }
+      return `vless://${uuid}@${host}:${port}?encryption=none&security=${security}&type=${profile.transport}&path=${encodeURIComponent(path)}&host=${encodeURIComponent(wsHost)}&sni=${encodeURIComponent(sni)}#${encName}`;
+    }
+    case 'vmess': {
+      const isTls = !['native', 'raw', 'kcp'].includes(profile.transport);
+      const vmessObj: Record<string, unknown> = {
+        v: '2',
+        ps: name,
+        add: host,
+        port: String(port),
+        id: uuid,
+        aid: '0',
+        scy: 'auto',
+        net: profile.transport === 'raw' ? 'tcp' : profile.transport,
+        type: 'none',
+        host: wsHost,
+        path: profile.transport === 'grpc' ? path.replace(/^\/+/, '') : path,
+        tls: isTls ? 'tls' : 'none',
+        sni: sni
+      };
+      return `vmess://${Buffer.from(JSON.stringify(vmessObj)).toString('base64')}`;
+    }
+    case 'trojan': {
+      const encName = encodeURIComponent(name);
+      return `trojan://${uuid}@${host}:${port}?security=tls&type=${profile.transport}&path=${encodeURIComponent(path)}&host=${encodeURIComponent(wsHost)}&sni=${encodeURIComponent(sni)}#${encName}`;
+    }
+    case 'shadowsocks': {
+      const encName = encodeURIComponent(name);
+      const creds = `aes-128-gcm:${uuid}@${host}:${port}`;
+      if (profile.transport === 'native') {
+        return `ss://${Buffer.from(creds).toString('base64url')}#${encName}`;
+      }
+      return `ss://${Buffer.from(creds).toString('base64url')}?plugin=${encodeURIComponent(`v2ray-plugin;path=${path};host=${wsHost};tls`)}#${encName}`;
+    }
+    default:
+      return '';
+  }
+}
+
 function loadProtocolConfigs(): ProtocolConfig[] {
   if (fs.existsSync(protocolConfigsFile)) {
     try {
       const parsed = JSON.parse(fs.readFileSync(protocolConfigsFile, 'utf8'));
-      if (!Array.isArray(parsed)) throw new Error('protocol-configs.json must contain an array');
-      return parsed.filter((item: any) =>
-        item && typeof item.id === 'string' && typeof item.name === 'string' &&
-        isValidPublicHost(item.serverHost) && isXrayProtocol(item.protocol) && isXrayTransport(item.transport)
-      ).map((item: any) => publicProtocolConfig({
-        ...item,
-        host: typeof item.host === 'string' ? item.host : '',
-        sniHost: typeof item.sniHost === 'string' ? item.sniHost : '',
-        serverPort: xrayPublicPort(item.protocol, item.transport, Number(item.serverPort) || 443),
-        path: '/@abess237',
-        createdAt: typeof item.createdAt === 'string' ? item.createdAt : new Date().toISOString(),
-        updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : new Date().toISOString()
-      } as ProtocolConfig));
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        const valid = parsed.filter((item: any) =>
+          item && typeof item.id === 'string' && typeof item.name === 'string' &&
+          isValidPublicHost(item.serverHost) && isXrayProtocol(item.protocol) && isXrayTransport(item.transport)
+        ).map((item: any) => publicProtocolConfig({
+          ...item,
+          host: typeof item.host === 'string' ? item.host : '',
+          sniHost: typeof item.sniHost === 'string' ? item.sniHost : '',
+          serverPort: xrayPublicPort(item.protocol, item.transport, Number(item.serverPort) || 443),
+          path: xrayProfilePath(item.protocol, item.transport, item.path || '/@abess237'),
+          createdAt: typeof item.createdAt === 'string' ? item.createdAt : new Date().toISOString(),
+          updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : new Date().toISOString()
+        } as ProtocolConfig));
+        if (valid.length > 0) return valid;
+      }
     } catch {
       throw new Error('Le fichier data/protocol-configs.json est illisible. Restaurez une sauvegarde avant de continuer.');
     }
   }
   const legacy = legacyProtocolConfig();
-  return legacy ? [legacy] : [];
+  if (legacy) return [legacy];
+
+  // Seed default enterprise multi-protocol configurations
+  const seeded = seedDefaultProtocolConfigs(process.env.VPN_DOMAIN);
+  saveProtocolConfigs(seeded);
+  return seeded;
 }
 function saveProtocolConfigs(configs: ProtocolConfig[]): void {
   writeJsonAtomically(protocolConfigsFile, configs.map(publicProtocolConfig));
@@ -471,17 +607,17 @@ function normalizeProtocolConfig(input: any, existing?: ProtocolConfig): Protoco
   const sniHost = String(input?.sniHost ?? existing?.sniHost ?? '').trim();
   if (name.length < 2 || name.length > 80) return null;
   if (!isValidPublicHost(serverHost) || (host !== '' && !isValidPublicHost(host))) return null;
-  if (!isXrayProtocol(protocol) || !isXrayTransport(transport) ||
-      (protocol === 'shadowsocks' && transport !== 'native') ||
-      (transport === 'native' && protocol !== 'shadowsocks') ||
-      (['raw', 'kcp'].includes(transport) && protocol !== 'vmess')) return null;
+  if (!isXrayProtocol(protocol) || !isXrayTransport(transport)) return null;
+  if (transport === 'native' && protocol !== 'shadowsocks') return null;
+  if (['raw', 'kcp'].includes(transport) && protocol !== 'vmess') return null;
+  if (['raw', 'kcp', 'native'].includes(transport) && (protocol === 'vless' || protocol === 'trojan')) return null;
   if (tlsSniValidationError(transport, sniHost)) return null;
   if (sniHost && !isValidPublicHost(sniHost)) return null;
   const now = new Date().toISOString();
   return {
     id: existing?.id || 'cfg_' + crypto.randomUUID(), name, serverHost, host,
     serverPort: xrayPublicPort(protocol, transport, Number(input?.serverPort) || 443),
-    protocol, transport, path: '/@abess237', sniHost,
+    protocol, transport, path: xrayProfilePath(protocol as XrayProtocol, transport as XrayTransport, input?.path || '/@abess237'), sniHost,
     createdAt: existing?.createdAt || now, updatedAt: now
   };
 }
@@ -1222,7 +1358,10 @@ async function startServer() {
       customerNote, customerContact,
       connectionCount: 0, lastSeenAt: null, lastSeenIp: null,
       status: 'active', configurationId: profile.id, configurationName: profile.name,
-      configurationSnapshot: publicProtocolConfig(profile), encryptedLink, createdAt: new Date().toISOString()
+      configurationSnapshot: publicProtocolConfig(profile),
+      encryptedLink,
+      directLink: buildDirectProtocolUrl({ token: finalToken, clientUuid } as any, profile),
+      createdAt: new Date().toISOString()
     };
     tokens.unshift(newToken);
     saveTokens(tokens);
@@ -1326,6 +1465,7 @@ async function startServer() {
         configurationName: profile.name,
         configurationSnapshot: publicProtocolConfig(profile),
         encryptedLink,
+        directLink: buildDirectProtocolUrl({ token: finalToken, clientUuid } as any, profile),
         createdAt: new Date().toISOString()
       };
 
@@ -2007,6 +2147,34 @@ async function startServer() {
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`[ABESSVPN MASTER SERVER] Running on port ${PORT}`);
     console.log(`[ABESSVPN MASTER SERVER] Control plane listening on ${PORT}; VPN domain: ${process.env.VPN_DOMAIN}`);
+  });
+
+  // Start Integrated Telegram Management Bot (if configured in .env)
+  const tgBotToken = process.env.TELEGRAM_BOT_TOKEN?.trim();
+  const tgAdminIds = process.env.TELEGRAM_ADMIN_IDS?.split(',').map(s => s.trim()).filter(Boolean);
+  startTelegramBot({
+    botToken: tgBotToken,
+    adminIds: tgAdminIds,
+    vpnDomain,
+    masterSecret,
+    loadTokens,
+    saveTokens,
+    loadProtocolConfigs,
+    saveProtocolConfigs,
+    loadMasterConfig,
+    loadUsers,
+    saveUsers,
+    loadTransactions,
+    logTransaction,
+    syncXrayConfig,
+    encryptConfig,
+    buildDirectProtocolUrl,
+    safeClientToken,
+    xrayStatusFile,
+    xrayConfigFile,
+    dataDir,
+    backupsDir,
+    startTime
   });
 }
 
