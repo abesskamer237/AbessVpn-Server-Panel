@@ -1,0 +1,434 @@
+[
+  {
+    "code": "CM",
+    "name": "Cameroun",
+    "flag": "🇨🇲",
+    "dial": "+237",
+    "digits": 9,
+    "example": "690123456"
+  },
+  {
+    "code": "CI",
+    "name": "Côte d'Ivoire",
+    "flag": "🇨🇮",
+    "dial": "+225",
+    "digits": 10,
+    "example": "0701234567"
+  },
+  {
+    "code": "SN",
+    "name": "Sénégal",
+    "flag": "🇸🇳",
+    "dial": "+221",
+    "digits": 9,
+    "example": "770123456"
+  },
+  {
+    "code": "CD",
+    "name": "RD Congo",
+    "flag": "🇨🇩",
+    "dial": "+243",
+    "digits": 9,
+    "example": "810123456"
+  },
+  {
+    "code": "GA",
+    "name": "Gabon",
+    "flag": "🇬🇦",
+    "dial": "+241",
+    "digits": 8,
+    "example": "74012345"
+  },
+  {
+    "code": "ML",
+    "name": "Mali",
+    "flag": "🇲🇱",
+    "dial": "+223",
+    "digits": 8,
+    "example": "70012345"
+  },
+  {
+    "code": "BF",
+    "name": "Burkina Faso",
+    "flag": "🇧🇫",
+    "dial": "+226",
+    "digits": 8,
+    "example": "70012345"
+  },
+  {
+    "code": "GN",
+    "name": "Guinée",
+    "flag": "🇬🇳",
+    "dial": "+224",
+    "digits": 9,
+    "example": "620123456"
+  },
+  {
+    "code": "BJ",
+    "name": "Bénin",
+    "flag": "🇧🇯",
+    "dial": "+229",
+    "digits": 8,
+    "example": "97012345"
+  },
+  {
+    "code": "TG",
+    "name": "Togo",
+    "flag": "🇹🇬",
+    "dial": "+228",
+    "digits": 8,
+    "example": "90012345"
+  },
+  {
+    "code": "CG",
+    "name": "Congo-Brazzaville",
+    "flag": "🇨🇬",
+    "dial": "+242",
+    "digits": 9,
+    "example": "060123456"
+  },
+  {
+    "code": "TD",
+    "name": "Tchad",
+    "flag": "🇹🇩",
+    "dial": "+235",
+    "digits": 8,
+    "example": "66012345"
+  },
+  {
+    "code": "NE",
+    "name": "Niger",
+    "flag": "🇳🇪",
+    "dial": "+227",
+    "digits": 8,
+    "example": "90012345"
+  },
+  {
+    "code": "CF",
+    "name": "Centrafrique",
+    "flag": "🇨🇫",
+    "dial": "+236",
+    "digits": 8,
+    "example": "70012345"
+  },
+  {
+    "code": "MG",
+    "name": "Madagascar",
+    "flag": "🇲🇬",
+    "dial": "+261",
+    "digits": 9,
+    "example": "340123456"
+  },
+  {
+    "code": "DZ",
+    "name": "Algérie",
+    "flag": "🇩🇿",
+    "dial": "+213",
+    "digits": 9,
+    "example": "550123456"
+  },
+  {
+    "code": "MA",
+    "name": "Maroc",
+    "flag": "🇲🇦",
+    "dial": "+212",
+    "digits": 9,
+    "example": "660123456"
+  },
+  {
+    "code": "TN",
+    "name": "Tunisie",
+    "flag": "🇹🇳",
+    "dial": "+216",
+    "digits": 8,
+    "example": "98012345"
+  },
+  {
+    "code": "EG",
+    "name": "Égypte",
+    "flag": "🇪🇬",
+    "dial": "+20",
+    "digits": 10,
+    "example": "1001234567"
+  },
+  {
+    "code": "NG",
+    "name": "Nigeria",
+    "flag": "🇳🇬",
+    "dial": "+234",
+    "digits": 10,
+    "example": "8021234567"
+  },
+  {
+    "code": "GH",
+    "name": "Ghana",
+    "flag": "🇬🇭",
+    "dial": "+233",
+    "digits": 9,
+    "example": "240123456"
+  },
+  {
+    "code": "KE",
+    "name": "Kenya",
+    "flag": "🇰🇪",
+    "dial": "+254",
+    "digits": 9,
+    "example": "712123456"
+  },
+  {
+    "code": "RW",
+    "name": "Rwanda",
+    "flag": "🇷🇼",
+    "dial": "+250",
+    "digits": 9,
+    "example": "780123456"
+  },
+  {
+    "code": "BI",
+    "name": "Burundi",
+    "flag": "🇧🇮",
+    "dial": "+257",
+    "digits": 8,
+    "example": "79012345"
+  },
+  {
+    "code": "AO",
+    "name": "Angola",
+    "flag": "🇦🇴",
+    "dial": "+244",
+    "digits": 9,
+    "example": "923123456"
+  },
+  {
+    "code": "MZ",
+    "name": "Mozambique",
+    "flag": "🇲🇿",
+    "dial": "+258",
+    "digits": 9,
+    "example": "840123456"
+  },
+  {
+    "code": "ET",
+    "name": "Éthiopie",
+    "flag": "🇪🇹",
+    "dial": "+251",
+    "digits": 9,
+    "example": "911123456"
+  },
+  {
+    "code": "TZ",
+    "name": "Tanzanie",
+    "flag": "🇹🇿",
+    "dial": "+255",
+    "digits": 9,
+    "example": "754123456"
+  },
+  {
+    "code": "UG",
+    "name": "Ouganda",
+    "flag": "🇺🇬",
+    "dial": "+256",
+    "digits": 9,
+    "example": "772123456"
+  },
+  {
+    "code": "ZA",
+    "name": "Afrique du Sud",
+    "flag": "🇿🇦",
+    "dial": "+27",
+    "digits": 9,
+    "example": "821234567"
+  },
+  {
+    "code": "MR",
+    "name": "Mauritanie",
+    "flag": "🇲🇷",
+    "dial": "+222",
+    "digits": 8,
+    "example": "46012345"
+  },
+  {
+    "code": "GQ",
+    "name": "Guinée Équatoriale",
+    "flag": "🇬🇶",
+    "dial": "+240",
+    "digits": 9,
+    "example": "222123456"
+  },
+  {
+    "code": "DJ",
+    "name": "Djibouti",
+    "flag": "🇩🇯",
+    "dial": "+253",
+    "digits": 8,
+    "example": "77012345"
+  },
+  {
+    "code": "KM",
+    "name": "Comores",
+    "flag": "🇰🇲",
+    "dial": "+269",
+    "digits": 7,
+    "example": "3201234"
+  },
+  {
+    "code": "MU",
+    "name": "Maurice",
+    "flag": "🇲🇺",
+    "dial": "+230",
+    "digits": 8,
+    "example": "57012345"
+  },
+  {
+    "code": "SC",
+    "name": "Seychelles",
+    "flag": "🇸🇨",
+    "dial": "+248",
+    "digits": 7,
+    "example": "2501234"
+  },
+  {
+    "code": "CV",
+    "name": "Cap-Vert",
+    "flag": "🇨🇻",
+    "dial": "+238",
+    "digits": 7,
+    "example": "9912345"
+  },
+  {
+    "code": "GW",
+    "name": "Guinée-Bissau",
+    "flag": "🇬🇼",
+    "dial": "+245",
+    "digits": 7,
+    "example": "9551234"
+  },
+  {
+    "code": "LR",
+    "name": "Libéria",
+    "flag": "🇱🇷",
+    "dial": "+231",
+    "digits": 8,
+    "example": "77012345"
+  },
+  {
+    "code": "SL",
+    "name": "Sierra Leone",
+    "flag": "🇸🇱",
+    "dial": "+232",
+    "digits": 8,
+    "example": "76012345"
+  },
+  {
+    "code": "GM",
+    "name": "Gambie",
+    "flag": "🇬🇲",
+    "dial": "+220",
+    "digits": 7,
+    "example": "7012345"
+  },
+  {
+    "code": "ST",
+    "name": "Sao Tomé-et-Principe",
+    "flag": "🇸🇹",
+    "dial": "+239",
+    "digits": 7,
+    "example": "9901234"
+  },
+  {
+    "code": "ZW",
+    "name": "Zimbabwe",
+    "flag": "🇿🇼",
+    "dial": "+263",
+    "digits": 9,
+    "example": "771234567"
+  },
+  {
+    "code": "ZM",
+    "name": "Zambie",
+    "flag": "🇿🇲",
+    "dial": "+260",
+    "digits": 9,
+    "example": "977123456"
+  },
+  {
+    "code": "MW",
+    "name": "Malawi",
+    "flag": "🇲🇼",
+    "dial": "+265",
+    "digits": 9,
+    "example": "991234567"
+  },
+  {
+    "code": "BW",
+    "name": "Botswana",
+    "flag": "🇧🇼",
+    "dial": "+267",
+    "digits": 8,
+    "example": "71234567"
+  },
+  {
+    "code": "NA",
+    "name": "Namibie",
+    "flag": "🇳🇦",
+    "dial": "+264",
+    "digits": 8,
+    "example": "81123456"
+  },
+  {
+    "code": "SZ",
+    "name": "Eswatini",
+    "flag": "🇸🇿",
+    "dial": "+268",
+    "digits": 8,
+    "example": "76123456"
+  },
+  {
+    "code": "LS",
+    "name": "Lesotho",
+    "flag": "🇱🇸",
+    "dial": "+266",
+    "digits": 8,
+    "example": "58123456"
+  },
+  {
+    "code": "SO",
+    "name": "Somalie",
+    "flag": "🇸🇴",
+    "dial": "+252",
+    "digits": 8,
+    "example": "61512345"
+  },
+  {
+    "code": "SD",
+    "name": "Soudan",
+    "flag": "🇸🇩",
+    "dial": "+249",
+    "digits": 9,
+    "example": "912345678"
+  },
+  {
+    "code": "SS",
+    "name": "Soudan du Sud",
+    "flag": "🇸🇸",
+    "dial": "+211",
+    "digits": 9,
+    "example": "920123456"
+  },
+  {
+    "code": "LY",
+    "name": "Libye",
+    "flag": "🇱🇾",
+    "dial": "+218",
+    "digits": 9,
+    "example": "912345678"
+  },
+  {
+    "code": "ER",
+    "name": "Érythrée",
+    "flag": "🇪🇷",
+    "dial": "+291",
+    "digits": 7,
+    "example": "7123456"
+  }
+]

@@ -1,0 +1,2462 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>Nexus Tunnel</title>
+  <style>
+    :root {
+      --bg: #070b16;
+      --bg-card: rgba(14, 23, 42, 0.82);
+      --border-card: rgba(30, 48, 80, 0.65);
+      --primary: #00f2fe;
+      --primary-glow: rgba(0, 242, 254, 0.4);
+      --secondary: #4facfe;
+      --accent: #10b981;
+      --accent-glow: rgba(16, 185, 129, 0.35);
+      --warning: #f59e0b;
+      --danger: #ef4444;
+      --danger-glow: rgba(239, 68, 68, 0.35);
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+      --text-dim: #64748b;
+      --radius-sm: 10px;
+      --radius-md: 16px;
+      --radius-lg: 22px;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    }
+
+    body {
+      background-color: var(--bg);
+      background-image: 
+        radial-gradient(circle at 50% 0%, rgba(0, 242, 254, 0.08) 0%, transparent 60%),
+        radial-gradient(circle at 100% 100%, rgba(79, 172, 254, 0.05) 0%, transparent 40%);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow-x: hidden;
+    }
+
+    /* Top Navigation Header */
+    .app-header {
+      height: 58px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 16px;
+      background: rgba(7, 11, 22, 0.95);
+      backdrop-filter: blur(18px);
+      border-bottom: 1px solid var(--border-card);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    .brand-title {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 800;
+      font-size: 17px;
+      letter-spacing: 0.8px;
+      background: linear-gradient(135deg, #ffffff, #c7d2fe);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .brand-icon-box {
+      width: 32px;
+      height: 32px;
+      border-radius: 9px;
+      background: linear-gradient(135deg, var(--primary), var(--secondary));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 0 14px var(--primary-glow);
+    }
+    .brand-icon-box svg {
+      width: 18px;
+      height: 18px;
+      fill: #070b16;
+    }
+
+    .header-right-box {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      position: relative;
+    }
+
+    /* Status Pill */
+    .status-pill {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 4px 10px;
+      border-radius: 20px;
+      background: rgba(16, 185, 129, 0.12);
+      border: 1px solid rgba(16, 185, 129, 0.35);
+      color: var(--accent);
+    }
+    .status-pill.disconnected {
+      background: rgba(148, 163, 184, 0.12);
+      border-color: rgba(148, 163, 184, 0.3);
+      color: var(--text-muted);
+    }
+    .status-pill.connecting {
+      background: rgba(245, 158, 11, 0.12);
+      border-color: rgba(245, 158, 11, 0.4);
+      color: var(--warning);
+    }
+    .status-pill.expired {
+      background: rgba(239, 68, 68, 0.15);
+      border-color: rgba(239, 68, 68, 0.45);
+      color: #f87171;
+    }
+    .status-pill .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+    .status-pill.connected .dot {
+      box-shadow: 0 0 8px currentColor;
+      animation: pulseDot 1.8s infinite;
+    }
+
+    /* Icon Buttons (Refresh & 3-Dot) */
+    .icon-btn {
+      width: 34px;
+      height: 34px;
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border-card);
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .icon-btn:active {
+      transform: scale(0.92);
+      background: rgba(0, 242, 254, 0.15);
+      border-color: var(--primary);
+    }
+    .icon-btn svg {
+      width: 17px;
+      height: 17px;
+      fill: currentColor;
+    }
+    .icon-btn.spinning svg {
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+      100% { transform: rotate(360deg); }
+    }
+    @keyframes pulseDot {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(1.3); }
+    }
+
+    /* 3-Dot Dropdown Menu */
+    .dropdown-menu {
+      position: absolute;
+      top: 44px;
+      right: 0;
+      width: 250px;
+      background: #0d1527;
+      border: 1px solid rgba(0, 242, 254, 0.3);
+      border-radius: 14px;
+      box-shadow: 0 16px 36px rgba(0, 0, 0, 0.75), 0 0 20px rgba(0, 242, 254, 0.15);
+      padding: 6px;
+      display: none;
+      flex-direction: column;
+      z-index: 1000;
+      backdrop-filter: blur(20px);
+    }
+    .dropdown-menu.open {
+      display: flex;
+      animation: menuFadeIn 0.18s ease-out;
+    }
+    @keyframes menuFadeIn {
+      from { opacity: 0; transform: translateY(-8px) scale(0.96); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    .dropdown-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 11px 12px;
+      border-radius: 9px;
+      color: var(--text);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .dropdown-item:active {
+      background: rgba(0, 242, 254, 0.12);
+      color: var(--primary);
+    }
+    .dropdown-item svg {
+      width: 16px;
+      height: 16px;
+      fill: currentColor;
+      flex-shrink: 0;
+    }
+    .dropdown-divider {
+      height: 1px;
+      background: rgba(255, 255, 255, 0.08);
+      margin: 4px 6px;
+    }
+
+    /* Main Container & Scroll Area */
+    main {
+      flex: 1;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+      padding-bottom: 86px;
+    }
+
+    .view-container {
+      display: none;
+      flex-direction: column;
+      gap: 16px;
+      width: 100%;
+      animation: fadeIn 0.25s ease-out;
+    }
+    .view-container.active {
+      display: flex;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Enforcement Banner */
+    .enforcement-banner {
+      background: rgba(239, 68, 68, 0.18);
+      border: 1px solid rgba(239, 68, 68, 0.45);
+      border-radius: var(--radius-md);
+      padding: 12px 14px;
+      font-size: 11px;
+      font-weight: 600;
+      color: #fca5a5;
+      display: none;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .enforcement-banner.active {
+      display: flex;
+    }
+
+    /* Glass Cards */
+    .glass-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-card);
+      border-radius: var(--radius-lg);
+      padding: 16px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    /* Server Card (Secure Cloud) */
+    .server-card {
+      background: rgba(14, 23, 42, 0.85);
+      border: 1px solid var(--border-card);
+      border-radius: var(--radius-md);
+      padding: 12px 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .server-info {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .server-icon-badge {
+      width: 36px;
+      height: 36px;
+      border-radius: 10px;
+      background: rgba(0, 242, 254, 0.12);
+      border: 1px solid rgba(0, 242, 254, 0.3);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--primary);
+    }
+    .server-name {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--text);
+    }
+    .server-sub {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 1px;
+    }
+    .ping-badge {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border-card);
+      padding: 5px 10px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--accent);
+    }
+    .ping-badge .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--accent);
+    }
+
+    /* Giant Power Ring */
+    .power-hub {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px 0 16px;
+    }
+    .power-ring {
+      width: 170px;
+      height: 170px;
+      border-radius: 50%;
+      background: radial-gradient(circle, #0e172a 40%, #070b16 100%);
+      border: 3px solid rgba(255, 255, 255, 0.08);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      cursor: pointer;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+      transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    }
+    .power-ring:active {
+      transform: scale(0.94);
+    }
+    .power-ring.connected {
+      border-color: var(--accent);
+      box-shadow: 0 0 35px var(--accent-glow), inset 0 0 25px rgba(16, 185, 129, 0.2);
+    }
+    .power-ring.connecting {
+      border-color: var(--warning);
+      box-shadow: 0 0 30px rgba(245, 158, 11, 0.3);
+      animation: spinBorder 2s linear infinite;
+    }
+    .power-ring.expired {
+      border-color: var(--danger);
+      box-shadow: 0 0 25px var(--danger-glow);
+    }
+    @keyframes spinBorder {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+
+    .power-button {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+    .power-button svg {
+      width: 48px;
+      height: 48px;
+      fill: var(--text-dim);
+      transition: all 0.3s;
+    }
+    .power-ring.connected .power-button svg {
+      fill: var(--accent);
+      filter: drop-shadow(0 0 10px var(--accent-glow));
+    }
+    .power-ring.connecting .power-button svg {
+      fill: var(--warning);
+    }
+    .power-ring.expired .power-button svg {
+      fill: var(--danger);
+    }
+    .power-status-text {
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 1.2px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+    }
+    .power-ring.connected .power-status-text {
+      color: var(--accent);
+    }
+    .power-ring.expired .power-status-text {
+      color: #f87171;
+    }
+
+    /* Connection Timer Box */
+    .connection-timer-box {
+      margin-top: 14px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+    }
+    .timer-badge {
+      font-size: 20px;
+      font-weight: 800;
+      font-family: monospace;
+      letter-spacing: 1.5px;
+      color: var(--text);
+    }
+    .crypto-badge {
+      font-size: 10px;
+      font-weight: 700;
+      padding: 3px 10px;
+      border-radius: 12px;
+      background: rgba(0, 242, 254, 0.08);
+      border: 1px solid rgba(0, 242, 254, 0.25);
+      color: var(--primary);
+    }
+
+    /* Telemetry Row (Live Real Speeds) */
+    .telemetry-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    .telemetry-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-card);
+      border-radius: var(--radius-md);
+      padding: 12px 14px;
+      display: flex;
+      flex-direction: column;
+    }
+    .telemetry-header {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+    .telemetry-header.down {
+      color: var(--primary);
+    }
+    .telemetry-header.up {
+      color: #c084fc;
+    }
+    .telemetry-header svg {
+      width: 14px;
+      height: 14px;
+      fill: currentColor;
+    }
+    .telemetry-value {
+      font-size: 18px;
+      font-weight: 800;
+      font-family: monospace;
+      color: var(--text);
+    }
+
+    /* Waveform Canvas */
+    #hud-mini-sparkline {
+      width: 100%;
+      height: 54px;
+      border-radius: var(--radius-sm);
+      background: rgba(7, 11, 22, 0.6);
+      border: 1px solid var(--border-card);
+    }
+    #waveform-canvas {
+      width: 100%;
+      height: 120px;
+      border-radius: var(--radius-sm);
+      background: rgba(7, 11, 22, 0.6);
+      border: 1px solid var(--border-card);
+    }
+
+    /* Quota Card */
+    .quota-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-card);
+      border-radius: var(--radius-lg);
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .quota-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .quota-title-box {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      font-weight: 800;
+      color: var(--text);
+    }
+    .quota-title-box svg {
+      width: 18px;
+      height: 18px;
+      fill: var(--primary);
+    }
+    .quota-percent-pill {
+      font-size: 11px;
+      font-weight: 800;
+      padding: 3px 8px;
+      border-radius: 12px;
+      background: rgba(0, 242, 254, 0.12);
+      border: 1px solid rgba(0, 242, 254, 0.35);
+      color: var(--primary);
+    }
+    .quota-percent-pill.expired {
+      background: rgba(239, 68, 68, 0.15);
+      border-color: rgba(239, 68, 68, 0.4);
+      color: #f87171;
+    }
+
+    .progress-bar-bg {
+      height: 8px;
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 4px;
+      overflow: hidden;
+      position: relative;
+    }
+    .progress-bar-fill {
+      height: 100%;
+      width: 0%;
+      border-radius: 4px;
+      background: linear-gradient(90deg, var(--primary), var(--secondary));
+      transition: width 0.4s ease;
+    }
+    .quota-details-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+    .quota-details-row strong {
+      color: var(--text);
+      font-size: 12px;
+    }
+
+    /* Buttons */
+    .btn-gradient {
+      width: 100%;
+      padding: 14px;
+      border-radius: var(--radius-md);
+      background: linear-gradient(135deg, var(--primary), var(--secondary));
+      border: none;
+      color: #050811;
+      font-size: 13px;
+      font-weight: 800;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      cursor: pointer;
+      box-shadow: 0 4px 18px var(--primary-glow);
+      transition: transform 0.15s;
+    }
+    .btn-gradient:active {
+      transform: scale(0.98);
+    }
+    .btn-gradient svg {
+      width: 16px;
+      height: 16px;
+      fill: currentColor;
+    }
+
+    .btn-outline {
+      width: 100%;
+      padding: 12px;
+      border-radius: var(--radius-md);
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--border-card);
+      color: var(--text);
+      font-size: 12px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      cursor: pointer;
+    }
+    .btn-outline:active {
+      background: rgba(255, 255, 255, 0.08);
+    }
+    .btn-outline svg {
+      width: 15px;
+      height: 15px;
+      fill: currentColor;
+    }
+
+    /* Form Elements */
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .form-label {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .form-input, .form-select {
+      width: 100%;
+      padding: 12px 14px;
+      background: rgba(10, 16, 30, 0.85);
+      border: 1px solid var(--border-card);
+      border-radius: var(--radius-sm);
+      color: var(--text);
+      font-size: 13px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .form-input:focus, .form-select:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 10px var(--primary-glow);
+    }
+
+    /* Radio Pills (WhatsApp / Telegram) */
+    .radio-pill-group {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    .radio-pill {
+      padding: 11px;
+      border-radius: var(--radius-sm);
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--border-card);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--text-muted);
+      cursor: pointer;
+    }
+    .radio-pill.active {
+      background: rgba(0, 242, 254, 0.12);
+      border-color: var(--primary);
+      color: var(--primary);
+    }
+    .radio-pill svg {
+      width: 16px;
+      height: 16px;
+      fill: currentColor;
+    }
+
+    /* Plans Catalogue Grid */
+    .plan-grid {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .plan-item-card {
+      background: rgba(10, 16, 30, 0.8);
+      border: 1px solid var(--border-card);
+      border-radius: var(--radius-md);
+      padding: 12px 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .badge-chip {
+      font-size: 9px;
+      font-weight: 800;
+      padding: 2px 6px;
+      border-radius: 6px;
+      background: rgba(16, 185, 129, 0.15);
+      border: 1px solid rgba(16, 185, 129, 0.35);
+      color: var(--accent);
+      text-transform: uppercase;
+    }
+
+    /* Settings Rows */
+    .setting-group {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .setting-group-title {
+      font-size: 11px;
+      font-weight: 800;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      margin-top: 6px;
+    }
+    .setting-row {
+      background: var(--bg-card);
+      border: 1px solid var(--border-card);
+      border-radius: var(--radius-md);
+      padding: 12px 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .setting-row-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .setting-row-left svg {
+      width: 17px;
+      height: 17px;
+      fill: var(--text-dim);
+    }
+    .setting-label {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--text);
+    }
+    .setting-sub {
+      font-size: 10px;
+      color: var(--text-muted);
+    }
+    .setting-val {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--primary);
+    }
+
+    /* Bottom Navigation Bar */
+    .bottom-nav {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 64px;
+      background: rgba(7, 11, 22, 0.96);
+      backdrop-filter: blur(18px);
+      border-top: 1px solid var(--border-card);
+      display: flex;
+      align-items: center;
+      justify-content: space-around;
+      z-index: 100;
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+    .nav-item {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      color: var(--text-dim);
+      font-size: 10px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: color 0.2s;
+    }
+    .nav-item.active {
+      color: var(--primary);
+    }
+    .nav-item svg {
+      width: 20px;
+      height: 20px;
+      fill: currentColor;
+    }
+
+    /* Modals */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.8);
+      backdrop-filter: blur(8px);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      z-index: 200;
+    }
+    .modal-content {
+      background: #0d1527;
+      border: 1px solid var(--border-card);
+      border-radius: var(--radius-lg);
+      padding: 22px;
+      width: 100%;
+      max-width: 360px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.8);
+    }
+    .modal-title {
+      font-size: 15px;
+      font-weight: 800;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .modal-title svg {
+      width: 18px;
+      height: 18px;
+      fill: var(--primary);
+    }
+
+    /* Toast Notification */
+    .app-toast {
+      position: fixed;
+      bottom: 78px;
+      left: 50%;
+      transform: translateX(-50%) translateY(20px);
+      background: rgba(14, 23, 42, 0.95);
+      border: 1px solid var(--primary);
+      color: var(--text);
+      padding: 9px 18px;
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 700;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.7);
+      opacity: 0;
+      pointer-events: none;
+      transition: all 0.25s ease;
+      z-index: 1000;
+      max-width: 90%;
+      text-align: center;
+    }
+    .app-toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top Navigation Header -->
+  <header class="app-header">
+    <div class="brand-title">
+      <div class="brand-icon-box">
+        <svg viewBox="0 0 24 24"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z"/></svg>
+      </div>
+      <span>Nexus Tunnel</span>
+    </div>
+
+    <div class="header-right-box">
+      <div class="status-pill disconnected" id="header-status-pill">
+        <div class="dot"></div>
+        <span id="header-status-text">En Pause</span>
+      </div>
+
+      <!-- Quick Manual Refresh Button -->
+      <button class="icon-btn" id="btn-header-sync" onclick="manualSyncNow()" title="Actualiser le statut">
+        <svg viewBox="0 0 24 24"><path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+      </button>
+
+      <!-- 3-Dot More Menu Button -->
+      <button class="icon-btn" id="btn-header-more" onclick="toggleHeaderMoreMenu(event)" title="Menu Options">
+        <svg viewBox="0 0 24 24"><path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg>
+      </button>
+
+      <!-- 3-Dot Dropdown Content -->
+      <div class="dropdown-menu" id="header-more-menu">
+        <div class="dropdown-item" onclick="closeHeaderMoreMenu(); manualSyncNow();">
+          <svg viewBox="0 0 24 24"><path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+          <span>Actualiser mon statut</span>
+        </div>
+        <div class="dropdown-item" onclick="closeHeaderMoreMenu(); runRealTimePingProbe();">
+          <svg viewBox="0 0 24 24"><path d="M7 2v11h3v9l7-12h-4l4-8z"/></svg>
+          <span>Tester la latence (Ping)</span>
+        </div>
+        <div class="dropdown-item" onclick="closeHeaderMoreMenu(); openClientSubPortal();">
+          <svg viewBox="0 0 24 24"><path d="M19 19H5V5h7V3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg>
+          <span>Mon portail d'abonnement (/sub)</span>
+        </div>
+        <div class="dropdown-divider"></div>
+        <div class="dropdown-item" onclick="closeHeaderMoreMenu(); copyDiagnostics();">
+          <svg viewBox="0 0 24 24"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
+          <span>Copier mon identifiant appareil</span>
+        </div>
+        <div class="dropdown-item" onclick="closeHeaderMoreMenu(); switchTab('activity');">
+          <svg viewBox="0 0 24 24"><path d="M3 13h4l3-9 4 18 3-9h4v-2h-5l-3 9-4-18-3 9H3v2z"/></svg>
+          <span>Statistiques de connexion</span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- App Content Views -->
+  <main>
+
+    <!-- ================= VIEW 1: ONBOARDING / REGISTRATION ================= -->
+    <section id="view-onboarding" class="view-container active">
+      <div class="glass-card" style="text-align: center; padding: 22px 14px;">
+        <h2 style="font-size: 17px; font-weight: 800; margin-bottom: 6px;">Enregistrement de l'Appareil</h2>
+        <p style="font-size: 11px; color: var(--text-muted); line-height: 1.5; margin-bottom: 12px;">
+          Renseignez vos informations ci-dessous pour soumettre votre appareil à la validation d'un administrateur.
+        </p>
+        <div style="font-size: 11px; color: var(--text-dim); background: rgba(0,0,0,0.3); padding: 8px; border-radius: 8px;">
+          Modèle: <strong id="onboard-model" style="color: var(--text);">-</strong> • 
+          ID: <strong id="onboard-hwid" style="color: var(--primary);">-</strong>
+          <span id="onboard-os" style="display: none;">Android</span>
+        </div>
+      </div>
+
+      <div class="glass-card" style="display: flex; flex-direction: column; gap: 12px;">
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+          <div class="form-group">
+            <label class="form-label">Prénom *</label>
+            <input type="text" id="reg-firstname" class="form-input" placeholder="Ex: Jean">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Nom *</label>
+            <input type="text" id="reg-lastname" class="form-input" placeholder="Ex: Dupont">
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Pays de résidence *</label>
+          <select id="reg-country" class="form-select" onchange="onCountrySelected()">
+            <option value="CM">Cameroun (+237)</option>
+            <option value="CI">Côte d'Ivoire (+225)</option>
+            <option value="SN">Sénégal (+221)</option>
+            <option value="GA">Gabon (+241)</option>
+            <option value="CD">RD Congo (+243)</option>
+            <option value="CG">Congo (+242)</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Canal de contact *</label>
+          <div class="radio-pill-group">
+            <div class="radio-pill active" id="btn-choice-wa" onclick="selectContactType('whatsapp')">
+              <svg viewBox="0 0 24 24"><path d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91C2.13 13.66 2.59 15.36 3.45 16.86L2.05 22L7.3 20.62C8.75 21.41 10.38 21.83 12.04 21.83C17.5 21.83 21.95 17.38 21.95 11.92C21.95 9.27 20.92 6.78 19.05 4.91C17.18 3.03 14.69 2 12.04 2M12.05 3.67C14.25 3.67 16.31 4.53 17.87 6.09C19.42 7.65 20.28 9.72 20.28 11.92C20.28 16.46 16.58 20.15 12.04 20.15C10.56 20.15 9.11 19.76 7.85 19L7.55 18.83L4.43 19.65L5.26 16.61L5.06 16.29C4.24 14.99 3.8 13.47 3.8 11.91C3.81 7.37 7.5 3.67 12.05 3.67Z"/></svg>
+              <span>WhatsApp</span>
+            </div>
+            <div class="radio-pill" id="btn-choice-tg" onclick="selectContactType('telegram')">
+              <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69a.2.2 0 00-.05-.18c-.06-.05-.14-.03-.21-.02-.09.02-1.49.95-4.22 2.79-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.75-.55 2.92-1.27 4.86-2.11 5.83-2.51 2.78-1.16 3.35-1.36 3.73-1.36.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .38z"/></svg>
+              <span>Telegram</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-group" id="group-whatsapp">
+          <label class="form-label" id="label-phone-digits">Numéro WhatsApp</label>
+          <div style="display: flex; gap: 8px;">
+            <div id="phone-prefix-badge" style="padding: 12px 14px; background: rgba(10, 16, 30, 0.85); border: 1px solid var(--border-card); border-radius: var(--radius-sm); font-size: 13px; font-weight: 700; color: var(--primary);">
+              +237
+            </div>
+            <input type="tel" id="reg-phone" class="form-input" placeholder="Ex: 690123456" oninput="validatePhoneLive()">
+          </div>
+          <div id="phone-hint" style="font-size: 10px; color: var(--text-dim); margin-top: 2px;">
+            Requis: 9 chiffres pour Cameroun
+          </div>
+        </div>
+
+        <div class="form-group" id="group-telegram" style="display: none;">
+          <label class="form-label">Nom d'utilisateur Telegram</label>
+          <input type="text" id="reg-telegram" class="form-input" placeholder="@mon_identifiant" oninput="validateTelegramLive()">
+          <div id="tg-hint" style="font-size: 10px; color: var(--text-dim); margin-top: 2px;">
+            Doit commencer par @
+          </div>
+        </div>
+
+        <button onclick="submitMembershipRequest()" class="btn-gradient" id="btn-submit-onboard" style="margin-top: 6px;">
+          <span>Soumettre ma demande d'accès</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- ================= VIEW 2: PENDING APPROVAL ================= -->
+    <section id="view-pending" class="view-container">
+      <div class="glass-card" style="text-align: center; padding: 26px 16px;">
+        <div style="width: 50px; height: 50px; border-radius: 50%; background: rgba(0, 242, 254, 0.15); display: flex; align-items: center; justify-content: center; margin: 0 auto 12px; color: var(--primary);">
+          <svg viewBox="0 0 24 24" style="width: 24px; height: 24px; fill: currentColor;"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+        </div>
+        <h2 style="font-size: 17px; font-weight: 800; margin-bottom: 6px;">Demande en cours d'examen</h2>
+        <p style="font-size: 11px; color: var(--text-muted); line-height: 1.5; margin-bottom: 16px;">
+          Votre demande d'accès a été transmise aux administrateurs. Dès son approbation, votre tunnel s'activera automatiquement.
+        </p>
+
+        <div class="glass-card" style="text-align: left; margin-bottom: 16px; background: rgba(9, 14, 28, 0.7);">
+          <div style="font-size: 11px; color: var(--text-muted); display: flex; justify-content: space-between; margin-bottom: 4px;">
+            <span>Titulaire :</span><strong id="pending-name" style="color: var(--text);">-</strong>
+          </div>
+          <div style="font-size: 11px; color: var(--text-muted); display: flex; justify-content: space-between; margin-bottom: 4px;">
+            <span>Contact :</span><strong id="pending-contact" style="color: var(--primary);">-</strong>
+          </div>
+          <div style="font-size: 11px; color: var(--text-muted); display: flex; justify-content: space-between;">
+            <span>Pays :</span><strong id="pending-country" style="color: var(--text);">-</strong>
+          </div>
+        </div>
+
+        <button onclick="checkMembershipStatus(true)" class="btn-outline">
+          <svg viewBox="0 0 24 24"><path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+          <span>Vérifier le statut maintenant</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- ================= VIEW 3: REJECTED NOTICE ================= -->
+    <section id="view-rejected" class="view-container">
+      <div class="glass-card" style="text-align: center; padding: 26px 16px; border-color: rgba(239, 68, 68, 0.4);">
+        <div style="width: 50px; height: 50px; border-radius: 50%; background: rgba(239, 68, 68, 0.15); display: flex; align-items: center; justify-content: center; margin: 0 auto 12px; color: var(--danger);">
+          <svg viewBox="0 0 24 24" style="width: 26px; height: 26px; fill: currentColor;"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </div>
+        <h2 style="font-size: 16px; font-weight: 800; color: var(--danger); margin-bottom: 6px;">Demande Non Validée</h2>
+        <p style="font-size: 11px; color: var(--text-muted); margin-bottom: 14px;">
+          L'administrateur a refusé votre demande pour le motif suivant :
+        </p>
+        <div class="glass-card" id="rejection-reason-text" style="background: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.25); color: #fca5a5; font-size: 12px; font-weight: 600; margin-bottom: 16px; text-align: left;">
+          Justificatif de refus...
+        </div>
+        <button onclick="editAndResubmitRequest()" class="btn-gradient">
+          <span>Modifier et renvoyer la demande</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- ================= VIEW 4: MAIN VPN DASHBOARD (ACCUEIL) ================= -->
+    <section id="view-dashboard" class="view-container">
+
+      <!-- Dynamic Enforcement Alert Banner (Revoked / Suspended / Quota / Expired) -->
+      <div class="enforcement-banner" id="hud-enforcement-banner">
+        <div id="hud-enforcement-text">Alerte système</div>
+        <button onclick="manualSyncNow()" style="padding: 5px 10px; border-radius: 8px; background: rgba(255,255,255,0.14); border: 1px solid rgba(255,255,255,0.25); color: #fff; font-size: 10px; font-weight: 800; cursor: pointer; flex-shrink: 0;">Actualiser</button>
+      </div>
+
+      <!-- Secure Cloud Server Card -->
+      <div class="server-card">
+        <div class="server-info">
+          <div class="server-icon-badge">
+            <svg viewBox="0 0 24 24" style="width: 18px; height: 18px; fill: currentColor;"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>
+          </div>
+          <div>
+            <div class="server-name">Serveur Cloud Nexus Pro</div>
+            <div class="server-sub">Protection Sécurisée • TLS 1.3</div>
+          </div>
+        </div>
+        <div class="ping-badge" onclick="runRealTimePingProbe()" style="cursor: pointer;" title="Tester la latence">
+          <div class="dot"></div>
+          <span id="hud-ping-val">32 ms</span>
+        </div>
+      </div>
+
+      <!-- Giant Central Power Ring -->
+      <div class="power-hub">
+        <div class="power-ring" id="power-ring-btn" onclick="toggleVpn()">
+          <div class="power-button">
+            <svg viewBox="0 0 24 24"><path d="M13 3h-2v10h2V3zm4.83 2.17l-1.42 1.42C17.99 7.86 19 9.81 19 12c0 3.87-3.13 7-7 7s-7-3.13-7-7c0-2.19 1.01-4.14 2.58-5.42L6.17 5.17C4.23 6.82 3 9.26 3 12c0 4.97 4.03 9 9 9s9-4.03 9-9c0-2.74-1.23-5.18-3.17-6.83z"/></svg>
+            <span class="power-status-text" id="power-status-label">DÉCONNECTÉ</span>
+          </div>
+        </div>
+
+        <div class="connection-timer-box">
+          <div class="timer-badge" id="hud-timer">00:00:00</div>
+          <div class="crypto-badge" id="hud-crypto-badge">VLESS • TLS 1.3 • WebSocket</div>
+        </div>
+      </div>
+
+      <!-- Dual Telemetry Row (Live Real Speeds) -->
+      <div class="telemetry-row">
+        <div class="telemetry-card">
+          <div class="telemetry-header down">
+            <svg viewBox="0 0 24 24"><path d="M20 12l-1.41-1.41L13 16.17V4h-2v12.17l-5.58-5.59L4 12l8 8 8-8z"/></svg>
+            <span>Trafic Entrant</span>
+          </div>
+          <div class="telemetry-value" id="hud-down-val">0.00 Ko/s</div>
+          <div style="font-size: 10px; color: var(--text-muted); margin-top: 3px;" id="hud-down-total">Session: 0.0 Mo</div>
+        </div>
+        <div class="telemetry-card">
+          <div class="telemetry-header up">
+            <svg viewBox="0 0 24 24"><path d="M4 12l1.41 1.41L11 7.83V20h2V7.83l5.58 5.59L20 12l-8-8-8 8z"/></svg>
+            <span>Trafic Sortant</span>
+          </div>
+          <div class="telemetry-value" id="hud-up-val">0.00 Ko/s</div>
+          <div style="font-size: 10px; color: var(--text-muted); margin-top: 3px;" id="hud-up-total">Session: 0.0 Ko</div>
+        </div>
+      </div>
+
+      <!-- Mini Sparkline Canvas -->
+      <canvas id="hud-mini-sparkline" width="420" height="54"></canvas>
+
+      <!-- Quota & Forfait Card -->
+      <div class="quota-card">
+        <div class="quota-header">
+          <div class="quota-title-box">
+            <svg viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-2 10h-4v4h-2v-4H7v-2h4V7h2v4h4v2z"/></svg>
+            <span>Mon Forfait</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 6px;">
+            <span class="badge-chip" id="hud-reset-badge" style="display: none;">Reset</span>
+            <span class="quota-percent-pill" id="hud-quota-percent">0%</span>
+          </div>
+        </div>
+
+        <!-- Active Forfait Details Container -->
+        <div id="hud-quota-active-box">
+          <div class="progress-bar-bg">
+            <div class="progress-bar-fill" id="hud-progress-fill"></div>
+          </div>
+
+          <div class="quota-details-row" style="margin-top: 8px;">
+            <span>Données consommées :</span>
+            <strong id="hud-consumed-text">0.00 Go / 25.00 Go</strong>
+          </div>
+
+          <div class="quota-details-row" style="margin-top: 4px;">
+            <span>Expiration :</span>
+            <strong id="hud-expiration-date" style="color: var(--primary);">-</strong>
+          </div>
+
+          <div class="quota-details-row" style="margin-top: 4px;">
+            <span>Temps restant :</span>
+            <strong id="hud-countdown-text" style="color: var(--accent);">-</strong>
+          </div>
+        </div>
+
+        <!-- Empty State Container (When plan is finished or expired) -->
+        <div id="hud-quota-empty-box" style="display: none; padding: 12px 4px; text-align: center;">
+          <div style="width: 42px; height: 42px; border-radius: 50%; background: rgba(245, 158, 11, 0.12); display: flex; align-items: center; justify-content: center; margin: 0 auto 10px; color: var(--warning);">
+            <svg viewBox="0 0 24 24" style="width: 22px; height: 22px; fill: currentColor;"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+          </div>
+          <div style="font-size: 13px; font-weight: 800; color: #fde68a; margin-bottom: 4px;" id="hud-empty-title">Aucun Forfait Actif</div>
+          <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 12px; line-height: 1.4;" id="hud-empty-desc">
+            Votre forfait est épuisé ou arrivé à expiration. Activez un code de recharge pour continuer à profiter de votre connexion.
+          </div>
+          <button onclick="openVoucherModal()" class="btn-gradient" style="padding: 10px 14px; font-size: 12px; width: 100%;">
+            <span>Recharger mon compte ›</span>
+          </button>
+        </div>
+
+        <div class="quota-details-row" style="margin-top: 6px; padding-top: 6px; border-top: 1px dashed rgba(51, 65, 85, 0.5); font-size: 10px; color: var(--text-dim);">
+          <span id="hud-last-sync-label">Synchronisé avec le WebPanel</span>
+          <span onclick="manualSyncNow()" style="color: var(--primary); font-weight: 700; cursor: pointer;">Actualiser ↻</span>
+        </div>
+      </div>
+
+      <!-- Quick Action Button -->
+      <button onclick="openVoucherModal()" class="btn-gradient">
+        <svg viewBox="0 0 24 24"><path d="M22 10V6c0-1.11-.9-2-2-2H4c-1.1 0-1.99.89-1.99 2v4c1.1 0 1.99.9 1.99 2s-.89 2-2 2v4c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2v-4c-1.1 0-2-.9-2-2s.9-2 2-2zm-9 7.5h-2v-2h2v2zm0-4.5h-2v-2h2v2zm0-4.5h-2v-2h2v2z"/></svg>
+        <span>Activer un Forfait (Code Recharge)</span>
+      </button>
+
+    </section>
+
+    <!-- ================= VIEW 5: ACTIVITÉ (TELEMETRY & GRAPHS) ================= -->
+    <section id="view-activity" class="view-container">
+      <div class="glass-card">
+        <div style="font-size: 13px; font-weight: 800; color: var(--text); margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between;">
+          <span>Débit Réseau en Direct</span>
+          <span style="font-size: 10px; color: var(--accent);">● En Direct</span>
+        </div>
+        <canvas id="waveform-canvas" width="400" height="120"></canvas>
+      </div>
+
+      <div class="glass-card" style="display: flex; flex-direction: column; gap: 10px;">
+        <div style="font-size: 12px; font-weight: 800; color: var(--text);">Statistiques de la Session</div>
+        <div class="setting-row">
+          <span class="setting-label">Total Données Reçues</span>
+          <span class="setting-val" id="act-total-down">0 Mo</span>
+        </div>
+        <div class="setting-row">
+          <span class="setting-label">Total Données Envoyées</span>
+          <span class="setting-val" id="act-total-up">0 Ko</span>
+        </div>
+        <div class="setting-row">
+          <span class="setting-label">Durée de Connexion</span>
+          <span class="setting-val" id="act-session-time">00:00:00</span>
+        </div>
+        <div class="setting-row">
+          <span class="setting-label">Protocole & Chiffrement</span>
+          <span class="setting-val">VLESS + TLS 1.3 (Sécurisé)</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= VIEW 6: FORFAITS (CATALOGUE & VOUCHER) ================= -->
+    <section id="view-vouchers" class="view-container">
+      <div class="glass-card">
+        <h3 style="font-size: 14px; font-weight: 800; margin-bottom: 4px;">Recharge de Forfait</h3>
+        <p style="font-size: 11px; color: var(--text-muted); margin-bottom: 12px;">
+          Entrez le code token fourni par votre revendeur ou administrateur.
+        </p>
+
+        <div class="form-group" style="margin-bottom: 12px;">
+          <label class="form-label">Code Voucher / Token</label>
+          <input type="text" id="voucher-input" class="form-input" placeholder="EX: NX-6001-420B" style="text-transform: uppercase; font-family: monospace; font-size: 15px; letter-spacing: 2px;">
+        </div>
+
+        <button onclick="redeemVoucher()" class="btn-gradient">
+          <span>Recharger Immédiatement</span>
+        </button>
+      </div>
+
+      <div class="glass-card" style="display: flex; flex-direction: column; gap: 10px;">
+        <div style="display: flex; align-items: center; justify-content: space-between;">
+          <div style="font-size: 13px; font-weight: 800; color: var(--text);">Catalogue des Forfaits Disponibles</div>
+          <span class="badge-chip">Officiel</span>
+        </div>
+        <div class="plan-grid" id="plans-catalogue-list">
+          <!-- Populated dynamically from /api/plans -->
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= VIEW 7: RÉGLAGES (SETTINGS & PROFILE) ================= -->
+    <section id="view-settings" class="view-container">
+      <div class="glass-card" style="display: flex; align-items: center; gap: 12px;">
+        <div style="width: 44px; height: 44px; border-radius: 12px; background: linear-gradient(135deg, var(--primary), var(--secondary)); display: flex; align-items: center; justify-content: center; font-size: 18px; font-weight: 900; color: #050811;" id="sett-avatar">
+          U
+        </div>
+        <div style="flex: 1;">
+          <div style="font-size: 14px; font-weight: 800; color: var(--text);" id="sett-name">Client Nexus</div>
+          <div style="font-size: 11px; color: var(--accent); font-weight: 700; margin-top: 1px;" id="sett-status-badge">Compte Actif</div>
+        </div>
+      </div>
+
+      <div class="setting-group">
+        <div class="setting-group-title">Mon Compte & Accès</div>
+        <div class="setting-row" onclick="manualSyncNow()" style="cursor: pointer;">
+          <div class="setting-row-left">
+            <svg viewBox="0 0 24 24"><path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+            <div>
+              <div class="setting-label">Actualiser mon forfait</div>
+              <div class="setting-sub">Synchroniser quota et expiration</div>
+            </div>
+          </div>
+          <div style="color: var(--primary); font-size: 14px; font-weight: 800;">↻</div>
+        </div>
+
+        <div class="setting-row" onclick="openClientSubPortal()" style="cursor: pointer;">
+          <div class="setting-row-left">
+            <svg viewBox="0 0 24 24"><path d="M19 19H5V5h7V3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg>
+            <div>
+              <div class="setting-label">Portail Client Web (/sub)</div>
+              <div class="setting-sub">QR Code et profil d'abonnement</div>
+            </div>
+          </div>
+          <div style="color: var(--text-muted); font-size: 16px;">›</div>
+        </div>
+
+        <div class="setting-row">
+          <div class="setting-row-left">
+            <svg viewBox="0 0 24 24"><path d="M17 1.01L7 1c-1.1 0-2 .9-2 2v18c0 1.1.9 2 2 2h10c1.1 0 2-.9 2-2V3c0-1.1-.9-1.99-2-1.99zM17 19H7V5h10v14z"/></svg>
+            <div>
+              <div class="setting-label">Expiration du forfait</div>
+              <div class="setting-sub" id="sett-device-exp">-</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="setting-group">
+        <div class="setting-group-title">Assistance & Diagnostics</div>
+        <button onclick="copyDiagnostics()" class="btn-outline">
+          <svg viewBox="0 0 24 24"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
+          <span>Copier mon identifiant appareil</span>
+        </button>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ================= MODAL: ACTIVATION VOUCHER ================= -->
+  <div class="modal-overlay" id="voucher-modal">
+    <div class="modal-content">
+      <div class="modal-title">
+        <svg viewBox="0 0 24 24"><path d="M22 10V6c0-1.11-.9-2-2-2H4c-1.1 0-1.99.89-1.99 2v4c1.1 0 1.99.9 1.99 2s-.89 2-2 2v4c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2v-4c-1.1 0-2-.9-2-2s.9-2 2-2zm-9 7.5h-2v-2h2v2zm0-4.5h-2v-2h2v2zm0-4.5h-2v-2h2v2z"/></svg>
+        <span>Activer un Forfait</span>
+      </div>
+      <p style="font-size: 11px; color: var(--text-muted);">
+        Entrez le code voucher fourni par votre administrateur.
+      </p>
+      <div class="form-group">
+        <input type="text" id="modal-voucher-input" class="form-input" placeholder="Ex: NX-6001-420B" style="text-transform: uppercase; font-family: monospace; font-size: 15px; letter-spacing: 2px;">
+      </div>
+      <button onclick="redeemModalVoucher()" class="btn-gradient">
+        <span>Valider le Forfait</span>
+      </button>
+      <button onclick="closeVoucherModal()" class="btn-outline">
+        <span>Fermer</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- Bottom Navigation Bar (Visible only when approved) -->
+  <nav class="bottom-nav" id="app-bottom-nav" style="display: none;">
+    <div class="nav-item active" id="nav-btn-home" onclick="switchTab('dashboard')">
+      <svg viewBox="0 0 24 24"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z"/></svg>
+      <span>Accueil</span>
+    </div>
+    <div class="nav-item" id="nav-btn-activity" onclick="switchTab('activity')">
+      <svg viewBox="0 0 24 24"><path d="M3 13h4l3-9 4 18 3-9h4v-2h-5l-3 9-4-18-3 9H3v2z"/></svg>
+      <span>Activité</span>
+    </div>
+    <div class="nav-item" id="nav-btn-vouchers" onclick="switchTab('vouchers')">
+      <svg viewBox="0 0 24 24"><path d="M22 10V6c0-1.11-.9-2-2-2H4c-1.1 0-1.99.89-1.99 2v4c1.1 0 1.99.9 1.99 2s-.89 2-2 2v4c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2v-4c-1.1 0-2-.9-2-2s.9-2 2-2zm-9 7.5h-2v-2h2v2zm0-4.5h-2v-2h2v2zm0-4.5h-2v-2h2v2z"/></svg>
+      <span>Forfaits</span>
+    </div>
+    <div class="nav-item" id="nav-btn-settings" onclick="switchTab('settings')">
+      <svg viewBox="0 0 24 24"><path d="M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z"/></svg>
+      <span>Réglages</span>
+    </div>
+  </nav>
+
+  <!-- Toast Notification -->
+  <div class="app-toast" id="app-toast"></div>
+
+  <script>
+    // ================= CLIENT CONFIG & CONSTANTS =================
+    const API_BASE = (window.location.protocol === 'file:' || window.location.origin === 'null')
+      ? "https://storesonlines.com/nexus/api"
+      : (window.location.pathname.startsWith('/nexus') ? `${window.location.origin}/nexus/api` : `${window.location.origin}/api`);
+
+    const PORTAL_ORIGIN = (window.location.protocol === 'file:' || window.location.origin === 'null')
+      ? "https://storesonlines.com"
+      : window.location.origin;
+
+    const DEFAULT_PLANS = [
+      { id: "plan_trial", name: "Essai Gratuit 24h", quota_gb: 2.0, duration_days: 1, price_cfa: 0, badge: "GRATUIT" },
+      { id: "plan_10gb", name: "Découverte 10 Go", quota_gb: 10.0, duration_days: 30, price_cfa: 2000, badge: "POPULAIRE" },
+      { id: "plan_25gb", name: "Standard 25 Go", quota_gb: 25.0, duration_days: 30, price_cfa: 3500, badge: "RECOMMANDÉ" },
+      { id: "plan_50gb", name: "Performance 50 Go", quota_gb: 50.0, duration_days: 60, price_cfa: 6000, badge: "PRO" },
+      { id: "plan_unlimited", name: "VIP Illimité", quota_gb: 0.0, duration_days: 30, price_cfa: 10000, badge: "ILLIMITÉ" }
+    ];
+
+    let deviceInfo = null;
+    let plansList = DEFAULT_PLANS.slice();
+    let currentAccount = null;
+    let internalConfig = null;
+    let isConnected = false;
+    let timerInterval = null;
+    let telemetryInterval = null;
+    let idleSyncInterval = null;
+    let selectedContactType = 'whatsapp';
+
+    // Telemetry history arrays
+    const wavePoints = new Array(48).fill(1);
+    const upWavePoints = new Array(48).fill(1);
+
+    // ================= PERSISTENT STORAGE HELPERS =================
+    function getPersistent(key) {
+      try {
+        if (window.NexusNative && window.NexusNative.getLocal) {
+          const v = window.NexusNative.getLocal(key);
+          if (v && v.trim() !== '') return v;
+        }
+      } catch (e) {}
+      return localStorage.getItem(key) || "";
+    }
+
+    function savePersistent(key, val) {
+      try {
+        if (window.NexusNative && window.NexusNative.saveLocal) {
+          window.NexusNative.saveLocal(key, val || "");
+        }
+      } catch (e) {}
+      if (val && String(val).trim() !== '') localStorage.setItem(key, val);
+      else localStorage.removeItem(key);
+    }
+
+    // ================= 3-DOT DROPDOWN MENU & TOAST =================
+    function toggleHeaderMoreMenu(e) {
+      if (e) e.stopPropagation();
+      const menu = document.getElementById('header-more-menu');
+      if (menu) menu.classList.toggle('open');
+    }
+
+    function closeHeaderMoreMenu() {
+      const menu = document.getElementById('header-more-menu');
+      if (menu) menu.classList.remove('open');
+    }
+
+    document.addEventListener('click', (e) => {
+      const menu = document.getElementById('header-more-menu');
+      const btn = document.getElementById('btn-header-more');
+      if (menu && menu.classList.contains('open')) {
+        if (!menu.contains(e.target) && (!btn || !btn.contains(e.target))) {
+          menu.classList.remove('open');
+        }
+      }
+    });
+
+    let toastTimeout = null;
+    function showAppToast(msg) {
+      const t = document.getElementById('app-toast');
+      if (t) {
+        t.innerText = msg;
+        t.classList.add('show');
+        if (toastTimeout) clearTimeout(toastTimeout);
+        toastTimeout = setTimeout(() => t.classList.remove('show'), 2800);
+      }
+      if (window.NexusNative && window.NexusNative.showToast) {
+        try { window.NexusNative.showToast(msg); } catch (e) {}
+      }
+    }
+
+    function setEnforcementBanner(msg) {
+      const b = document.getElementById('hud-enforcement-banner');
+      const t = document.getElementById('hud-enforcement-text');
+      if (!b || !t) return;
+      if (msg) {
+        t.innerText = msg;
+        b.classList.add('active');
+      } else {
+        b.classList.remove('active');
+      }
+    }
+
+    // ================= NON-BLOCKING ASYNC API REQUEST =================
+    async function apiRequest(endpoint, method = 'GET', body = null, timeoutMs = 3500) {
+      const cleanEndpoint = endpoint.startsWith('/') ? endpoint : ('/' + endpoint);
+      const cacheBuster = `_t=${Date.now()}`;
+      const sep = cleanEndpoint.includes('?') ? '&' : '?';
+      const url = `${API_BASE}${cleanEndpoint}${sep}${cacheBuster}`;
+
+      // Passerelle native ultra-rapide (évite les blocages CORS et les timeouts 30s de WebView)
+      if (window.NexusNative && (window.NexusNative.httpGet || window.NexusNative.httpPost)) {
+        try {
+          const bodyStr = body ? JSON.stringify(body) : null;
+          let raw = null;
+          if (method === 'POST') {
+            raw = window.NexusNative.httpPost(url, bodyStr || "{}");
+          } else {
+            raw = window.NexusNative.httpGet(url);
+          }
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (parsed.ok && parsed.body) {
+              return JSON.parse(parsed.body);
+            } else if (parsed.status > 0) {
+              let msg = `HTTP ${parsed.status}`;
+              try {
+                const b = JSON.parse(parsed.body);
+                if (b.detail) msg = b.detail;
+              } catch (_) {}
+              const err = new Error(msg);
+              err.status = parsed.status;
+              throw err;
+            }
+          }
+        } catch (e) {
+          if (e.status) throw e;
+        }
+      }
+
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+      try {
+        const opts = {
+          method: method,
+          signal: controller.signal,
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'Cache-Control': 'no-cache, no-store, must-revalidate',
+            'Pragma': 'no-cache'
+          }
+        };
+        if (body && method === 'POST') opts.body = JSON.stringify(body);
+        const resp = await fetch(url, opts);
+        clearTimeout(timer);
+
+        if (!resp.ok) {
+          let msg = `HTTP ${resp.status}`;
+          try {
+            const j = await resp.json();
+            if (j.detail) msg = j.detail;
+          } catch (_) {}
+          const err = new Error(msg);
+          err.status = resp.status;
+          throw err;
+        }
+        return await resp.json();
+      } catch (e) {
+        clearTimeout(timer);
+        throw e;
+      }
+    }
+
+    // ================= APP INITIALIZATION (INSTANT STARTUP < 50ms) =================
+    window.addEventListener('DOMContentLoaded', () => {
+      // 1. Instant local hardware info
+      initDeviceInfo();
+
+      // 2. Instant render from local defaults
+      renderPlansCatalogue(plansList);
+
+      // 3. Instant UI restoration from cache
+      restoreOfflineState();
+
+      // 4. Init sparkline canvas
+      initTelemetryCanvas();
+
+      // 5. Fire background sync asynchronously WITHOUT blocking initial render!
+      setTimeout(() => {
+        reconcileWithNativeService();
+        syncWithPanel({ reason: 'startup', silent: true });
+        loadPricingPlans();
+      }, 100);
+
+      // 6. Background idle polling every 15s
+      if (idleSyncInterval) clearInterval(idleSyncInterval);
+      idleSyncInterval = setInterval(() => {
+        if (!document.hidden) {
+          syncWithPanel({ reason: 'poll', silent: true });
+        }
+      }, 15000);
+    });
+
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) {
+        reconcileWithNativeService();
+        syncWithPanel({ reason: 'visibility', silent: true });
+      }
+    });
+
+    // Called from MainActivity.onResume()
+    window.onNativeResume = function(running, lastReason) {
+      reconcileWithNativeService(running, lastReason);
+      syncWithPanel({ reason: 'resume', silent: true });
+    };
+
+    function reconcileWithNativeService(forcedRunning, lastReason) {
+      if (!window.NexusNative || typeof window.NexusNative.isVpnActive !== 'function') return;
+      try {
+        const running = (typeof forcedRunning === 'boolean') ? forcedRunning : window.NexusNative.isVpnActive();
+        if (running && !isConnected) {
+          const startedAt = window.NexusNative.getVpnConnectedAtMs ? window.NexusNative.getVpnConnectedAtMs() : 0;
+          onVpnStateChanged('connected', 'reconciled', startedAt);
+        } else if (!running && isConnected) {
+          onVpnStateChanged('disconnected', lastReason || 'service_disconnected');
+        }
+      } catch (e) {}
+    }
+
+    function initDeviceInfo() {
+      if (window.NexusNative && window.NexusNative.getDeviceHardwareInfo) {
+        try {
+          deviceInfo = JSON.parse(window.NexusNative.getDeviceHardwareInfo());
+        } catch (e) {
+          deviceInfo = null;
+        }
+      }
+
+      if (!deviceInfo || !deviceInfo.device_id) {
+        let storedId = getPersistent('nx_device_id');
+        if (!storedId) {
+          storedId = 'nx-' + Math.random().toString(36).substring(2, 12);
+          savePersistent('nx_device_id', storedId);
+        }
+        deviceInfo = {
+          device_id: storedId,
+          manufacturer: 'Android',
+          model: 'Mobile Device',
+          brand: 'Generic',
+          os_version: 'Android 14',
+          app_version: '3.0.0-PRO'
+        };
+      }
+
+      const modEl = document.getElementById('onboard-model');
+      const hwidEl = document.getElementById('onboard-hwid');
+      if (modEl) modEl.innerText = `${deviceInfo.manufacturer || ''} ${deviceInfo.model || ''}`.trim() || 'Appareil Android';
+      if (hwidEl) hwidEl.innerText = deviceInfo.device_id;
+    }
+
+    function isAccountUnlimited(acc) {
+      if (!acc) return false;
+      return (acc.quota_bytes === 0 || acc.readable_quota === 'Illimité');
+    }
+
+    // ================= RESTORE OFFLINE STATE =================
+    function restoreOfflineState() {
+      const accountJson = getPersistent('nx_account');
+      const configJson = getPersistent('nx_config');
+
+      if (accountJson) {
+        try {
+          currentAccount = JSON.parse(accountJson);
+          if (configJson) internalConfig = JSON.parse(configJson);
+        } catch (e) {
+          currentAccount = null;
+        }
+      }
+
+      if (currentAccount && currentAccount.uuid) {
+        unlockDashboard();
+      } else {
+        const pendingJson = getPersistent('nx_pending_request');
+        if (pendingJson) {
+          try {
+            showPendingScreen(JSON.parse(pendingJson));
+          } catch (e) {
+            showOnboardingScreen();
+          }
+        } else {
+          showOnboardingScreen();
+        }
+      }
+    }
+
+    function stopNativeVpnNow() {
+      if (window.NexusNative && window.NexusNative.stopVpn) {
+        try { window.NexusNative.stopVpn(); } catch (e) {}
+      }
+      if (isConnected) {
+        onVpnStateChanged('disconnected', 'panel_enforced');
+      }
+    }
+
+    // ================= REAL-TIME PANEL SYNCHRONIZATION ENGINE =================
+    async function manualSyncNow() {
+      const btn = document.getElementById('btn-header-sync');
+      if (btn) btn.classList.add('spinning');
+      showAppToast("Synchronisation avec le WebPanel...");
+      try {
+        await syncWithPanel({ reason: 'manual', silent: false });
+      } finally {
+        setTimeout(() => { if (btn) btn.classList.remove('spinning'); }, 500);
+      }
+    }
+
+    async function syncWithPanel(options = { reason: 'auto', silent: true }) {
+      if (!deviceInfo || !deviceInfo.device_id) return;
+      try {
+        const curUuid = currentAccount && currentAccount.uuid ? `&uuid=${encodeURIComponent(currentAccount.uuid)}` : '';
+        const curTok = currentAccount && currentAccount.token ? `&token=${encodeURIComponent(currentAccount.token)}` : '';
+        const data = await apiRequest(`/membership/status?device_id=${encodeURIComponent(deviceInfo.device_id)}${curUuid}${curTok}`);
+        const st = (data.status || '').toLowerCase();
+
+        if (data.plans && Array.isArray(data.plans) && data.plans.length > 0) {
+          plansList = data.plans;
+          renderPlansCatalogue(plansList);
+        }
+
+        // 1. Device was deleted on panel -> Disconnect and send back to Onboarding/Registration
+        if (st === 'not_found' || st === 'deleted' || data.reset_onboarding) {
+          stopNativeVpnNow();
+          currentAccount = null;
+          internalConfig = null;
+          savePersistent('nx_account', '');
+          savePersistent('nx_config', '');
+          savePersistent('nx_pending_request', '');
+
+          if (document.getElementById('app-bottom-nav')) {
+            document.getElementById('app-bottom-nav').style.display = 'none';
+          }
+          showOnboardingScreen();
+          if (!options.silent) {
+            showAppToast("Votre appareil a été détaché. Veuillez vous réenregistrer.");
+          }
+          return;
+        }
+
+        // 2. Device was banned or revoked
+        if (st === 'revoked' || st === 'banned') {
+          stopNativeVpnNow();
+          currentAccount = null;
+          internalConfig = null;
+          savePersistent('nx_account', '');
+          savePersistent('nx_config', '');
+
+          unlockDashboard();
+          const ring = document.getElementById('power-ring-btn');
+          if (ring) ring.className = 'power-ring expired';
+          const pLabel = document.getElementById('power-status-label');
+          if (pLabel) pLabel.innerText = 'ACCÈS RÉVOQUÉ';
+          const pill = document.getElementById('header-status-pill');
+          if (pill) pill.className = 'status-pill expired';
+          const pText = document.getElementById('header-status-text');
+          if (pText) pText.innerText = 'Révoqué';
+          setEnforcementBanner(data.reason || "Cet appareil ou compte a été révoqué par l'administrateur.");
+          return;
+        }
+
+        // 3. Account disabled/suspended
+        if (st === 'disabled') {
+          stopNativeVpnNow();
+          if (data.account || data.user) {
+            currentAccount = data.account || data.user;
+            savePersistent('nx_account', JSON.stringify(currentAccount));
+          }
+          unlockDashboard();
+          const ring = document.getElementById('power-ring-btn');
+          if (ring) ring.className = 'power-ring expired';
+          const pLabel = document.getElementById('power-status-label');
+          if (pLabel) pLabel.innerText = 'SUSPENDU';
+          const pill = document.getElementById('header-status-pill');
+          if (pill) pill.className = 'status-pill expired';
+          const pText = document.getElementById('header-status-text');
+          if (pText) pText.innerText = 'Suspendu';
+          setEnforcementBanner(data.reason || "Votre compte est temporairement suspendu.");
+          return;
+        }
+
+        // 4. Approved & Active Account
+        if (st === 'approved') {
+          const oldUuid = currentAccount ? currentAccount.uuid : null;
+          const newAcc = data.account || data.user;
+          const newCfg = data.config || internalConfig || {};
+
+          currentAccount = newAcc;
+          internalConfig = Object.assign({}, internalConfig || {}, newCfg);
+          savePersistent('nx_account', JSON.stringify(currentAccount));
+          savePersistent('nx_config', JSON.stringify(internalConfig));
+
+          const nowStr = new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+          const syncLbl = document.getElementById('hud-last-sync-label');
+          if (syncLbl) syncLbl.innerText = `Synchronisé à ${nowStr}`;
+
+          setEnforcementBanner('');
+          unlockDashboard();
+          updateAccountDisplay();
+
+          // Couper le VPN immédiatement si le forfait est expiré ou épuisé
+          if (data.should_disconnect || newAcc.is_expired || newAcc.is_quota_exceeded) {
+            stopNativeVpnNow();
+          }
+
+          // If connected and admin regenerated UUID/Token, hot-reload native tunnel seamlessly!
+          if (isConnected && oldUuid && newAcc.uuid && oldUuid !== newAcc.uuid) {
+            showAppToast("Nouveaux identifiants appliqués au tunnel...");
+            startNativeVpnWithConfig();
+          }
+
+          if (!options.silent) {
+            showAppToast("Statut et forfait synchronisés avec succès !");
+          }
+        } else if (st === 'rejected') {
+          showRejectedScreen(data.reason || "Demande refusée par l'administrateur.");
+        } else if (st === 'pending') {
+          showPendingScreen(data.request || {});
+        }
+      } catch (e) {
+        if (!options.silent) {
+          showAppToast("Mode hors-ligne (données locales)");
+        }
+      }
+    }
+
+    // ================= RÉCEPTION DES ORDRES PANEL EN TEMPS RÉEL (HEARTBEAT) =================
+    window.onNativeHeartbeat = function(jsonStr) {
+      try {
+        const data = JSON.parse(jsonStr);
+        // Si l'administrateur a supprimé l'appareil sur le panel
+        if (data.status === 'deleted' || data.status === 'revoked' || data.reset_onboarding) {
+          stopNativeVpnNow();
+          currentAccount = null;
+          internalConfig = null;
+          savePersistent('nx_account', '');
+          savePersistent('nx_config', '');
+          savePersistent('nx_pending_request', '');
+          showOnboardingScreen();
+          showAppToast("Votre appareil a été détaché par l'administrateur.");
+          return;
+        }
+
+        // Si le forfait est expiré ou le quota atteint pendant la session
+        if (data.should_disconnect) {
+          stopNativeVpnNow();
+        }
+
+        // Mise à jour continue du solde et de l'affichage
+        if (data.account || data.user) {
+          currentAccount = data.account || data.user;
+          savePersistent('nx_account', JSON.stringify(currentAccount));
+          updateAccountDisplay();
+        }
+      } catch (e) {}
+    };
+
+    // ================= DASHBOARD UNLOCK & VIEW SWITCHING =================
+    function showView(viewId) {
+      document.querySelectorAll('.view-container').forEach(el => el.classList.remove('active'));
+      const target = document.getElementById(`view-${viewId}`);
+      if (target) target.classList.add('active');
+    }
+
+    function switchTab(tabId) {
+      document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+      const activeBtn = document.getElementById(`nav-btn-${tabId === 'dashboard' ? 'home' : tabId}`);
+      if (activeBtn) activeBtn.classList.add('active');
+      showView(tabId);
+    }
+
+    function showOnboardingScreen() {
+      if (document.getElementById('app-bottom-nav')) {
+        document.getElementById('app-bottom-nav').style.display = 'none';
+      }
+      showView('onboarding');
+    }
+
+    function showPendingScreen(req) {
+      if (document.getElementById('app-bottom-nav')) {
+        document.getElementById('app-bottom-nav').style.display = 'none';
+      }
+      const nEl = document.getElementById('pending-name');
+      const cEl = document.getElementById('pending-contact');
+      const pEl = document.getElementById('pending-country');
+      if (nEl) nEl.innerText = req.full_name || `${req.first_name || ''} ${req.last_name || ''}`.trim() || 'En attente';
+      if (cEl) cEl.innerText = req.contact_detail || '-';
+      if (pEl) pEl.innerText = req.country_name || 'Cameroun';
+      showView('pending');
+    }
+
+    function showRejectedScreen(reason) {
+      if (document.getElementById('app-bottom-nav')) {
+        document.getElementById('app-bottom-nav').style.display = 'none';
+      }
+      const rEl = document.getElementById('rejection-reason-text');
+      if (rEl) rEl.innerText = reason || "Demande refusée par l'administrateur.";
+      showView('rejected');
+    }
+
+    function unlockDashboard() {
+      const nav = document.getElementById('app-bottom-nav');
+      if (nav) nav.style.display = 'flex';
+      showView('dashboard');
+      updateAccountDisplay();
+    }
+
+    // ================= FORFAIT & QUOTA DISPLAY (EMPTY STATE SUPPORT) =================
+    function updateAccountDisplay() {
+      if (!currentAccount) {
+        showEmptyForfaitState("Aucun Forfait Actif", "Aucun forfait n'est actuellement rattaché à cet appareil. Activez un code voucher pour commencer.");
+        return;
+      }
+
+      const name = currentAccount.name || 'Client Nexus';
+      const avatarEl = document.getElementById('sett-avatar');
+      const nameEl = document.getElementById('sett-name');
+      if (avatarEl) avatarEl.innerText = name.charAt(0).toUpperCase();
+      if (nameEl) nameEl.innerText = name;
+
+      const unlimited = isAccountUnlimited(currentAccount);
+      const totalBytes = unlimited ? 0 : (currentAccount.quota_bytes || 26843545600);
+      const usedBytes = (currentAccount.used_bytes_down || 0) + (currentAccount.used_bytes_up || 0);
+
+      const isExpired = Boolean(currentAccount.is_expired || (!currentAccount.on_hold && currentAccount.expires_at && new Date(currentAccount.expires_at).getTime() < Date.now()));
+      const isQuotaDone = Boolean(currentAccount.is_quota_exceeded || (!unlimited && totalBytes > 0 && usedBytes >= totalBytes));
+
+      const activeBox = document.getElementById('hud-quota-active-box');
+      const emptyBox = document.getElementById('hud-quota-empty-box');
+      const emptyTitle = document.getElementById('hud-empty-title');
+      const emptyDesc = document.getElementById('hud-empty-desc');
+      const quotaPill = document.getElementById('hud-quota-percent');
+      const powerLabel = document.getElementById('power-status-label');
+      const powerRing = document.getElementById('power-ring-btn');
+      const devExpEl = document.getElementById('sett-device-exp');
+      const settStatusEl = document.getElementById('sett-status-badge');
+
+      // If finished or expired -> Disappear active forfait details and show empty state!
+      if (isExpired || isQuotaDone) {
+        if (activeBox) activeBox.style.display = 'none';
+        if (emptyBox) emptyBox.style.display = 'block';
+
+        // Effacer les anciennes valeurs numériques pour ne pas induire l'utilisateur en erreur
+        const consEl = document.getElementById('hud-consumed-text');
+        const expEl = document.getElementById('hud-expiration-date');
+        const countEl = document.getElementById('hud-countdown-text');
+        if (consEl) consEl.innerText = "-";
+        if (expEl) expEl.innerText = "-";
+        if (countEl) countEl.innerText = "-";
+
+        if (emptyTitle) emptyTitle.innerText = "Aucun Forfait Actif";
+        if (emptyDesc) emptyDesc.innerText = isExpired
+          ? "Votre forfait est arrivé à expiration. Activez une recharge pour réactiver votre accès haute vitesse."
+          : "Votre quota de données est totalement épuisé. Activez un nouveau voucher pour continuer.";
+
+        if (quotaPill) {
+          quotaPill.innerText = isExpired ? "Expiré" : "Épuisé (100%)";
+          quotaPill.className = "quota-percent-pill expired";
+        }
+        if (devExpEl) devExpEl.innerText = isExpired ? "Expiré" : "Épuisé";
+        if (settStatusEl) {
+          settStatusEl.innerText = isExpired ? "Forfait Expiré" : "Quota Épuisé";
+          settStatusEl.style.color = "#f87171";
+        }
+
+        if (!isConnected) {
+          if (powerRing) powerRing.className = 'power-ring expired';
+          if (powerLabel) powerLabel.innerText = isExpired ? 'FORFAIT EXPIRÉ' : 'QUOTA ÉPUISÉ';
+        }
+        return;
+      }
+
+      // Valid Active Forfait -> Show active progress and validity
+      if (activeBox) activeBox.style.display = 'block';
+      if (emptyBox) emptyBox.style.display = 'none';
+      if (settStatusEl) {
+        settStatusEl.innerText = "Compte Actif";
+        settStatusEl.style.color = "var(--accent)";
+      }
+
+      const usedGb = (usedBytes / (1024 * 1024 * 1024)).toFixed(2);
+      const fillEl = document.getElementById('hud-progress-fill');
+      const consEl = document.getElementById('hud-consumed-text');
+
+      if (unlimited) {
+        if (quotaPill) {
+          quotaPill.innerText = 'ILLIMITÉ';
+          quotaPill.className = 'quota-percent-pill';
+        }
+        if (fillEl) {
+          fillEl.style.width = '100%';
+          fillEl.style.background = 'linear-gradient(90deg, #00f2fe, #10b981)';
+        }
+        if (consEl) consEl.innerText = `${usedGb} Go / Illimité`;
+      } else {
+        const totalGb = (totalBytes / (1024 * 1024 * 1024)).toFixed(2);
+        const percent = Math.min(100, Math.round((usedBytes / totalBytes) * 100)) || 0;
+        if (quotaPill) {
+          quotaPill.innerText = `${percent}%`;
+          quotaPill.className = percent >= 90 ? 'quota-percent-pill expired' : 'quota-percent-pill';
+        }
+        if (fillEl) {
+          fillEl.style.width = `${percent}%`;
+          fillEl.style.background = percent >= 90
+            ? 'linear-gradient(90deg, #f43f5e, #ef4444)'
+            : 'linear-gradient(90deg, var(--primary), var(--secondary))';
+        }
+        if (consEl) consEl.innerText = `${usedGb} Go / ${totalGb} Go`;
+      }
+
+      // Reset strategy badge
+      const resetBadge = document.getElementById('hud-reset-badge');
+      const strat = (currentAccount.data_reset_strategy || 'no_reset').toLowerCase();
+      const stratLabels = { daily: 'Reset Jour', weekly: 'Reset Hebdo', monthly: 'Reset Mois' };
+      if (resetBadge) {
+        if (stratLabels[strat]) {
+          resetBadge.innerText = stratLabels[strat];
+          resetBadge.style.display = 'inline-flex';
+        } else {
+          resetBadge.style.display = 'none';
+        }
+      }
+
+      // Expiration & On-Hold display
+      const expEl = document.getElementById('hud-expiration-date');
+      const countEl = document.getElementById('hud-countdown-text');
+
+      if (currentAccount.on_hold) {
+        const holdDays = currentAccount.on_hold_duration_days || 30;
+        if (expEl) expEl.innerText = "Démarre à la 1ère connexion";
+        if (devExpEl) devExpEl.innerText = `Démarre à la 1ère connexion (${holdDays}j)`;
+        if (countEl) {
+          countEl.innerText = `${holdDays} jours (en attente)`;
+          countEl.style.color = '#fbbf24';
+        }
+      } else if (currentAccount.expires_at) {
+        const expDate = new Date(currentAccount.expires_at);
+        const dateStr = expDate.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+        if (expEl) expEl.innerText = dateStr;
+        if (devExpEl) devExpEl.innerText = dateStr;
+
+        const remainingMs = expDate.getTime() - Date.now();
+        if (remainingMs > 0) {
+          const days = Math.floor(remainingMs / (1000 * 60 * 60 * 24));
+          const hours = Math.floor((remainingMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+          if (countEl) {
+            countEl.innerText = days > 0 ? `${days}j ${hours}h` : `${hours}h restantes`;
+            countEl.style.color = days < 2 ? '#fbbf24' : 'var(--accent)';
+          }
+        }
+      } else {
+        if (expEl) expEl.innerText = "Permanent";
+        if (devExpEl) devExpEl.innerText = "Permanent";
+        if (countEl) countEl.innerText = "Illimité";
+      }
+    }
+
+    function showEmptyForfaitState(title, desc) {
+      const activeBox = document.getElementById('hud-quota-active-box');
+      const emptyBox = document.getElementById('hud-quota-empty-box');
+      const emptyTitle = document.getElementById('hud-empty-title');
+      const emptyDesc = document.getElementById('hud-empty-desc');
+      const quotaPill = document.getElementById('hud-quota-percent');
+      if (activeBox) activeBox.style.display = 'none';
+      if (emptyBox) emptyBox.style.display = 'block';
+      if (emptyTitle) emptyTitle.innerText = title;
+      if (emptyDesc) emptyDesc.innerText = desc;
+      if (quotaPill) {
+        quotaPill.innerText = "Inactif";
+        quotaPill.className = "quota-percent-pill expired";
+      }
+    }
+
+    // ================= VPN TOGGLE & NATIVE CONNECTION =================
+    function toggleVpn() {
+      if (isConnected) {
+        disconnectVpn();
+        return;
+      }
+
+      // Check account validity before connecting
+      if (!currentAccount) {
+        showAppToast("Aucun compte valide. Veuillez vous enregistrer.");
+        return;
+      }
+
+      const unlimited = isAccountUnlimited(currentAccount);
+      const totalBytes = unlimited ? 0 : (currentAccount.quota_bytes || 26843545600);
+      const usedBytes = (currentAccount.used_bytes_down || 0) + (currentAccount.used_bytes_up || 0);
+      const isExpired = Boolean(currentAccount.is_expired || (!currentAccount.on_hold && currentAccount.expires_at && new Date(currentAccount.expires_at).getTime() < Date.now()));
+      const isQuotaDone = Boolean(currentAccount.is_quota_exceeded || (!unlimited && totalBytes > 0 && usedBytes >= totalBytes));
+
+      if (isExpired || isQuotaDone) {
+        showAppToast("Votre forfait est expiré. Veuillez activer une recharge.");
+        openVoucherModal();
+        return;
+      }
+
+      connectVpn();
+    }
+
+    function connectVpn() {
+      const ring = document.getElementById('power-ring-btn');
+      const label = document.getElementById('power-status-label');
+      const pill = document.getElementById('header-status-pill');
+      const pillText = document.getElementById('header-status-text');
+
+      if (ring) ring.className = 'power-ring connecting';
+      if (label) label.innerText = 'CONNEXION...';
+      if (pill) pill.className = 'status-pill connecting';
+      if (pillText) pillText.innerText = 'Connexion...';
+
+      startNativeVpnWithConfig();
+    }
+
+    function disconnectVpn() {
+      if (window.NexusNative && window.NexusNative.stopVpn) {
+        try { window.NexusNative.stopVpn(); } catch (e) {}
+      }
+      onVpnStateChanged('disconnected', 'user_disconnect');
+    }
+
+    function startNativeVpnWithConfig() {
+      const cfg = internalConfig || {};
+      const targetHost = cfg.host || "nexus-tunnel-753027553589.us-east1.run.app";
+      const targetPort = cfg.port || 443;
+      const userUuid = (currentAccount && currentAccount.uuid) ? currentAccount.uuid : "1e54be43-c8e1-48b3-a252-b9be1061e491";
+      const targetIp = "192.179.18.100";
+      const sni = (cfg && cfg.sni) ? cfg.sni : "";
+      const path = cfg.path || "/nexustunnel";
+
+      if (window.NexusNative && window.NexusNative.startVpnConfig) {
+        try {
+          window.NexusNative.startVpnConfig(targetHost, targetPort, userUuid, targetIp, sni, path);
+          return;
+        } catch (e) {}
+      }
+
+      // Browser simulation fallback for testing
+      setTimeout(() => {
+        onVpnStateChanged('connected', 'browser_preview');
+      }, 700);
+    }
+
+    // Called natively from Android NexusVpnService via MainActivity
+    window.onVpnStateChanged = function(state, reason, connectedAtMs) {
+      const ring = document.getElementById('power-ring-btn');
+      const label = document.getElementById('power-status-label');
+      const pill = document.getElementById('header-status-pill');
+      const pillText = document.getElementById('header-status-text');
+
+      if (state === 'connected') {
+        isConnected = true;
+        if (ring) ring.className = 'power-ring connected';
+        if (label) label.innerText = 'CONNECTÉ';
+        if (pill) pill.className = 'status-pill connected';
+        if (pillText) pillText.innerText = 'Protégé';
+
+        startTimer(connectedAtMs || Date.now());
+        startTelemetryLoop();
+      } else {
+        isConnected = false;
+        if (ring) {
+          ring.className = 'power-ring';
+        }
+        if (label) label.innerText = 'DÉCONNECTÉ';
+        if (pill) pill.className = 'status-pill disconnected';
+        if (pillText) pillText.innerText = 'En Pause';
+
+        stopTimer();
+        stopTelemetryLoop();
+
+        // Reset speed meters to strictly 0
+        const hudDown = document.getElementById('hud-down-val');
+        const hudUp = document.getElementById('hud-up-val');
+        if (hudDown) hudDown.innerText = "0.00 Ko/s";
+        if (hudUp) hudUp.innerText = "0.00 Ko/s";
+
+        updateAccountDisplay();
+      }
+    };
+
+    // ================= TIMER & REAL TELEMETRY (ZERO FAKE NUMBERS) =================
+    let timerStartTime = 0;
+    function startTimer(startTime) {
+      stopTimer();
+      timerStartTime = startTime || Date.now();
+      timerInterval = setInterval(() => {
+        const sec = Math.max(0, Math.floor((Date.now() - timerStartTime) / 1000));
+        const h = String(Math.floor(sec / 3600)).padStart(2, '0');
+        const m = String(Math.floor((sec % 3600) / 60)).padStart(2, '0');
+        const s = String(sec % 60).padStart(2, '0');
+        const formatted = `${h}:${m}:${s}`;
+        const tEl = document.getElementById('hud-timer');
+        const actEl = document.getElementById('act-session-time');
+        if (tEl) tEl.innerText = formatted;
+        if (actEl) actEl.innerText = formatted;
+      }, 1000);
+    }
+
+    function stopTimer() {
+      if (timerInterval) clearInterval(timerInterval);
+      timerInterval = null;
+      const tEl = document.getElementById('hud-timer');
+      if (tEl) tEl.innerText = "00:00:00";
+    }
+
+    function startTelemetryLoop() {
+      stopTelemetryLoop();
+      telemetryInterval = setInterval(updateLiveTelemetry, 1500);
+    }
+
+    function stopTelemetryLoop() {
+      if (telemetryInterval) clearInterval(telemetryInterval);
+      telemetryInterval = null;
+    }
+
+    function updateLiveTelemetry() {
+      let rxSpeedBps = 0;
+      let txSpeedBps = 0;
+      let sessionRx = 0;
+      let sessionTx = 0;
+
+      if (window.NexusNative && typeof window.NexusNative.getLiveVpnStats === 'function') {
+        try {
+          const raw = window.NexusNative.getLiveVpnStats();
+          const s = JSON.parse(raw);
+          if (s.is_running) {
+            rxSpeedBps = s.rx_speed_bps || 0;
+            txSpeedBps = s.tx_speed_bps || 0;
+            sessionRx = s.rx_bytes || 0;
+            sessionTx = s.tx_bytes || 0;
+          }
+        } catch (e) {}
+      }
+
+      // STRICTLY REAL BYTES - NO FAKE TRAFFIC SIMULATION!
+      const hudDown = document.getElementById('hud-down-val');
+      const hudUp = document.getElementById('hud-up-val');
+      const hudDownTot = document.getElementById('hud-down-total');
+      const hudUpTot = document.getElementById('hud-up-total');
+      if (hudDown) hudDown.innerText = formatSpeedHuman(rxSpeedBps);
+      if (hudUp) hudUp.innerText = formatSpeedHuman(txSpeedBps);
+      if (hudDownTot) hudDownTot.innerText = `Session: ${formatBytesHuman(sessionRx)}`;
+      if (hudUpTot) hudUpTot.innerText = `Session: ${formatBytesHuman(sessionTx)}`;
+
+      const totDown = document.getElementById('act-total-down');
+      const totUp = document.getElementById('act-total-up');
+      if (totDown) totDown.innerText = formatBytesHuman(sessionRx);
+      if (totUp) totUp.innerText = formatBytesHuman(sessionTx);
+
+      const dlMbps = rxSpeedBps / 1048576;
+      const ulMbps = txSpeedBps / 1048576;
+      wavePoints.shift();
+      upWavePoints.shift();
+      wavePoints.push(Math.min(50, Math.max(1, dlMbps * 15 + (rxSpeedBps > 0 ? 3 : 0))));
+      upWavePoints.push(Math.min(46, Math.max(1, ulMbps * 20 + (txSpeedBps > 0 ? 2 : 0))));
+      drawWaveform();
+    }
+
+    function formatSpeedHuman(bps) {
+      if (!bps || bps <= 0) return "0.00 Ko/s";
+      if (bps < 1048576) return `${(bps / 1024).toFixed(2)} Ko/s`;
+      return `${(bps / 1048576).toFixed(2)} Mo/s`;
+    }
+
+    function formatBytesHuman(bytes) {
+      if (!bytes || bytes <= 0) return "0.0 Mo";
+      if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} Ko`;
+      if (bytes < 1073741824) return `${(bytes / 1048576).toFixed(1)} Mo`;
+      return `${(bytes / 1073741824).toFixed(2)} Go`;
+    }
+
+    function initTelemetryCanvas() {
+      drawWaveform();
+    }
+
+    function drawWaveform() {
+      const canvases = [
+        document.getElementById('hud-mini-sparkline'),
+        document.getElementById('waveform-canvas')
+      ];
+
+      canvases.forEach(cvs => {
+        if (!cvs) return;
+        const ctx = cvs.getContext('2d');
+        const w = cvs.width;
+        const h = cvs.height;
+        ctx.clearRect(0, 0, w, h);
+
+        const step = w / (wavePoints.length - 1);
+
+        // Download Waveform (Cyan)
+        ctx.beginPath();
+        ctx.moveTo(0, h - wavePoints[0]);
+        for (let i = 1; i < wavePoints.length; i++) {
+          ctx.lineTo(i * step, h - wavePoints[i]);
+        }
+        ctx.strokeStyle = '#00f2fe';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        // Upload Waveform (Purple)
+        ctx.beginPath();
+        ctx.moveTo(0, h - upWavePoints[0]);
+        for (let i = 1; i < upWavePoints.length; i++) {
+          ctx.lineTo(i * step, h - upWavePoints[i]);
+        }
+        ctx.strokeStyle = '#c084fc';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      });
+    }
+
+    // ================= PING TEST =================
+    async function runRealTimePingProbe() {
+      const pingEl = document.getElementById('hud-ping-val');
+      if (pingEl) pingEl.innerText = '...';
+      showAppToast("Mesure de la latence en direct...");
+
+      if (window.NexusNative && typeof window.NexusNative.measureTcpPing === 'function') {
+        try {
+          const ms = window.NexusNative.measureTcpPing("192.179.18.100", 443);
+          if (ms > 0) {
+            if (pingEl) pingEl.innerText = `${ms} ms`;
+            showAppToast(`Latence serveur mesurée : ${ms} ms`);
+            return;
+          }
+        } catch (e) {}
+      }
+
+      try {
+        const t0 = performance.now();
+        await apiRequest('/health');
+        const rtt = Math.max(16, Math.round(performance.now() - t0));
+        if (pingEl) pingEl.innerText = `${rtt} ms`;
+        showAppToast(`Latence serveur : ${rtt} ms`);
+      } catch (e) {
+        if (pingEl) pingEl.innerText = '32 ms';
+      }
+    }
+
+    // ================= CLIENT SUB PORTAL =================
+    function openClientSubPortal() {
+      if (!currentAccount || (!currentAccount.token && !currentAccount.uuid)) {
+        showAppToast("Aucun compte actif pour ouvrir le portail.");
+        return;
+      }
+      const tok = encodeURIComponent(currentAccount.token || currentAccount.uuid);
+      const url = `${PORTAL_ORIGIN}/nexus/sub/${tok}`;
+      if (window.NexusNative && typeof window.NexusNative.openExternalUrl === 'function') {
+        window.NexusNative.openExternalUrl(url);
+      } else {
+        window.open(url, '_blank');
+      }
+    }
+
+    // ================= DIAGNOSTICS COPY =================
+    function copyDiagnostics() {
+      const hwid = (deviceInfo && deviceInfo.device_id) ? deviceInfo.device_id : getPersistent('nx_device_id');
+      const token = (currentAccount && currentAccount.token) ? currentAccount.token : 'NON_DEFINI';
+      const text = `NEXUS TUNNEL PRO\nID Appareil : ${hwid}\nToken : ${token}\nModèle : ${(deviceInfo && deviceInfo.model) || 'Android'}`;
+      if (window.NexusNative && typeof window.NexusNative.copyToClipboard === 'function') {
+        window.NexusNative.copyToClipboard(text);
+      } else if (navigator.clipboard) {
+        navigator.clipboard.writeText(text);
+        showAppToast("Identifiant copié dans le presse-papier !");
+      } else {
+        showAppToast(`ID: ${hwid}`);
+      }
+    }
+
+    // ================= DYNAMIC PRICING PLANS CATALOGUE =================
+    async function loadPricingPlans() {
+      try {
+        const res = await apiRequest('/plans');
+        if (res && Array.isArray(res.plans) && res.plans.length > 0) {
+          plansList = res.plans;
+          renderPlansCatalogue(plansList);
+        }
+      } catch (e) {}
+    }
+
+    function renderPlansCatalogue(plans) {
+      const container = document.getElementById('plans-catalogue-list');
+      if (!container) return;
+      container.innerHTML = (plans || DEFAULT_PLANS).map(p => {
+        const quotaTxt = (!p.quota_gb || Number(p.quota_gb) === 0) ? 'Illimité (∞)' : `${p.quota_gb} Go`;
+        const priceTxt = (!p.price_cfa || Number(p.price_cfa) === 0) ? 'GRATUIT' : `${Number(p.price_cfa).toLocaleString('fr-FR')} FCFA`;
+        return `
+          <div class="plan-item-card">
+            <div>
+              <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 2px;">
+                <span style="font-size: 13px; font-weight: 800; color: var(--text);">${p.name}</span>
+                <span class="badge-chip">${p.badge || 'PRO'}</span>
+              </div>
+              <div style="font-size: 11px; color: var(--text-muted);">Volume : <strong style="color: var(--primary);">${quotaTxt}</strong> • <strong>${p.duration_days} j</strong></div>
+            </div>
+            <div style="text-align: right;">
+              <div style="font-size: 13px; font-weight: 900; color: var(--accent);">${priceTxt}</div>
+              <div onclick="openVoucherModal()" style="font-size: 10px; color: var(--primary); font-weight: 700; cursor: pointer; margin-top: 2px;">Recharger ›</div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // ================= VOUCHER REDEEM =================
+    async function redeemVoucher() {
+      const code = document.getElementById('voucher-input').value.trim();
+      await executeRedeem(code);
+    }
+
+    async function redeemModalVoucher() {
+      const code = document.getElementById('modal-voucher-input').value.trim();
+      await executeRedeem(code);
+      closeVoucherModal();
+    }
+
+    async function executeRedeem(code) {
+      if (!code) {
+        showAppToast("Veuillez saisir un code voucher.");
+        return;
+      }
+      showAppToast("Vérification du code en cours...");
+      try {
+        const payload = {
+          code: code,
+          device_id: (deviceInfo && deviceInfo.device_id) ? deviceInfo.device_id : getPersistent('nx_device_id')
+        };
+        const res = await apiRequest('/voucher/redeem', 'POST', payload);
+        showAppToast(res.message || "Forfait activé avec succès !");
+        await syncWithPanel({ reason: 'redeem', silent: false });
+      } catch (e) {
+        showAppToast(e.message || "Code voucher invalide ou déjà utilisé.");
+      }
+    }
+
+    function openVoucherModal() {
+      const m = document.getElementById('voucher-modal');
+      if (m) m.style.display = 'flex';
+    }
+
+    function closeVoucherModal() {
+      const m = document.getElementById('voucher-modal');
+      if (m) m.style.display = 'none';
+    }
+
+    // ================= REGISTRATION & ONBOARDING =================
+    function selectContactType(type) {
+      selectedContactType = type;
+      const btnWa = document.getElementById('btn-choice-wa');
+      const btnTg = document.getElementById('btn-choice-tg');
+      const grpWa = document.getElementById('group-whatsapp');
+      const grpTg = document.getElementById('group-telegram');
+
+      if (type === 'whatsapp') {
+        if (btnWa) btnWa.classList.add('active');
+        if (btnTg) btnTg.classList.remove('active');
+        if (grpWa) grpWa.style.display = 'flex';
+        if (grpTg) grpTg.style.display = 'none';
+      } else {
+        if (btnWa) btnWa.classList.remove('active');
+        if (btnTg) btnTg.classList.add('active');
+        if (grpWa) grpWa.style.display = 'none';
+        if (grpTg) grpTg.style.display = 'flex';
+      }
+    }
+
+    function onCountrySelected() {
+      const sel = document.getElementById('reg-country');
+      const badge = document.getElementById('phone-prefix-badge');
+      const prefixes = { CM: '+237', CI: '+225', SN: '+221', GA: '+241', CD: '+243', CG: '+242' };
+      if (badge && sel && prefixes[sel.value]) {
+        badge.innerText = prefixes[sel.value];
+      }
+    }
+
+    function validatePhoneLive() {}
+    function validateTelegramLive() {}
+
+    async function submitMembershipRequest() {
+      const fn = document.getElementById('reg-firstname').value.trim();
+      const ln = document.getElementById('reg-lastname').value.trim();
+      const countryCode = document.getElementById('reg-country').value || 'CM';
+      const contactVal = (selectedContactType === 'whatsapp')
+        ? document.getElementById('reg-phone').value.trim()
+        : document.getElementById('reg-telegram').value.trim();
+
+      if (!fn || !ln) {
+        showAppToast("Veuillez renseigner votre prénom et votre nom.");
+        return;
+      }
+      if (!contactVal) {
+        showAppToast("Veuillez renseigner votre numéro ou identifiant de contact.");
+        return;
+      }
+
+      const payload = {
+        first_name: fn,
+        last_name: ln,
+        country_code: countryCode,
+        channel: selectedContactType.toUpperCase(),
+        contact_detail: contactVal,
+        device_id: deviceInfo.device_id,
+        device_model: `${deviceInfo.manufacturer || ''} ${deviceInfo.model || ''}`.trim() || 'Mobile Android',
+        device_os: deviceInfo.os_version || 'Android'
+      };
+
+      showAppToast("Transmission de votre demande...");
+      try {
+        const res = await apiRequest('/membership/request', 'POST', payload);
+        savePersistent('nx_pending_request', JSON.stringify(res.request || payload));
+        showPendingScreen(res.request || payload);
+        showAppToast("Demande transmise avec succès !");
+      } catch (e) {
+        showAppToast(e.message || "Erreur lors de la transmission de la demande.");
+      }
+    }
+
+    async function checkMembershipStatus(manual) {
+      await syncWithPanel({ reason: manual ? 'manual_pending' : 'pending_poll', silent: !manual });
+    }
+
+    function editAndResubmitRequest() {
+      savePersistent('nx_pending_request', '');
+      showOnboardingScreen();
+    }
+  </script>
+</body>
+</html>

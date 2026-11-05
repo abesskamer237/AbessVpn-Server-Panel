@@ -6,3 +6,8 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Runtime server state and backups
+data/*
+!data/african-countries.json
+!data/.gitkeep

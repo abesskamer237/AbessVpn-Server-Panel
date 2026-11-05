@@ -39,7 +39,14 @@ import {
   Filter,
   History,
   Share2,
-  Smartphone
+  Smartphone,
+  Tag,
+  PhoneCall,
+  Gauge,
+  Radio,
+  CheckCheck,
+  XCircle,
+  Globe
 } from 'lucide-react';
 
 interface UserSession {
@@ -128,6 +135,87 @@ interface AvailableProtocolConfig {
   serverPort: number;
 }
 
+interface PricingPlan {
+  id: string;
+  name: string;
+  quotaGb: number;
+  durationDays: number;
+  priceCfa: number;
+  badge?: string;
+  description?: string;
+  activeUsersCount?: number;
+}
+
+interface MembershipRequest {
+  id: string;
+  firstName: string;
+  lastName: string;
+  fullName: string;
+  countryCode: string;
+  countryName: string;
+  flag: string;
+  dialPrefix: string;
+  channel: 'WHATSAPP' | 'TELEGRAM';
+  contactDetail: string;
+  deviceId?: string;
+  deviceModel?: string;
+  deviceOs?: string;
+  ipAddress: string;
+  planId?: string;
+  planName?: string;
+  paymentMethod?: string;
+  paymentRef?: string;
+  status: 'PENDING' | 'APPROVED' | 'REJECTED';
+  rejectionReason?: string;
+  assignedTokenId?: string;
+  assignedToken?: string;
+  submittedAt: string;
+  processedAt?: string;
+}
+
+interface VlessVariant {
+  id: string;
+  label: string;
+  badge: string;
+  protocol: string;
+  uri: string;
+  sni: string;
+  target: string;
+  qrCode?: string;
+}
+
+interface SystemDiagnostics {
+  ok: boolean;
+  server: {
+    uptimeSeconds: number;
+    systemUptimeSeconds: number;
+    nodeVersion: string;
+    platform: string;
+    release: string;
+    arch: string;
+    cpuCount: number;
+    loadAverage: number[];
+    memory: {
+      totalBytes: number;
+      freeBytes: number;
+      usedBytes: number;
+      usedPercent: number;
+    };
+  };
+  vpn: {
+    activeTokensCount: number;
+    totalTokensCount: number;
+    resellersCount: number;
+    totalBandwidthUsedGb: number;
+    plansCount: number;
+    pendingRequestsCount: number;
+    xrayStatus: string;
+    vpnDomain: string;
+    appVersion: string;
+  };
+  timestamp: string;
+}
+
 const EMPTY_PROTOCOL_CONFIG: MasterConfig = {
   name: '', serverHost: '', host: '', serverPort: 443, protocol: 'vless',
   transport: 'ws', path: '/@abess237', sniHost: '', uuid: '',
@@ -145,7 +233,7 @@ export default function App() {
   const [showPassword, setShowPassword] = useState<boolean>(false);
 
   // Active Tab
-  const [activeTab, setActiveTab] = useState<'overview' | 'resellers' | 'tokens' | 'transactions' | 'infrastructure' | 'logs'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'resellers' | 'tokens' | 'plans' | 'requests' | 'diagnostics' | 'transactions' | 'infrastructure' | 'logs'>('overview');
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   // Stats & Lists
@@ -238,6 +326,39 @@ export default function App() {
   // Server logs are populated by real actions; do not seed simulated startup status.
   const [systemLogs, setSystemLogs] = useState<string[]>([]);
 
+  // Plans & Commercial Tiers State
+  const [plans, setPlans] = useState<PricingPlan[]>([]);
+  const [planModalOpen, setPlanModalOpen] = useState<boolean>(false);
+  const [editingPlanId, setEditingPlanId] = useState<string | null>(null);
+  const [planName, setPlanName] = useState<string>('');
+  const [planQuotaGb, setPlanQuotaGb] = useState<number>(25);
+  const [planDurationDays, setPlanDurationDays] = useState<number>(30);
+  const [planPriceCfa, setPlanPriceCfa] = useState<number>(3500);
+  const [planBadge, setPlanBadge] = useState<string>('RECOMMANDÉ');
+  const [planDesc, setPlanDesc] = useState<string>('');
+
+  // Membership & Onboarding Requests State
+  const [requests, setRequests] = useState<MembershipRequest[]>([]);
+  const [requestFilter, setRequestFilter] = useState<'ALL' | 'PENDING' | 'APPROVED' | 'REJECTED'>('ALL');
+  const [requestActionLoading, setRequestActionLoading] = useState<string | null>(null);
+
+  // Diagnostics & Probe State
+  const [diagnostics, setDiagnostics] = useState<SystemDiagnostics | null>(null);
+  const [probeHost, setProbeHost] = useState<string>('');
+  const [probePort, setProbePort] = useState<number>(443);
+  const [probeTls, setProbeTls] = useState<boolean>(true);
+  const [probeSni, setProbeSni] = useState<string>('');
+  const [probeLoading, setProbeLoading] = useState<boolean>(false);
+  const [probeResult, setProbeResult] = useState<any>(null);
+
+  // Multi-Variants & Subscription Modal State
+  const [variantsModalOpen, setVariantsModalOpen] = useState<boolean>(false);
+  const [variantsModalToken, setVariantsModalToken] = useState<ClientToken | null>(null);
+  const [variantsList, setVariantsList] = useState<VlessVariant[]>([]);
+  const [variantsLoading, setVariantsLoading] = useState<boolean>(false);
+  const [variantsSubUrl, setVariantsSubUrl] = useState<string>('');
+  const [variantsClientJson, setVariantsClientJson] = useState<any>(null);
+
   const addLog = (msg: string) => {
     const time = new Date().toLocaleTimeString();
     setSystemLogs(prev => [`[${time}] ${msg}`, ...prev.slice(0, 40)]);
@@ -293,6 +414,19 @@ export default function App() {
       // Transactions Ledger
       const txRes = await fetch('/api/v1/admin/transactions', { headers });
       if (txRes.ok) setTransactions(await txRes.json());
+
+      // Plans
+      const plansRes = await fetch('/api/v1/plans');
+      if (plansRes.ok) setPlans(await plansRes.json());
+
+      // Requests & Diagnostics (Only for Super Admin)
+      if (currentUser?.role === 'SUPER_ADMIN') {
+        const reqRes = await fetch('/api/v1/admin/requests', { headers });
+        if (reqRes.ok) setRequests(await reqRes.json());
+
+        const diagRes = await fetch('/api/v1/system/diagnostics', { headers });
+        if (diagRes.ok) setDiagnostics(await diagRes.json());
+      }
     } catch {
       if (!masterConfig) {
         setConfigLoadError('Impossible de joindre l’API pour charger les données du panneau.');
@@ -813,6 +947,182 @@ export default function App() {
       .catch(console.error);
   };
 
+  // Open Multi-Variants & Subscription Modal
+  const openVariantsModal = async (token: ClientToken) => {
+    setVariantsModalToken(token);
+    setVariantsModalOpen(true);
+    setVariantsLoading(true);
+    setVariantsList([]);
+    try {
+      const res = await fetch(`/api/v1/admin/tokens/${token.id}/variants`, {
+        headers: { 'Authorization': `Bearer ${authToken}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setVariantsList(data.variants || []);
+        setVariantsSubUrl(data.subscriptionUrl || `/sub/${token.token}`);
+        setVariantsClientJson(data.xrayClient);
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setVariantsLoading(false);
+    }
+  };
+
+  // Plan Handlers
+  const handleOpenPlanModal = (plan?: PricingPlan) => {
+    if (plan) {
+      setEditingPlanId(plan.id);
+      setPlanName(plan.name);
+      setPlanQuotaGb(plan.quotaGb);
+      setPlanDurationDays(plan.durationDays);
+      setPlanPriceCfa(plan.priceCfa);
+      setPlanBadge(plan.badge || 'PRO');
+      setPlanDesc(plan.description || '');
+    } else {
+      setEditingPlanId(null);
+      setPlanName('');
+      setPlanQuotaGb(25);
+      setPlanDurationDays(30);
+      setPlanPriceCfa(3500);
+      setPlanBadge('POPULAIRE');
+      setPlanDesc('');
+    }
+    setPlanModalOpen(true);
+  };
+
+  const handleSavePlan = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const res = await fetch('/api/v1/admin/plans', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
+        body: JSON.stringify({
+          id: editingPlanId || undefined,
+          name: planName,
+          quotaGb: Number(planQuotaGb),
+          durationDays: Number(planDurationDays),
+          priceCfa: Number(planPriceCfa),
+          badge: planBadge,
+          description: planDesc
+        })
+      });
+      if (res.ok) {
+        setPlanModalOpen(false);
+        refreshData();
+        addLog(`[PLAN] Forfait ${planName} enregistré (${planQuotaGb} Go, ${planPriceCfa} FCFA).`);
+      } else {
+        const d = await res.json();
+        alert(d.error || 'Erreur lors de la sauvegarde du forfait.');
+      }
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const handleDeletePlan = async (id: string, name: string) => {
+    if (!confirm(`Supprimer le forfait commercial "${name}" ?`)) return;
+    try {
+      const res = await fetch(`/api/v1/admin/plans/${id}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${authToken}` }
+      });
+      if (res.ok) {
+        refreshData();
+        addLog(`[PLAN DELETE] Forfait ${name} supprimé.`);
+      }
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  // Membership Request Handlers
+  const handleApproveRequest = async (reqId: string, name: string) => {
+    setRequestActionLoading(reqId);
+    try {
+      const res = await fetch(`/api/v1/admin/requests/${reqId}/approve`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${authToken}` }
+      });
+      const data = await res.json();
+      if (res.ok) {
+        refreshData();
+        addLog(`[ADHESION APPROVE] Demande de ${name} validée ! Token: ${data.token?.token}`);
+        alert(`Demande approuvée avec succès !\n\nClient : ${name}\nCode Token généré : ${data.token?.token}\nLien d'abonnement : /sub/${data.token?.token}`);
+      } else {
+        alert(data.error || 'Erreur lors de la validation.');
+      }
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRequestActionLoading(null);
+    }
+  };
+
+  const handleRejectRequest = async (reqId: string, name: string) => {
+    const reason = prompt(`Motif du rejet pour ${name} :`, 'Paiement non confirmé');
+    if (reason === null) return;
+    setRequestActionLoading(reqId);
+    try {
+      const res = await fetch(`/api/v1/admin/requests/${reqId}/reject`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
+        body: JSON.stringify({ reason })
+      });
+      if (res.ok) {
+        refreshData();
+        addLog(`[ADHESION REJECT] Demande de ${name} rejetée.`);
+      }
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRequestActionLoading(null);
+    }
+  };
+
+  const handleDeleteRequest = async (reqId: string) => {
+    if (!confirm('Supprimer définitivement cette demande de la base ?')) return;
+    try {
+      const res = await fetch(`/api/v1/admin/requests/${reqId}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${authToken}` }
+      });
+      if (res.ok) {
+        refreshData();
+      }
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  // Network Probe Handler
+  const handleRunProbe = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!probeHost.trim()) return;
+    setProbeLoading(true);
+    setProbeResult(null);
+    try {
+      const res = await fetch('/api/v1/probe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          target: probeHost.trim(),
+          port: Number(probePort) || 443,
+          tls: probeTls,
+          sni: probeSni.trim() || undefined
+        })
+      });
+      const data = await res.json();
+      setProbeResult(data);
+      addLog(`[PROBE] Sonde sur ${probeHost}:${probePort} -> ${data.success ? `OK (${data.tcpLatencyMs}ms)` : `Échec: ${data.error}`}`);
+    } catch (err: unknown) {
+      setProbeResult({ success: false, error: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setProbeLoading(false);
+    }
+  };
+
   // ==========================================
   // LOGIN SCREEN
   // ==========================================
@@ -1013,10 +1323,21 @@ export default function App() {
               ...(currentUser.role === 'SUPER_ADMIN'
                 ? [
                     { id: 'resellers', label: '👥 Gestion des Revendeurs', icon: Users },
-                    { id: 'infrastructure', label: '🔒 Infrastructure Maître (Confidentiel)', icon: Database },
+                    { id: 'infrastructure', label: '🔒 Infrastructure Maître', icon: Database },
                   ]
                 : []),
               { id: 'tokens', label: '🔑 Clients & Licences', icon: Key },
+              { id: 'plans', label: '💳 Plans & Tarifs', icon: Tag },
+              ...(currentUser.role === 'SUPER_ADMIN'
+                ? [
+                    {
+                      id: 'requests',
+                      label: `📋 Adhésions${requests.filter(r => r.status === 'PENDING').length > 0 ? ` (${requests.filter(r => r.status === 'PENDING').length})` : ''}`,
+                      icon: PhoneCall
+                    },
+                    { id: 'diagnostics', label: '🩺 Diagnostics & Sonde', icon: Gauge },
+                  ]
+                : []),
               { id: 'transactions', label: '📜 Registre & Crédits', icon: History },
               { id: 'logs', label: '💻 Journal & Télémétrie', icon: Terminal },
             ].map((tab) => {
@@ -1458,6 +1779,15 @@ export default function App() {
                             </button>
 
                             <button
+                              onClick={() => openVariantsModal(token)}
+                              className="px-2 py-1 bg-indigo-950/60 hover:bg-indigo-900/60 border border-indigo-700 text-indigo-300 rounded text-[11px] flex items-center gap-1"
+                              title="Portail Universel & Multi-Variantes VLESS"
+                            >
+                              <Globe className="w-3 h-3 text-indigo-400" />
+                              <span>Variantes & Portail</span>
+                            </button>
+
+                            <button
                               onClick={() => handleResetDevices(token.id, token.token)}
                               className="p-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-700 rounded text-cyan-400 hover:text-cyan-300"
                               title="Réinitialiser les appareils liés à ce client (changement de téléphone)"
@@ -1887,6 +2217,468 @@ export default function App() {
                   </div>
                 ))}
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* TAB: COMMERCIAL PRICING PLANS & TIERS */}
+        {/* ========================================================================= */}
+        {activeTab === 'plans' && (
+          <div className="space-y-6 animate-fade-in font-mono text-xs">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 bg-[#060c18] border border-emerald-900/80 p-5 rounded-2xl shadow-xl">
+              <div>
+                <h2 className="text-base font-bold text-white flex items-center gap-2">
+                  <Tag className="w-5 h-5 text-emerald-400" />
+                  Catalogue des Offres & Forfaits Commerciaux
+                </h2>
+                <p className="text-slate-400 mt-1">
+                  Définissez les forfaits proposés sur le portail d'adhésion public et les quotas alloués aux clients.
+                </p>
+              </div>
+
+              {currentUser.role === 'SUPER_ADMIN' && (
+                <button
+                  onClick={() => handleOpenPlanModal()}
+                  className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-black font-black rounded-xl text-xs flex items-center gap-2 shadow-[0_0_15px_rgba(16,185,129,0.3)] transition"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Ajouter un Forfait</span>
+                </button>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {plans.map((p) => (
+                <div
+                  key={p.id}
+                  className="bg-[#060c18] border border-emerald-900/80 hover:border-emerald-500/60 rounded-2xl p-5 shadow-xl flex flex-col justify-between transition group relative overflow-hidden"
+                >
+                  <div className="space-y-3">
+                    <div className="flex items-start justify-between">
+                      <div>
+                        <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 border border-emerald-800">
+                          {p.badge || 'PRO'}
+                        </span>
+                        <h3 className="text-base font-bold text-white mt-1.5">{p.name}</h3>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-lg font-black text-cyan-300">
+                          {p.priceCfa === 0 ? 'GRATUIT' : `${p.priceCfa.toLocaleString('fr-FR')} FCFA`}
+                        </span>
+                      </div>
+                    </div>
+
+                    <p className="text-slate-400 text-xs min-h-[32px]">
+                      {p.description || 'Accès VPN optimisé haute vitesse avec volume garanti.'}
+                    </p>
+
+                    <div className="grid grid-cols-2 gap-2 pt-2 border-t border-emerald-950">
+                      <div className="bg-[#03060e] p-2 rounded-lg border border-emerald-950">
+                        <span className="text-slate-500 text-[10px] block">Quota Données</span>
+                        <span className="text-sm font-bold text-white">{p.quotaGb} Go</span>
+                      </div>
+                      <div className="bg-[#03060e] p-2 rounded-lg border border-emerald-950">
+                        <span className="text-slate-500 text-[10px] block">Validité</span>
+                        <span className="text-sm font-bold text-emerald-400">{p.durationDays} Jours</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="pt-4 mt-3 border-t border-emerald-950 flex items-center justify-between gap-2">
+                    <button
+                      onClick={() => {
+                        setNewTokenPlan(p.name);
+                        setNewTokenBandwidth(p.quotaGb);
+                        setNewTokenExpiryDate(
+                          new Date(Date.now() + p.durationDays * 24 * 3600 * 1000 - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)
+                        );
+                        setNewTokenCode('ABESS-' + Math.random().toString(36).substring(2, 8).toUpperCase());
+                        setTokenModalOpen(true);
+                      }}
+                      className="flex-1 py-2 bg-emerald-950/70 hover:bg-emerald-900/80 border border-emerald-800 text-emerald-300 rounded-xl text-center font-bold text-xs"
+                    >
+                      Émettre ce Voucher
+                    </button>
+
+                    {currentUser.role === 'SUPER_ADMIN' && (
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => handleOpenPlanModal(p)}
+                          className="p-2 bg-slate-900 hover:bg-slate-800 text-slate-300 rounded-xl"
+                          title="Modifier ce plan"
+                        >
+                          <Sliders className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => handleDeletePlan(p.id, p.name)}
+                          className="p-2 bg-slate-900 hover:bg-red-950/50 text-red-400 rounded-xl"
+                          title="Supprimer ce plan"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* TAB: ONBOARDING & MEMBERSHIP REQUESTS */}
+        {/* ========================================================================= */}
+        {activeTab === 'requests' && currentUser.role === 'SUPER_ADMIN' && (
+          <div className="space-y-6 animate-fade-in font-mono text-xs">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 bg-[#060c18] border border-emerald-900/80 p-5 rounded-2xl shadow-xl">
+              <div>
+                <h2 className="text-base font-bold text-white flex items-center gap-2">
+                  <PhoneCall className="w-5 h-5 text-cyan-400" />
+                  Demandes d'Adhésion & Onboarding Clients
+                </h2>
+                <p className="text-slate-400 mt-1">
+                  Validez en 1-clic les formulaires d'inscription reçus depuis la page publique d'adhésion.
+                </p>
+              </div>
+
+              {/* Status Filters */}
+              <div className="flex items-center gap-1.5 bg-[#03060e] p-1 rounded-xl border border-emerald-950">
+                {(['ALL', 'PENDING', 'APPROVED', 'REJECTED'] as const).map(f => (
+                  <button
+                    key={f}
+                    onClick={() => setRequestFilter(f)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
+                      requestFilter === f
+                        ? 'bg-emerald-600 text-black'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    {f === 'ALL' ? 'Toutes' : f === 'PENDING' ? `En attente (${requests.filter(r => r.status === 'PENDING').length})` : f === 'APPROVED' ? 'Approuvées' : 'Rejetées'}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Requests List */}
+            <div className="bg-[#060c18] border border-emerald-900/80 rounded-2xl overflow-hidden shadow-xl">
+              {requests.length === 0 ? (
+                <div className="p-12 text-center text-slate-500">
+                  <PhoneCall className="w-8 h-8 mx-auto mb-2 opacity-50" />
+                  <p>Aucune demande d'adhésion pour le moment.</p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left">
+                    <thead>
+                      <tr className="border-b border-emerald-950 text-slate-500 text-[10px] uppercase">
+                        <th className="py-2.5 px-3">Client</th>
+                        <th className="py-2.5 px-3">Pays & Contact</th>
+                        <th className="py-2.5 px-3">Canal</th>
+                        <th className="py-2.5 px-3">Forfait Demandé</th>
+                        <th className="py-2.5 px-3">Paiement / Réf</th>
+                        <th className="py-2.5 px-3">Statut</th>
+                        <th className="py-2.5 px-3">Date</th>
+                        <th className="py-2.5 px-3 text-right">Actions Validation</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-emerald-950/60">
+                      {requests
+                        .filter(r => requestFilter === 'ALL' || r.status === requestFilter)
+                        .map(r => (
+                          <tr key={r.id} className="hover:bg-emerald-950/20 transition">
+                            <td className="py-3 px-3 font-bold text-white">
+                              <div className="flex items-center gap-1.5">
+                                <span>{r.fullName}</span>
+                              </div>
+                              {r.deviceId && (
+                                <div className="text-[10px] text-slate-500 font-sans mt-0.5">
+                                  Appareil : {r.deviceModel || r.deviceId.slice(0, 12)}...
+                                </div>
+                              )}
+                            </td>
+                            <td className="py-3 px-3 text-slate-300">
+                              <div className="flex items-center gap-1.5">
+                                <span>{r.flag || '🌍'}</span>
+                                <span className="font-semibold">{r.countryName}</span>
+                              </div>
+                              <span className="text-cyan-300 font-mono text-[11px] block mt-0.5">
+                                {r.dialPrefix} {r.contactDetail}
+                              </span>
+                            </td>
+                            <td className="py-3 px-3">
+                              <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                r.channel === 'WHATSAPP' ? 'bg-emerald-950 text-emerald-400 border border-emerald-800' : 'bg-cyan-950 text-cyan-400 border border-cyan-800'
+                              }`}>
+                                {r.channel}
+                              </span>
+                            </td>
+                            <td className="py-3 px-3 font-bold text-slate-200">
+                              {r.planName || 'Standard'}
+                            </td>
+                            <td className="py-3 px-3 text-slate-400">
+                              <div>{r.paymentMethod || 'Non spécifié'}</div>
+                              {r.paymentRef && <div className="text-cyan-400 font-mono text-[10px]">{r.paymentRef}</div>}
+                            </td>
+                            <td className="py-3 px-3">
+                              <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                r.status === 'APPROVED'
+                                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                                  : r.status === 'PENDING'
+                                    ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 animate-pulse'
+                                    : 'bg-red-500/20 text-red-300 border border-red-500/40'
+                              }`}>
+                                {r.status === 'APPROVED' ? 'APPROUVÉE' : r.status === 'PENDING' ? 'EN ATTENTE' : 'REJETÉE'}
+                              </span>
+                              {r.assignedToken && (
+                                <div className="text-emerald-400 font-mono text-[10px] mt-1">
+                                  Token : {r.assignedToken}
+                                </div>
+                              )}
+                            </td>
+                            <td className="py-3 px-3 text-slate-400 text-[11px]">
+                              {new Date(r.submittedAt).toLocaleString()}
+                            </td>
+                            <td className="py-3 px-3 text-right">
+                              <div className="flex items-center justify-end gap-1.5">
+                                {r.status === 'PENDING' && (
+                                  <>
+                                    <button
+                                      disabled={requestActionLoading === r.id}
+                                      onClick={() => handleApproveRequest(r.id, r.fullName)}
+                                      className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-black font-bold rounded-lg text-xs flex items-center gap-1"
+                                      title="Valider la demande et générer automatiquement le code voucher"
+                                    >
+                                      <Check className="w-3.5 h-3.5" />
+                                      <span>Valider</span>
+                                    </button>
+                                    <button
+                                      disabled={requestActionLoading === r.id}
+                                      onClick={() => handleRejectRequest(r.id, r.fullName)}
+                                      className="px-2.5 py-1 bg-slate-900 hover:bg-red-950 border border-slate-700 text-red-400 rounded-lg text-xs flex items-center gap-1"
+                                      title="Rejeter la demande"
+                                    >
+                                      <XCircle className="w-3.5 h-3.5" />
+                                      <span>Rejeter</span>
+                                    </button>
+                                  </>
+                                )}
+                                <button
+                                  onClick={() => handleDeleteRequest(r.id)}
+                                  className="p-1.5 text-slate-600 hover:text-red-400"
+                                  title="Supprimer la demande"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* TAB: DIAGNOSTICS & NETWORK PROBE */}
+        {/* ========================================================================= */}
+        {activeTab === 'diagnostics' && currentUser.role === 'SUPER_ADMIN' && (
+          <div className="space-y-6 animate-fade-in font-mono text-xs">
+            {/* Header */}
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 bg-[#060c18] border border-emerald-900/80 p-5 rounded-2xl shadow-xl">
+              <div>
+                <h2 className="text-base font-bold text-white flex items-center gap-2">
+                  <Gauge className="w-5 h-5 text-indigo-400" />
+                  Diagnostics Système & Sonde Réseau Haute Performance
+                </h2>
+                <p className="text-slate-400 mt-1">
+                  Surveillance en temps réel de la charge CPU, RAM, noyau Xray et testeur de connectivité TCP/TLS.
+                </p>
+              </div>
+
+              <button
+                onClick={refreshData}
+                className="px-3.5 py-2 bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 rounded-xl text-xs flex items-center gap-1.5"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Actualiser</span>
+              </button>
+            </div>
+
+            {/* Gauges & Realtime Metrics */}
+            {diagnostics && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="bg-[#060c18] border border-emerald-900/80 p-4 rounded-2xl space-y-2">
+                  <div className="flex items-center justify-between text-slate-400">
+                    <span className="text-[10px] uppercase font-bold">Mémoire RAM</span>
+                    <HardDrive className="w-4 h-4 text-emerald-400" />
+                  </div>
+                  <div className="text-xl font-black text-white">
+                    {Math.round(diagnostics.server.memory.usedBytes / (1024 * 1024))} Mo
+                    <span className="text-xs text-slate-500 font-normal"> / {Math.round(diagnostics.server.memory.totalBytes / (1024 * 1024))} Mo</span>
+                  </div>
+                  <div className="w-full bg-[#03060e] h-2 rounded-full overflow-hidden border border-emerald-950">
+                    <div
+                      className="bg-emerald-500 h-full rounded-full transition-all"
+                      style={{ width: `${diagnostics.server.memory.usedPercent}%` }}
+                    />
+                  </div>
+                  <div className="text-[10px] text-right text-emerald-400 font-bold">
+                    {diagnostics.server.memory.usedPercent}% utilisé
+                  </div>
+                </div>
+
+                <div className="bg-[#060c18] border border-emerald-900/80 p-4 rounded-2xl space-y-2">
+                  <div className="flex items-center justify-between text-slate-400">
+                    <span className="text-[10px] uppercase font-bold">Charge CPU & Noyaux</span>
+                    <Activity className="w-4 h-4 text-cyan-400" />
+                  </div>
+                  <div className="text-xl font-black text-cyan-300">
+                    {diagnostics.server.cpuCount} Coeurs
+                  </div>
+                  <div className="text-[11px] text-slate-400">
+                    Moyennes de charge (1/5/15m) :
+                    <span className="font-bold text-white block mt-0.5">
+                      {diagnostics.server.loadAverage.map(v => v.toFixed(2)).join(', ')}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="bg-[#060c18] border border-emerald-900/80 p-4 rounded-2xl space-y-2">
+                  <div className="flex items-center justify-between text-slate-400">
+                    <span className="text-[10px] uppercase font-bold">Uptime Système</span>
+                    <Clock className="w-4 h-4 text-amber-400" />
+                  </div>
+                  <div className="text-xl font-black text-amber-300">
+                    {Math.floor(diagnostics.server.uptimeSeconds / 3600)}h {Math.floor((diagnostics.server.uptimeSeconds % 3600) / 60)}m
+                  </div>
+                  <div className="text-[10px] text-slate-400">
+                    Node.js {diagnostics.server.nodeVersion} • {diagnostics.server.platform} ({diagnostics.server.arch})
+                  </div>
+                </div>
+
+                <div className="bg-[#060c18] border border-emerald-900/80 p-4 rounded-2xl space-y-2">
+                  <div className="flex items-center justify-between text-slate-400">
+                    <span className="text-[10px] uppercase font-bold">Moteur Xray Core</span>
+                    <Zap className="w-4 h-4 text-emerald-400" />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
+                    <span className="text-xl font-black text-emerald-300 uppercase">
+                      {diagnostics.vpn.xrayStatus === 'ready' ? 'Opérationnel' : 'Inactif'}
+                    </span>
+                  </div>
+                  <div className="text-[10px] text-slate-400">
+                    Domaine : <code className="text-cyan-400">{diagnostics.vpn.vpnDomain}</code>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Network Probe Form */}
+            <div className="bg-[#060c18] border border-cyan-900/80 p-5 rounded-2xl shadow-xl space-y-4">
+              <div>
+                <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                  <Radio className="w-4 h-4 text-cyan-400" />
+                  Sonde Réseau & Testeur de Latence TCP / TLS (Bug Hosts & CDN)
+                </h3>
+                <p className="text-slate-400 text-xs mt-1">
+                  Effectue un handshake TCP réel et une négociation TLS pour mesurer la latence réseau exacte vers n'importe quel bug host, CDN ou cible IP.
+                </p>
+              </div>
+
+              <form onSubmit={handleRunProbe} className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end">
+                <div className="sm:col-span-5">
+                  <label className="block text-slate-300 text-[11px] mb-1">Cible (Hôte ou IP)</label>
+                  <input
+                    type="text"
+                    value={probeHost}
+                    onChange={(e) => setProbeHost(e.target.value)}
+                    placeholder="ex: crashlyticsreports-pa.googleapis.com"
+                    className="w-full bg-[#03060e] border border-emerald-950 rounded-xl px-3 py-2 text-white"
+                    required
+                  />
+                </div>
+
+                <div className="sm:col-span-2">
+                  <label className="block text-slate-300 text-[11px] mb-1">Port</label>
+                  <input
+                    type="number"
+                    value={probePort}
+                    onChange={(e) => setProbePort(Number(e.target.value))}
+                    className="w-full bg-[#03060e] border border-emerald-950 rounded-xl px-3 py-2 text-white"
+                  />
+                </div>
+
+                <div className="sm:col-span-3">
+                  <label className="block text-slate-300 text-[11px] mb-1">SNI Personnalisé (Optionnel)</label>
+                  <input
+                    type="text"
+                    value={probeSni}
+                    onChange={(e) => setProbeSni(e.target.value)}
+                    placeholder="ex: panel.pagnol.xyz"
+                    className="w-full bg-[#03060e] border border-emerald-950 rounded-xl px-3 py-2 text-white"
+                  />
+                </div>
+
+                <div className="sm:col-span-2">
+                  <button
+                    type="submit"
+                    disabled={probeLoading}
+                    className="w-full py-2.5 bg-cyan-600 hover:bg-cyan-500 text-black font-bold rounded-xl flex items-center justify-center gap-1.5 transition"
+                  >
+                    <Radio className={`w-4 h-4 ${probeLoading ? 'animate-spin' : ''}`} />
+                    <span>{probeLoading ? 'Mesure...' : 'Lancer Sonde'}</span>
+                  </button>
+                </div>
+              </form>
+
+              {/* Probe Result Card */}
+              {probeResult && (
+                <div className={`p-4 rounded-xl border ${
+                  probeResult.success ? 'bg-emerald-950/30 border-emerald-600/40' : 'bg-red-950/30 border-red-600/40'
+                } space-y-2`}>
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-white flex items-center gap-1.5">
+                      {probeResult.success ? <CheckCircle2 className="w-4 h-4 text-emerald-400" /> : <AlertTriangle className="w-4 h-4 text-red-400" />}
+                      Résultat Sonde : {probeResult.target}:{probeResult.port}
+                    </span>
+                    <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${
+                      probeResult.success ? 'bg-emerald-500/20 text-emerald-300' : 'bg-red-500/20 text-red-300'
+                    }`}>
+                      {probeResult.success ? 'ACCESSIBLE' : 'ÉCHEC'}
+                    </span>
+                  </div>
+
+                  {probeResult.success ? (
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-emerald-950">
+                      <div>
+                        <span className="text-slate-500 text-[10px] block">Latence TCP</span>
+                        <span className="text-base font-bold text-emerald-300">{probeResult.tcpLatencyMs} ms</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500 text-[10px] block">Latence TLS</span>
+                        <span className="text-base font-bold text-cyan-300">{probeResult.tlsLatencyMs ? `${probeResult.tlsLatencyMs} ms` : 'N/A'}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500 text-[10px] block">Protocole TLS</span>
+                        <span className="text-xs font-bold text-white">{probeResult.tlsProtocol || 'N/A'}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500 text-[10px] block">Expiration Certificat</span>
+                        <span className="text-xs font-bold text-slate-300">{probeResult.certValidTo ? new Date(probeResult.certValidTo).toLocaleDateString() : 'N/A'}</span>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-red-300 text-xs">
+                      Erreur de connexion : {probeResult.error || 'Délai d’attente dépassé (timeout).'}
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -2437,6 +3229,243 @@ export default function App() {
                 <span>{copiedKey === 'modal_direct_link' ? 'Lien Direct Copié !' : 'Copier Lien Direct (V2Ray / Clash)'}</span>
               </button>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL: CREATE / EDIT PRICING PLAN */}
+      {/* ========================================================================= */}
+      {planModalOpen && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="w-full max-w-md bg-[#060c18] border border-emerald-900 rounded-3xl p-6 shadow-2xl space-y-4 font-mono text-xs">
+            <div className="flex items-center justify-between pb-2 border-b border-emerald-950">
+              <h3 className="text-base font-bold text-white flex items-center gap-2">
+                <Tag className="w-4 h-4 text-emerald-400" />
+                {editingPlanId ? 'Modifier le Forfait' : 'Nouveau Forfait Commercial'}
+              </h3>
+              <button onClick={() => setPlanModalOpen(false)} className="text-slate-500 hover:text-white">✕</button>
+            </div>
+
+            <form onSubmit={handleSavePlan} className="space-y-3">
+              <div>
+                <label className="block text-slate-300 mb-1 font-bold">Nom du Forfait</label>
+                <input
+                  type="text"
+                  value={planName}
+                  onChange={(e) => setPlanName(e.target.value)}
+                  placeholder="ex: Performance 50 Go"
+                  className="w-full bg-[#03060e] border border-emerald-950 rounded-xl px-3 py-2 text-white"
+                  required
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-slate-300 mb-1 font-bold">Quota (Go)</label>
+                  <input
+                    type="number"
+                    value={planQuotaGb}
+                    onChange={(e) => setPlanQuotaGb(Number(e.target.value))}
+                    className="w-full bg-[#03060e] border border-emerald-950 rounded-xl px-3 py-2 text-white"
+                    min="1"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-300 mb-1 font-bold">Durée (Jours)</label>
+                  <input
+                    type="number"
+                    value={planDurationDays}
+                    onChange={(e) => setPlanDurationDays(Number(e.target.value))}
+                    className="w-full bg-[#03060e] border border-emerald-950 rounded-xl px-3 py-2 text-white"
+                    min="1"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-slate-300 mb-1 font-bold">Prix (FCFA)</label>
+                  <input
+                    type="number"
+                    value={planPriceCfa}
+                    onChange={(e) => setPlanPriceCfa(Number(e.target.value))}
+                    className="w-full bg-[#03060e] border border-emerald-950 rounded-xl px-3 py-2 text-cyan-300 font-bold"
+                    min="0"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-300 mb-1 font-bold">Badge Commercial</label>
+                  <input
+                    type="text"
+                    value={planBadge}
+                    onChange={(e) => setPlanBadge(e.target.value)}
+                    placeholder="ex: POPULAIRE"
+                    className="w-full bg-[#03060e] border border-emerald-950 rounded-xl px-3 py-2 text-white"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-slate-300 mb-1 font-bold">Description Commerciale</label>
+                <textarea
+                  value={planDesc}
+                  onChange={(e) => setPlanDesc(e.target.value)}
+                  placeholder="Idéal pour réseaux sociaux, streaming HD et navigation quotidienne."
+                  className="w-full bg-[#03060e] border border-emerald-950 rounded-xl px-3 py-2 text-white h-16"
+                />
+              </div>
+
+              <div className="pt-2 flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPlanModalOpen(false)}
+                  className="flex-1 py-2.5 bg-slate-900 hover:bg-slate-800 text-slate-300 rounded-xl"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-black font-black rounded-xl shadow"
+                >
+                  {editingPlanId ? 'Enregistrer Modifications' : 'Créer Forfait'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL: MULTI-VARIANTS & UNIVERSAL SUBSCRIPTION PORTAL */}
+      {/* ========================================================================= */}
+      {variantsModalOpen && variantsModalToken && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="w-full max-w-2xl bg-[#060c18] border border-indigo-900 rounded-3xl p-6 shadow-2xl space-y-4 font-mono text-xs max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-indigo-950">
+              <div className="flex items-center gap-2">
+                <Globe className="w-5 h-5 text-indigo-400" />
+                <div>
+                  <h3 className="text-base font-bold text-white">
+                    Portail Universel & Moteur VLESS Multi-Variantes
+                  </h3>
+                  <span className="text-emerald-400 font-bold">{variantsModalToken.token}</span>
+                  <span className="text-slate-400 ml-2">({variantsModalToken.bandwidthGb} Go • {variantsModalToken.plan})</span>
+                </div>
+              </div>
+              <button onClick={() => setVariantsModalOpen(false)} className="text-slate-500 hover:text-white">✕</button>
+            </div>
+
+            {/* Portal Link Box */}
+            <div className="p-3 bg-[#03060e] border border-indigo-950 rounded-xl space-y-2">
+              <span className="text-slate-400 text-[10px] uppercase font-bold block">
+                Lien Universel de Souscription (Ouvrable dans tout navigateur) :
+              </span>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  readOnly
+                  value={variantsSubUrl ? `${window.location.origin}${variantsSubUrl}` : `${window.location.origin}/sub/${variantsModalToken.token}`}
+                  className="flex-1 bg-black border border-indigo-900/60 rounded-lg px-3 py-1.5 text-indigo-300 font-mono text-xs select-all"
+                />
+                <button
+                  onClick={() => copyToClipboard(
+                    variantsSubUrl ? `${window.location.origin}${variantsSubUrl}` : `${window.location.origin}/sub/${variantsModalToken.token}`,
+                    'sub_portal_link'
+                  )}
+                  className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-black font-bold rounded-lg text-xs flex items-center gap-1"
+                >
+                  {copiedKey === 'sub_portal_link' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span>{copiedKey === 'sub_portal_link' ? 'Copié' : 'Copier'}</span>
+                </button>
+                <a
+                  href={variantsSubUrl || `/sub/${variantsModalToken.token}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 rounded-lg text-xs flex items-center gap-1"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>Ouvrir</span>
+                </a>
+              </div>
+            </div>
+
+            {/* Variants List */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h4 className="font-bold text-white text-xs">Variantes Réseau Déployées :</h4>
+                {variantsClientJson && (
+                  <button
+                    onClick={() => {
+                      const dataStr = 'data:text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(variantsClientJson, null, 2));
+                      const dlAnchor = document.createElement('a');
+                      dlAnchor.setAttribute('href', dataStr);
+                      dlAnchor.setAttribute('download', `xray-client-${variantsModalToken.token}.json`);
+                      dlAnchor.click();
+                    }}
+                    className="text-cyan-400 hover:text-cyan-300 text-[11px] flex items-center gap-1"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Télécharger config Xray Client (.json)</span>
+                  </button>
+                )}
+              </div>
+
+              {variantsLoading ? (
+                <div className="py-8 text-center text-slate-400 flex items-center justify-center gap-2">
+                  <RefreshCw className="w-4 h-4 animate-spin text-indigo-400" />
+                  <span>Calcul et génération des variantes en cours...</span>
+                </div>
+              ) : variantsList.length === 0 ? (
+                <div className="p-4 text-center text-slate-500">Aucune variante disponible.</div>
+              ) : (
+                <div className="space-y-2">
+                  {variantsList.map((variant) => (
+                    <div
+                      key={variant.id}
+                      className="p-3 bg-[#03060e] border border-emerald-950 hover:border-indigo-800 rounded-xl space-y-2 transition"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded bg-indigo-950 text-indigo-400 border border-indigo-800">
+                            {variant.badge}
+                          </span>
+                          <span className="font-bold text-white text-xs">{variant.label}</span>
+                        </div>
+                        <button
+                          onClick={() => copyToClipboard(variant.uri, `var_${variant.id}`)}
+                          className="px-2.5 py-1 bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 rounded text-[11px] flex items-center gap-1"
+                        >
+                          {copiedKey === `var_${variant.id}` ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                          <span>{copiedKey === `var_${variant.id}` ? 'Copié !' : 'Copier Lien'}</span>
+                        </button>
+                      </div>
+
+                      <div className="text-[10px] text-slate-400 flex flex-wrap gap-x-4 gap-y-1">
+                        <span>SNI : <code className="text-cyan-300">{variant.sni}</code></span>
+                        <span>Cible : <code className="text-slate-300">{variant.target}</code></span>
+                      </div>
+
+                      <div className="p-1.5 bg-black rounded border border-emerald-950/60 font-mono text-[9px] text-emerald-400 break-all select-all">
+                        {variant.uri}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="pt-2 border-t border-indigo-950 flex justify-end">
+              <button
+                onClick={() => setVariantsModalOpen(false)}
+                className="px-5 py-2 bg-slate-900 hover:bg-slate-800 text-slate-300 rounded-xl"
+              >
+                Fermer
+              </button>
+            </div>
           </div>
         </div>
       )}

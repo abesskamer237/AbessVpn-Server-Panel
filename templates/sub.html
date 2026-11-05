@@ -1,0 +1,745 @@
+<!DOCTYPE html>
+<html lang="fr" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Portail Client • {{USER_NAME}} | {{PANEL_TITLE}}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-primary: #060913;
+      --bg-card: rgba(15, 23, 42, 0.78);
+      --bg-card-hover: rgba(30, 41, 59, 0.85);
+      --border-glass: rgba(148, 163, 184, 0.14);
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --accent-cyan: #06b6d4;
+      --accent-indigo: #6366f1;
+      --accent-emerald: #10b981;
+      --accent-amber: #f59e0b;
+      --accent-rose: #f43f5e;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+      background-color: var(--bg-primary);
+      background-image:
+        radial-gradient(at 10% 10%, rgba(6, 182, 212, 0.15) 0px, transparent 50%),
+        radial-gradient(at 90% 20%, rgba(99, 102, 241, 0.15) 0px, transparent 50%),
+        radial-gradient(at 50% 90%, rgba(16, 185, 129, 0.08) 0px, transparent 50%);
+      color: var(--text-main);
+      min-height: 100vh;
+      line-height: 1.5;
+      padding: 24px 16px 60px;
+    }
+
+    .container {
+      max-width: 580px;
+      margin: 0 auto;
+    }
+
+    /* Header Brand */
+    .brand-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 20px;
+      padding: 12px 16px;
+      background: var(--bg-card);
+      border: 1px solid var(--border-glass);
+      border-radius: 18px;
+      backdrop-filter: blur(16px);
+    }
+
+    .brand-logo {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .brand-icon {
+      width: 40px;
+      height: 40px;
+      border-radius: 12px;
+      background: linear-gradient(135deg, var(--accent-cyan), var(--accent-indigo));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      font-size: 18px;
+      color: #fff;
+      box-shadow: 0 4px 15px rgba(6, 182, 212, 0.35);
+    }
+
+    .brand-title {
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+    }
+
+    .brand-sub {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    /* Status Pill */
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+
+    .status-active, .status-online {
+      background: rgba(16, 185, 129, 0.15);
+      color: #34d399;
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+    .status-active .status-dot, .status-online .status-dot {
+      background: #10b981;
+      box-shadow: 0 0 8px #10b981;
+    }
+
+    .status-on_hold {
+      background: rgba(6, 182, 212, 0.15);
+      color: #22d3ee;
+      border: 1px solid rgba(6, 182, 212, 0.3);
+    }
+    .status-on_hold .status-dot {
+      background: #06b6d4;
+    }
+
+    .status-expired, .status-limited, .status-disabled {
+      background: rgba(244, 63, 94, 0.15);
+      color: #fb7185;
+      border: 1px solid rgba(244, 63, 94, 0.3);
+    }
+    .status-expired .status-dot, .status-limited .status-dot, .status-disabled .status-dot {
+      background: #f43f5e;
+    }
+
+    /* Cards */
+    .glass-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-glass);
+      border-radius: 22px;
+      padding: 22px;
+      margin-bottom: 16px;
+      backdrop-filter: blur(16px);
+      box-shadow: 0 12px 32px -8px rgba(0, 0, 0, 0.45);
+    }
+
+    .user-hero {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 20px;
+    }
+
+    .user-name {
+      font-size: 22px;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      margin-bottom: 4px;
+    }
+
+    .user-token {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      color: var(--accent-cyan);
+      background: rgba(6, 182, 212, 0.1);
+      padding: 3px 8px;
+      border-radius: 6px;
+      display: inline-block;
+    }
+
+    /* Quota Progress */
+    .quota-box {
+      background: rgba(2, 6, 23, 0.55);
+      border: 1px solid rgba(148, 163, 184, 0.1);
+      border-radius: 16px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+
+    .quota-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: 10px;
+    }
+
+    .quota-label {
+      font-size: 12px;
+      color: var(--text-muted);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .quota-values {
+      font-size: 15px;
+      font-weight: 700;
+    }
+
+    .progress-track {
+      width: 100%;
+      height: 10px;
+      background: rgba(30, 41, 59, 0.9);
+      border-radius: 999px;
+      overflow: hidden;
+      margin-bottom: 8px;
+    }
+
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--accent-cyan), var(--accent-indigo));
+      border-radius: 999px;
+      transition: width 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+    }
+
+    .quota-sub {
+      display: flex;
+      justify-content: space-between;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    /* Stats Grid */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+    }
+
+    .stat-item {
+      background: rgba(2, 6, 23, 0.45);
+      border: 1px solid rgba(148, 163, 184, 0.08);
+      border-radius: 14px;
+      padding: 12px 14px;
+    }
+
+    .stat-label {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-bottom: 4px;
+    }
+
+    .stat-value {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--text-main);
+    }
+
+    /* Section Titles */
+    .section-title {
+      font-size: 14px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      margin-bottom: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    /* APK Download Banner */
+    .apk-banner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      background: linear-gradient(135deg, rgba(6, 182, 212, 0.18), rgba(99, 102, 241, 0.18));
+      border: 1px solid rgba(6, 182, 212, 0.35);
+      border-radius: 18px;
+      padding: 16px 18px;
+      margin-bottom: 16px;
+      text-decoration: none;
+      color: var(--text-main);
+      transition: transform 0.2s, border-color 0.2s;
+    }
+
+    .apk-banner:hover {
+      transform: translateY(-2px);
+      border-color: var(--accent-cyan);
+    }
+
+    .apk-info h3 {
+      font-size: 15px;
+      font-weight: 700;
+      margin-bottom: 2px;
+    }
+
+    .apk-info p {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .apk-btn {
+      background: linear-gradient(135deg, var(--accent-cyan), var(--accent-indigo));
+      color: #fff;
+      font-weight: 700;
+      font-size: 13px;
+      padding: 10px 16px;
+      border-radius: 12px;
+      white-space: nowrap;
+      box-shadow: 0 4px 12px rgba(6, 182, 212, 0.3);
+    }
+
+    /* 1-Click App Import Buttons */
+    .app-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+
+    .app-btn {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 14px;
+      background: rgba(15, 23, 42, 0.9);
+      border: 1px solid var(--border-glass);
+      border-radius: 14px;
+      color: var(--text-main);
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .app-btn:hover {
+      background: var(--bg-card-hover);
+      border-color: var(--accent-cyan);
+      transform: translateY(-1px);
+    }
+
+    .app-btn-icon {
+      width: 28px;
+      height: 28px;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 15px;
+      background: rgba(255, 255, 255, 0.06);
+    }
+
+    /* Variant Selector & QR */
+    .variant-select {
+      width: 100%;
+      padding: 12px 14px;
+      background: rgba(2, 6, 23, 0.7);
+      border: 1px solid var(--border-glass);
+      border-radius: 12px;
+      color: var(--text-main);
+      font-family: inherit;
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: 14px;
+      outline: none;
+    }
+
+    .variant-select:focus {
+      border-color: var(--accent-cyan);
+    }
+
+    .qr-wrapper {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      background: rgba(2, 6, 23, 0.5);
+      border: 1px solid rgba(148, 163, 184, 0.1);
+      border-radius: 18px;
+      padding: 20px;
+      margin-bottom: 14px;
+    }
+
+    .qr-img {
+      width: 200px;
+      height: 200px;
+      border-radius: 14px;
+      background: #fff;
+      padding: 8px;
+      margin-bottom: 12px;
+    }
+
+    .uri-box {
+      width: 100%;
+      background: rgba(2, 6, 23, 0.8);
+      border: 1px solid var(--border-glass);
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: var(--text-muted);
+      word-break: break-all;
+      max-height: 76px;
+      overflow-y: auto;
+      margin-bottom: 12px;
+    }
+
+    .btn-row {
+      display: flex;
+      gap: 10px;
+      width: 100%;
+    }
+
+    .btn-action {
+      flex: 1;
+      padding: 11px 14px;
+      border-radius: 12px;
+      border: 1px solid var(--border-glass);
+      background: rgba(30, 41, 59, 0.8);
+      color: var(--text-main);
+      font-family: inherit;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      text-align: center;
+      text-decoration: none;
+    }
+
+    .btn-action.primary {
+      background: linear-gradient(135deg, var(--accent-cyan), var(--accent-indigo));
+      border-color: transparent;
+      color: #fff;
+    }
+
+    .btn-action:hover {
+      opacity: 0.92;
+      transform: translateY(-1px);
+    }
+
+    /* Support WhatsApp Button */
+    .whatsapp-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      width: 100%;
+      padding: 14px 18px;
+      background: linear-gradient(135deg, #10b981, #059669);
+      color: #fff;
+      font-weight: 700;
+      font-size: 14px;
+      border-radius: 16px;
+      text-decoration: none;
+      box-shadow: 0 6px 20px rgba(16, 185, 129, 0.3);
+      transition: transform 0.2s;
+    }
+
+    .whatsapp-btn:hover {
+      transform: translateY(-2px);
+    }
+
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%) translateY(80px);
+      background: #10b981;
+      color: #fff;
+      padding: 10px 20px;
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 700;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.4);
+      opacity: 0;
+      transition: all 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+      z-index: 1000;
+      pointer-events: none;
+    }
+
+    .toast.show {
+      transform: translateX(-50%) translateY(0);
+      opacity: 1;
+    }
+
+    @media (max-width: 460px) {
+      .app-grid {
+        grid-template-columns: 1fr;
+      }
+      .stats-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- Top Brand Bar -->
+    <div class="brand-bar">
+      <div class="brand-logo">
+        <div class="brand-icon">N</div>
+        <div>
+          <div class="brand-title">Nexus Tunnel Pro</div>
+          <div class="brand-sub" id="resellerBrand">Portail d'Abonnement VLESS</div>
+        </div>
+      </div>
+      <div id="statusBadge" class="status-badge status-active">
+        <span class="status-dot"></span>
+        <span id="statusText">ACTIF</span>
+      </div>
+    </div>
+
+    <!-- User Summary & Quota Card -->
+    <div class="glass-card">
+      <div class="user-hero">
+        <div>
+          <div class="user-name" id="userName">{{USER_NAME}}</div>
+          <span class="user-token" id="userToken">{{USER_TOKEN}}</span>
+        </div>
+      </div>
+
+      <div class="quota-box">
+        <div class="quota-header">
+          <span class="quota-label">Consommation Data</span>
+          <span class="quota-values"><span id="usedReadable">0 B</span> / <span id="quotaReadable">Illimité</span></span>
+        </div>
+        <div class="progress-track">
+          <div class="progress-fill" id="quotaBar" style="width: 0%;"></div>
+        </div>
+        <div class="quota-sub">
+          <span id="quotaPercent">0% utilisé</span>
+          <span id="remainingBytes">Restant : Illimité</span>
+        </div>
+      </div>
+
+      <div class="stats-grid">
+        <div class="stat-item">
+          <div class="stat-label">⏳ Temps Restant</div>
+          <div class="stat-value" id="remainingTime">--</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">📱 Appareils Autorisés</div>
+          <div class="stat-value" id="maxDevices">--</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">🔄 Remise à zéro</div>
+          <div class="stat-value" id="resetStrategy">Aucune</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">🛡️ Protocole</div>
+          <div class="stat-value">VLESS • WS • TLS 1.3</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Native Android APK Download -->
+    <a href="/nexus/download/NexusTunnel.apk" class="apk-banner">
+      <div class="apk-info">
+        <h3>📲 Application Officielle Android</h3>
+        <p>Téléchargez Nexus Tunnel APK (Connexion automatique 1-clic)</p>
+      </div>
+      <div class="apk-btn">Télécharger APK</div>
+    </a>
+
+    <!-- 1-Click Import into Third-Party VPN Clients -->
+    <div class="glass-card">
+      <div class="section-title">
+        <span>🚀 Importation Rapide (1-Clic)</span>
+      </div>
+      <div class="app-grid">
+        <a id="btnV2rayNG" href="#" class="app-btn">
+          <span class="app-btn-icon">⚡</span>
+          <span>Ouvrir dans v2rayNG</span>
+        </a>
+        <a id="btnHiddify" href="#" class="app-btn">
+          <span class="app-btn-icon">🛡️</span>
+          <span>Ouvrir dans Hiddify</span>
+        </a>
+        <a id="btnStreisand" href="#" class="app-btn">
+          <span class="app-btn-icon">🍎</span>
+          <span>Streisand (iOS)</span>
+        </a>
+        <a id="btnV2Box" href="#" class="app-btn">
+          <span class="app-btn-icon">📦</span>
+          <span>V2Box (iOS / Android)</span>
+        </a>
+        <a id="btnClash" href="#" class="app-btn">
+          <span class="app-btn-icon">🐱</span>
+          <span>Importer dans Clash</span>
+        </a>
+        <button type="button" onclick="copySubUrl()" class="app-btn">
+          <span class="app-btn-icon">🔗</span>
+          <span>Copier Lien Sub</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- VLESS Multi-Variant Selector & QR Code -->
+    <div class="glass-card">
+      <div class="section-title">
+        <span>🌐 Variantes de Connexion & QR Code</span>
+      </div>
+      <select id="variantSelect" class="variant-select" onchange="onVariantChange()"></select>
+
+      <div class="qr-wrapper">
+        <img id="qrImage" class="qr-img" src="{{QR_CODE}}" alt="QR Code VLESS" />
+        <div id="uriBox" class="uri-box">{{VLESS_URI}}</div>
+        <div class="btn-row">
+          <button type="button" class="btn-action primary" onclick="copyCurrentUri()">📋 Copier la clé VLESS</button>
+          <button type="button" class="btn-action" onclick="copyAllUris()">📚 Copier toutes les variantes</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Reseller / Admin WhatsApp Support -->
+    <a id="whatsappSupportBtn" href="#" target="_blank" rel="noopener" class="whatsapp-btn">
+      <span>💬 Contacter le Support / Recharger via WhatsApp</span>
+    </a>
+  </div>
+
+  <div id="toast" class="toast">Copié dans le presse-papiers !</div>
+
+  <script>
+    const SUB_DATA = {{SUB_DATA_JSON}};
+
+    function showToast(msg) {
+      const t = document.getElementById('toast');
+      t.textContent = msg;
+      t.classList.add('show');
+      setTimeout(() => t.classList.remove('show'), 2400);
+    }
+
+    function copyText(text, label) {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(() => showToast(label || 'Copié !'));
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        showToast(label || 'Copié !');
+      }
+    }
+
+    function initPortal() {
+      const u = SUB_DATA.user || {};
+      const variants = SUB_DATA.variants || [];
+      const subUrl = window.location.origin + SUB_DATA.sub_path;
+      const rawSubUrl = subUrl + (subUrl.includes('?') ? '&raw=1' : '?raw=1');
+
+      document.getElementById('userName').textContent = u.name || 'Client Nexus';
+      document.getElementById('userToken').textContent = u.token || u.uuid || '';
+      if (u.reseller_name) {
+        document.getElementById('resellerBrand').textContent = 'Géré par ' + u.reseller_name;
+      }
+
+      // Status badge
+      const badge = document.getElementById('statusBadge');
+      const statusText = document.getElementById('statusText');
+      const stCode = u.status_code || 'active';
+      badge.className = 'status-badge status-' + stCode;
+      const labels = {
+        online: 'EN LIGNE',
+        active: 'ACTIF',
+        on_hold: 'EN ATTENTE 1ÈRE CONNEXION',
+        expired: 'EXPIRÉ',
+        limited: 'QUOTA ÉPUISÉ',
+        disabled: 'SUSPENDU'
+      };
+      statusText.textContent = labels[stCode] || 'ACTIF';
+
+      // Quota
+      document.getElementById('usedReadable').textContent = u.readable_used || '0 B';
+      document.getElementById('quotaReadable').textContent = u.readable_quota || 'Illimité';
+      const pct = u.percent_quota_used || 0;
+      document.getElementById('quotaBar').style.width = Math.min(100, pct) + '%';
+      document.getElementById('quotaPercent').textContent = pct + '% utilisé';
+      document.getElementById('remainingBytes').textContent = 'Restant : ' + (u.readable_remaining_bytes || 'Illimité');
+
+      // Stats
+      document.getElementById('remainingTime').textContent = u.readable_remaining_time || 'Illimitée';
+      document.getElementById('maxDevices').textContent = u.max_ips > 0 ? (u.max_ips + ' Appareil(s)') : 'Illimité';
+      const resetLabels = {
+        no_reset: 'Aucune',
+        daily: 'Quotidienne (24h)',
+        weekly: 'Hebdomadaire (7j)',
+        monthly: 'Mensuelle (30j)'
+      };
+      document.getElementById('resetStrategy').textContent = resetLabels[u.data_reset_strategy || 'no_reset'] || 'Aucune';
+
+      // Deep links
+      document.getElementById('btnV2rayNG').href = 'v2rayng://install-config?url=' + encodeURIComponent(rawSubUrl);
+      document.getElementById('btnHiddify').href = 'hiddify://import/' + rawSubUrl + '#Nexus-' + encodeURIComponent(u.name || 'Client');
+      document.getElementById('btnStreisand').href = 'streisand://import/' + rawSubUrl;
+      document.getElementById('btnV2Box').href = 'v2box://install-sub?url=' + encodeURIComponent(rawSubUrl) + '&name=' + encodeURIComponent('Nexus ' + (u.name || ''));
+      document.getElementById('btnClash').href = 'clash://install-config?url=' + encodeURIComponent(rawSubUrl) + '&name=' + encodeURIComponent('Nexus ' + (u.name || ''));
+
+      // Populate variants
+      const sel = document.getElementById('variantSelect');
+      sel.innerHTML = '';
+      variants.forEach((v, idx) => {
+        const opt = document.createElement('option');
+        opt.value = idx;
+        opt.textContent = v.label + (v.badge ? ' [' + v.badge + ']' : '');
+        sel.appendChild(opt);
+      });
+      if (variants.length > 0) {
+        onVariantChange();
+      }
+
+      // Support WhatsApp button
+      const supportPhone = (SUB_DATA.support_phone || '+237690123456').replace(/[^0-9]/g, '');
+      const waMsg = encodeURIComponent(`Bonjour, je souhaite gérer/recharger mon compte Nexus Tunnel (${u.name} - Code: ${u.token}).`);
+      document.getElementById('whatsappSupportBtn').href = `https://wa.me/${supportPhone}?text=${waMsg}`;
+    }
+
+    function onVariantChange() {
+      const variants = SUB_DATA.variants || [];
+      const idx = parseInt(document.getElementById('variantSelect').value || '0', 10);
+      const chosen = variants[idx] || variants[0];
+      if (!chosen) return;
+      document.getElementById('uriBox').textContent = chosen.uri;
+      if (chosen.qr_code) {
+        document.getElementById('qrImage').src = chosen.qr_code;
+      }
+    }
+
+    function copyCurrentUri() {
+      const text = document.getElementById('uriBox').textContent;
+      copyText(text, 'Clé VLESS copiée !');
+    }
+
+    function copyAllUris() {
+      const variants = SUB_DATA.variants || [];
+      const all = variants.map(v => v.uri).join('\n');
+      copyText(all, `${variants.length} variantes VLESS copiées !`);
+    }
+
+    function copySubUrl() {
+      const subUrl = window.location.origin + SUB_DATA.sub_path;
+      copyText(subUrl, 'Lien d\'abonnement copié !');
+    }
+
+    document.addEventListener('DOMContentLoaded', initPortal);
+  </script>
+</body>
+</html>

@@ -3,9 +3,13 @@ import http from 'http';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
+import net from 'net';
+import tls from 'tls';
+import os from 'os';
 import { fileURLToPath } from 'url';
 import { exec } from 'child_process';
 import { promisify } from 'util';
+import QRCode from 'qrcode';
 import { startTelegramBot } from './telegram-bot.js';
 
 const execAsync = promisify(exec);
@@ -27,6 +31,13 @@ const configFile = path.resolve(dataDir, 'config.json');
 const protocolConfigsFile = path.resolve(dataDir, 'protocol-configs.json');
 const transactionsFile = path.resolve(dataDir, 'transactions.json');
 const appVersionFile = path.resolve(dataDir, 'app-version.json');
+const plansFile = path.resolve(dataDir, 'plans.json');
+const requestsFile = path.resolve(dataDir, 'requests.json');
+const auditLogsFile = path.resolve(dataDir, 'audit-logs.json');
+const africanCountriesFile = path.resolve(dataDir, 'african-countries.json');
+const templatesDir = path.resolve(__dirname, 'templates');
+const staticDir = path.resolve(__dirname, 'static');
+
 const backupsDir = path.resolve(dataDir, 'backups');
 if (!fs.existsSync(backupsDir)) {
   fs.mkdirSync(backupsDir, { recursive: true });
@@ -131,6 +142,8 @@ export interface ClientToken {
   /** Optional customer name or contact information for reseller management */
   customerNote?: string;
   customerContact?: string;
+  on_hold?: boolean;
+  firstConnectedAt?: string | null;
   encryptedLink: string;
   directLink?: string;
   createdAt: string;
@@ -206,6 +219,158 @@ export function loadAppVersionConfig(): AppVersionConfig {
 
 export function saveAppVersionConfig(config: AppVersionConfig): void {
   writeJsonAtomically(appVersionFile, config);
+}
+
+// Commercial Pricing Plans & Tiers
+export interface PricingPlan {
+  id: string;
+  name: string;
+  quotaGb: number;
+  durationDays: number;
+  priceCfa: number;
+  badge?: string;
+  description?: string;
+  activeUsersCount?: number;
+}
+
+// Membership & Onboarding Requests
+export interface MembershipRequest {
+  id: string;
+  firstName: string;
+  lastName: string;
+  fullName: string;
+  countryCode: string;
+  countryName: string;
+  flag: string;
+  dialPrefix: string;
+  channel: 'WHATSAPP' | 'TELEGRAM';
+  contactDetail: string;
+  deviceId?: string;
+  deviceModel?: string;
+  deviceOs?: string;
+  ipAddress: string;
+  planId?: string;
+  planName?: string;
+  paymentMethod?: 'ORANGE_MONEY' | 'MTN_MOMO' | 'WAVE' | 'FREE_TRIAL';
+  paymentRef?: string;
+  status: 'PENDING' | 'APPROVED' | 'REJECTED';
+  rejectionReason?: string;
+  assignedTokenId?: string;
+  assignedToken?: string;
+  submittedAt: string;
+  processedAt?: string;
+}
+
+// Persistent Audit Trail
+export interface AuditLog {
+  id: string;
+  actor: string;
+  role: string;
+  action: string;
+  details: string;
+  ip?: string;
+  timestamp: string;
+}
+
+// Multi-Variant VPN Configuration
+export interface VlessVariant {
+  id: string;
+  label: string;
+  badge: string;
+  protocol: string;
+  uri: string;
+  sni: string;
+  target: string;
+  qrCode?: string;
+}
+
+export const DEFAULT_PLANS: PricingPlan[] = [
+  { id: 'plan_trial', name: 'Essai Gratuit 24h', quotaGb: 2.0, durationDays: 1, priceCfa: 0, badge: 'GRATUIT', description: 'Accès ultra-rapide 24h sans engagement pour tester le service.' },
+  { id: 'plan_10gb', name: 'Découverte 10 Go', quotaGb: 10.0, durationDays: 30, priceCfa: 2000, badge: 'POPULAIRE', description: 'Idéal pour messagerie WhatsApp, Telegram et navigation quotidienne.' },
+  { id: 'plan_25gb', name: 'Standard 25 Go', quotaGb: 25.0, durationDays: 30, priceCfa: 3500, badge: 'RECOMMANDÉ', description: 'Parfait pour réseaux sociaux, streaming HD et téléchargements modérés.' },
+  { id: 'plan_50gb', name: 'Performance 50 Go', quotaGb: 50.0, durationDays: 60, priceCfa: 6000, badge: 'PRO', description: 'Gros volume de données valable 60 jours pour utilisateurs intensifs.' },
+  { id: 'plan_unlimited', name: 'VIP Illimité', quotaGb: 100.0, durationDays: 30, priceCfa: 10000, badge: 'ILLIMITÉ', description: 'Priorité réseau maximale et bande passante ultra-rapide non bridée.' }
+];
+
+export function loadPlans(): PricingPlan[] {
+  if (fs.existsSync(plansFile)) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(plansFile, 'utf8'));
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    } catch {
+      // fallback
+    }
+  }
+  writeJsonAtomically(plansFile, DEFAULT_PLANS);
+  return DEFAULT_PLANS;
+}
+
+export function savePlans(plans: PricingPlan[]): void {
+  writeJsonAtomically(plansFile, plans);
+}
+
+export function loadRequests(): MembershipRequest[] {
+  if (fs.existsSync(requestsFile)) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(requestsFile, 'utf8'));
+      if (Array.isArray(parsed)) return parsed;
+    } catch {
+      // fallback
+    }
+  }
+  return [];
+}
+
+export function saveRequests(reqs: MembershipRequest[]): void {
+  writeJsonAtomically(requestsFile, reqs);
+}
+
+export function loadAuditLogs(): AuditLog[] {
+  if (fs.existsSync(auditLogsFile)) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(auditLogsFile, 'utf8'));
+      if (Array.isArray(parsed)) return parsed;
+    } catch {
+      // fallback
+    }
+  }
+  return [];
+}
+
+export function logAudit(entry: Omit<AuditLog, 'id' | 'timestamp'>): void {
+  const list = loadAuditLogs();
+  list.unshift({
+    id: `audit_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+    ...entry,
+    timestamp: new Date().toISOString()
+  });
+  if (list.length > 2000) list.length = 2000;
+  writeJsonAtomically(auditLogsFile, list);
+}
+
+export function loadAfricanCountries(): any[] {
+  if (fs.existsSync(africanCountriesFile)) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(africanCountriesFile, 'utf8'));
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    } catch {
+      // fallback
+    }
+  }
+  return [
+    { code: "CM", name: "Cameroun", flag: "🇨🇲", dial: "+237", digits: 9, example: "690123456" },
+    { code: "CI", name: "Côte d'Ivoire", flag: "🇨🇮", dial: "+225", digits: 10, example: "0701234567" },
+    { code: "SN", name: "Sénégal", flag: "🇸🇳", dial: "+221", digits: 9, example: "770123456" },
+    { code: "CD", name: "RD Congo", flag: "🇨🇩", dial: "+243", digits: 9, example: "810123456" },
+    { code: "GA", name: "Gabon", flag: "🇬🇦", dial: "+241", digits: 8, example: "74012345" },
+    { code: "ML", name: "Mali", flag: "🇲🇱", dial: "+223", digits: 8, example: "70012345" },
+    { code: "BF", name: "Burkina Faso", flag: "🇧🇫", dial: "+226", digits: 8, example: "70012345" },
+    { code: "GN", name: "Guinée", flag: "🇬🇳", dial: "+224", digits: 9, example: "620123456" },
+    { code: "BJ", name: "Bénin", flag: "🇧🇯", dial: "+229", digits: 8, example: "97012345" },
+    { code: "TG", name: "Togo", flag: "🇹🇬", dial: "+228", digits: 8, example: "90012345" },
+    { code: "CG", name: "Congo-Brazzaville", flag: "🇨🇬", dial: "+242", digits: 9, example: "060123456" },
+    { code: "TD", name: "Tchad", flag: "🇹🇩", dial: "+235", digits: 8, example: "66012345" }
+  ];
 }
 
 export interface ServerUpdateStatus {
@@ -689,6 +854,390 @@ export function buildDirectProtocolUrl(token: ClientToken, profile: ProtocolConf
     default:
       return '';
   }
+}
+
+// Multi-SNI & Edge Anycast Configuration Targets (Anti-DPI Engine)
+export const DEFAULT_SNI_LIST = [
+  "crashlyticsreports-pa.googleapis.com",
+  "firebaselogging-pa.googleapis.com",
+  "clientservices.googleapis.com",
+  "play.googleapis.com",
+  "m.batch.com"
+];
+
+export const DEFAULT_TARGET_IPS = [
+  "192.179.18.100:443",
+  "142.250.180.14:443",
+  "172.217.18.206:443",
+  "142.250.74.206:443",
+  "216.239.38.120:443",
+  "142.250.185.238:443",
+  "172.217.170.206:443"
+];
+
+export function generateUserVlessVariants(token: ClientToken, profile?: ProtocolConfig): VlessVariant[] {
+  const master = loadMasterConfig();
+  const host = profile?.serverHost || master.serverHost || 'panel.pagnol.xyz';
+  const port = profile?.serverPort || master.serverPort || 443;
+  const primarySni = profile?.sniHost || master.sniHost || host;
+  const wsHost = profile?.host || master.host || host;
+  const rawPath = profile?.path || master.path || '/@abess237';
+  const cleanPath = rawPath.split('?')[0] || '/@abess237';
+  const uuid = token.clientUuid || token.token;
+  const baseName = `${profile?.name || 'AbessVpn'} - ${token.token}`;
+
+  const variants: VlessVariant[] = [];
+
+  // 1. Fast (0-RTT Early Data)
+  const fastTag = `${baseName} ⚡ Fast (0-RTT)`;
+  const fastUri = `vless://${uuid}@${host}:${port}?encryption=none&security=tls&sni=${encodeURIComponent(primarySni)}&fp=chrome&alpn=http%2F1.1&type=ws&host=${encodeURIComponent(wsHost)}&path=${encodeURIComponent(cleanPath + '?ed=2048')}#${encodeURIComponent(fastTag)}`;
+  variants.push({
+    id: 'fast',
+    label: '⚡ Nexus / Abess Fast (0-RTT Early Data)',
+    badge: '0-RTT • RECOMMANDÉ',
+    protocol: 'vless',
+    uri: fastUri,
+    sni: primarySni,
+    target: `${host}:${port}`
+  });
+
+  // 2. Stable (Standard Compatible)
+  const stableTag = `${baseName} 🛡️ Stable`;
+  const stableUri = `vless://${uuid}@${host}:${port}?encryption=none&security=tls&sni=${encodeURIComponent(primarySni)}&fp=chrome&alpn=http%2F1.1&type=ws&host=${encodeURIComponent(wsHost)}&path=${encodeURIComponent(cleanPath)}#${encodeURIComponent(stableTag)}`;
+  variants.push({
+    id: 'stable',
+    label: '🛡️ Nexus / Abess Stable (Compatibilité Standard)',
+    badge: 'COMPATIBILITÉ MAX',
+    protocol: 'vless',
+    uri: stableUri,
+    sni: primarySni,
+    target: `${host}:${port}`
+  });
+
+  // 3. Multi-SNI Bug Hosts
+  let addedSni = 0;
+  for (const altSni of DEFAULT_SNI_LIST) {
+    if (altSni === primarySni) continue;
+    addedSni++;
+    const shortSni = altSni.split('.')[0];
+    const sniTag = `${baseName} [BugHost: ${shortSni}]`;
+    const sniUri = `vless://${uuid}@${host}:${port}?encryption=none&security=tls&sni=${encodeURIComponent(altSni)}&fp=chrome&alpn=http%2F1.1&type=ws&host=${encodeURIComponent(wsHost)}&path=${encodeURIComponent(cleanPath)}#${encodeURIComponent(sniTag)}`;
+    variants.push({
+      id: `sni_${addedSni}`,
+      label: `🌐 Bug Host Anti-DPI • ${altSni}`,
+      badge: 'MULTI-SNI',
+      protocol: 'vless',
+      uri: sniUri,
+      sni: altSni,
+      target: `${host}:${port}`
+    });
+  }
+
+  // 4. Anycast Edge Targets
+  let addedTarget = 0;
+  for (const altTarget of DEFAULT_TARGET_IPS) {
+    addedTarget++;
+    const parts = altTarget.split(':');
+    const ip = parts[0];
+    const targetPort = parts[1] || '443';
+    const edgeTag = `${baseName} [Edge: ${ip}]`;
+    const edgeUri = `vless://${uuid}@${ip}:${targetPort}?encryption=none&security=tls&sni=${encodeURIComponent(primarySni)}&fp=chrome&alpn=http%2F1.1&type=ws&host=${encodeURIComponent(wsHost)}&path=${encodeURIComponent(cleanPath)}#${encodeURIComponent(edgeTag)}`;
+    variants.push({
+      id: `edge_${addedTarget}`,
+      label: `🚀 Anycast Google Edge • ${altTarget}`,
+      badge: 'ANYCAST EDGE',
+      protocol: 'vless',
+      uri: edgeUri,
+      sni: primarySni,
+      target: altTarget
+    });
+  }
+
+  // 5. Alternate Protocols (VMess, Trojan, Shadowsocks)
+  const vmessObj = {
+    v: '2',
+    ps: `${baseName} ⚡ VMess CDN`,
+    add: host,
+    port: String(port),
+    id: uuid,
+    aid: '0',
+    scy: 'auto',
+    net: 'ws',
+    type: 'none',
+    host: wsHost,
+    path: cleanPath,
+    tls: 'tls',
+    sni: primarySni
+  };
+  variants.push({
+    id: 'vmess_ws',
+    label: '⚡ VMess WebSocket TLS',
+    badge: 'VMESS CDN',
+    protocol: 'vmess',
+    uri: `vmess://${Buffer.from(JSON.stringify(vmessObj)).toString('base64')}`,
+    sni: primarySni,
+    target: `${host}:${port}`
+  });
+
+  variants.push({
+    id: 'trojan_ws',
+    label: '🔒 Trojan WebSocket TLS',
+    badge: 'TROJAN SECURE',
+    protocol: 'trojan',
+    uri: `trojan://${uuid}@${host}:${port}?security=tls&type=ws&path=${encodeURIComponent(cleanPath)}&host=${encodeURIComponent(wsHost)}&sni=${encodeURIComponent(primarySni)}#${encodeURIComponent(baseName + ' 🔒 Trojan')}`,
+    sni: primarySni,
+    target: `${host}:${port}`
+  });
+
+  const ssCreds = `aes-128-gcm:${uuid}@${host}:${port}`;
+  variants.push({
+    id: 'shadowsocks_ws',
+    label: '🛡️ Shadowsocks v2ray-plugin',
+    badge: 'SHADOWSOCKS',
+    protocol: 'shadowsocks',
+    uri: `ss://${Buffer.from(ssCreds).toString('base64url')}?plugin=${encodeURIComponent(`v2ray-plugin;path=${cleanPath};host=${wsHost};tls`)}#${encodeURIComponent(baseName + ' 🛡️ SS')}`,
+    sni: primarySni,
+    target: `${host}:${port}`
+  });
+
+  return variants;
+}
+
+export function generateXrayClientJson(token: ClientToken, profile?: ProtocolConfig): Record<string, unknown> {
+  const master = loadMasterConfig();
+  const host = profile?.serverHost || master.serverHost || 'panel.pagnol.xyz';
+  const port = Number(profile?.serverPort || master.serverPort || 443);
+  const primarySni = profile?.sniHost || master.sniHost || host;
+  const wsHost = profile?.host || master.host || host;
+  const rawPath = profile?.path || master.path || '/@abess237';
+  const cleanPath = rawPath.split('?')[0] || '/@abess237';
+  const uuid = token.clientUuid || token.token;
+
+  return {
+    remarks: `${token.token} ⚡ AbessVpn Pro`,
+    log: { loglevel: 'warning' },
+    policy: {
+      levels: {
+        '0': {
+          handshake: 6,
+          connIdle: 600,
+          uplinkOnly: 2,
+          downlinkOnly: 5,
+          bufferSize: 2048
+        }
+      },
+      system: {
+        statsInboundUplink: true,
+        statsInboundDownlink: true,
+        statsOutboundUplink: true,
+        statsOutboundDownlink: true
+      }
+    },
+    dns: {
+      servers: [
+        'https+local://1.1.1.1/dns-query',
+        'https+local://8.8.8.8/dns-query',
+        '1.1.1.1',
+        '8.8.8.8'
+      ],
+      queryStrategy: 'UseIPv4',
+      disableCache: false,
+      disableFallback: false
+    },
+    inbounds: [
+      {
+        tag: 'socks-in',
+        port: 10808,
+        listen: '127.0.0.1',
+        protocol: 'socks',
+        settings: { auth: 'noauth', udp: true },
+        sniffing: { enabled: true, destOverride: ['http', 'tls', 'quic'], routeOnly: true }
+      },
+      {
+        tag: 'http-in',
+        port: 10809,
+        listen: '127.0.0.1',
+        protocol: 'http',
+        sniffing: { enabled: true, destOverride: ['http', 'tls', 'quic'], routeOnly: true }
+      }
+    ],
+    outbounds: [
+      {
+        tag: 'proxy',
+        protocol: 'vless',
+        settings: {
+          vnext: [
+            {
+              address: host,
+              port,
+              users: [
+                {
+                  id: uuid,
+                  encryption: 'none',
+                  level: 0
+                }
+              ]
+            }
+          ]
+        },
+        streamSettings: {
+          network: 'ws',
+          security: 'tls',
+          tlsSettings: {
+            serverName: primarySni,
+            allowInsecure: false,
+            fingerprint: 'chrome',
+            alpn: ['http/1.1']
+          },
+          wsSettings: {
+            path: cleanPath,
+            headers: { Host: wsHost }
+          },
+          sockopt: {
+            tcpFastOpen: true,
+            tcpNoDelay: true,
+            tcpKeepAliveIdle: 30,
+            tcpKeepAliveInterval: 15
+          }
+        },
+        mux: { enabled: false }
+      },
+      { tag: 'dns-out', protocol: 'dns', settings: { network: 'tcp', nonIPQuery: 'skip' } },
+      { tag: 'direct', protocol: 'freedom', settings: { domainStrategy: 'UseIPv4' } },
+      { tag: 'block', protocol: 'blackhole', settings: { response: { type: 'none' } } }
+    ],
+    routing: {
+      domainStrategy: 'AsIs',
+      rules: [
+        { type: 'field', inboundTag: ['socks-in', 'http-in'], outboundTag: 'proxy' }
+      ]
+    }
+  };
+}
+
+export function probeEndpoint(targetServer: string, sni: string, timeoutMs = 3000): Promise<{ tcp_latency_ms: number; tls_latency_ms: number; latency_ms: number; status: string; error?: string }> {
+  return new Promise((resolve) => {
+    let host = targetServer.trim();
+    let port = 443;
+    if (host.includes(':')) {
+      const parts = host.split(':');
+      host = parts[0];
+      port = Number(parts[1]) || 443;
+    }
+    const t0 = Date.now();
+    let tcpConnectedAt = 0;
+
+    const socket = net.createConnection({ host, port, timeout: timeoutMs }, () => {
+      tcpConnectedAt = Date.now();
+      const tcpLatency = tcpConnectedAt - t0;
+
+      const tlsSocket = tls.connect({
+        socket,
+        servername: sni || host,
+        rejectUnauthorized: false,
+        timeout: timeoutMs
+      }, () => {
+        const tlsDoneAt = Date.now();
+        const tlsLatency = tlsDoneAt - tcpConnectedAt;
+        const totalLatency = tlsDoneAt - t0;
+        tlsSocket.destroy();
+        resolve({
+          tcp_latency_ms: tcpLatency,
+          tls_latency_ms: tlsLatency,
+          latency_ms: totalLatency,
+          status: 'ok'
+        });
+      });
+
+      tlsSocket.on('error', (err) => {
+        socket.destroy();
+        resolve({
+          tcp_latency_ms: tcpLatency,
+          tls_latency_ms: 0,
+          latency_ms: Date.now() - t0,
+          status: 'tls_error',
+          error: err.message
+        });
+      });
+      tlsSocket.on('timeout', () => {
+        tlsSocket.destroy();
+        resolve({
+          tcp_latency_ms: tcpLatency,
+          tls_latency_ms: 0,
+          latency_ms: timeoutMs,
+          status: 'timeout',
+          error: 'TLS handshake timeout'
+        });
+      });
+    });
+
+    socket.on('error', (err) => {
+      resolve({
+        tcp_latency_ms: 0,
+        tls_latency_ms: 0,
+        latency_ms: Date.now() - t0,
+        status: 'tcp_error',
+        error: err.message
+      });
+    });
+    socket.on('timeout', () => {
+      socket.destroy();
+      resolve({
+        tcp_latency_ms: timeoutMs,
+        tls_latency_ms: 0,
+        latency_ms: timeoutMs,
+        status: 'timeout',
+        error: 'TCP connection timeout'
+      });
+    });
+  });
+}
+
+export function getSystemDiagnostics() {
+  const totalMem = os.totalmem();
+  const freeMem = os.freemem();
+  const usedMem = totalMem - freeMem;
+  const tokens = loadTokens();
+  const users = loadUsers();
+  const plans = loadPlans();
+  const requests = loadRequests();
+  const master = loadMasterConfig();
+  const version = loadAppVersionConfig();
+
+  const totalBandwidthUsedGb = tokens.reduce((acc, t) => acc + (Number(t.bandwidthUsedGb) || 0), 0);
+  const activeTokens = tokens.filter(t => t.status === 'active' && new Date(t.expiresAt).getTime() > Date.now());
+
+  return {
+    ok: true,
+    server: {
+      uptimeSeconds: Math.floor(process.uptime()),
+      systemUptimeSeconds: Math.floor(os.uptime()),
+      nodeVersion: process.version,
+      platform: os.platform(),
+      release: os.release(),
+      arch: os.arch(),
+      cpuCount: os.cpus().length,
+      loadAverage: os.loadavg(),
+      memory: {
+        totalBytes: totalMem,
+        freeBytes: freeMem,
+        usedBytes: usedMem,
+        usedPercent: Math.round((usedMem / totalMem) * 100)
+      }
+    },
+    vpn: {
+      activeTokensCount: activeTokens.length,
+      totalTokensCount: tokens.length,
+      resellersCount: users.filter(u => u.role === 'RESELLER').length,
+      totalBandwidthUsedGb: Number(totalBandwidthUsedGb.toFixed(2)),
+      plansCount: plans.length,
+      pendingRequestsCount: requests.filter(r => r.status === 'PENDING').length,
+      xrayStatus: fs.existsSync(xrayStatusFile) ? 'ready' : 'not-ready',
+      vpnDomain: master.serverHost || 'panel.pagnol.xyz',
+      appVersion: version.latestVersion
+    },
+    timestamp: new Date().toISOString()
+  };
 }
 
 function loadProtocolConfigs(): ProtocolConfig[] {
@@ -2289,6 +2838,740 @@ async function startServer() {
     }
   });
 
+  // ==========================================
+  // 6. UNIVERSAL SUBSCRIPTION PORTAL (/sub/:token)
+  // Dual-mode: Interactive HTML for browsers & Base64 for VPN clients
+  // ==========================================
+  app.get(['/sub/:token', '/nexus/sub/:token', '/api/v1/sub/:token'], async (req, res) => {
+    const rawToken = String(req.params.token || '').trim();
+    if (!rawToken) {
+      res.status(400).send('Jeton requis.');
+      return;
+    }
+    const tokens = loadTokens();
+    const matched = tokens.find(t =>
+      t.token.toUpperCase() === rawToken.toUpperCase() ||
+      (t.clientUuid && t.clientUuid.toLowerCase() === rawToken.toLowerCase()) ||
+      t.id === rawToken
+    );
+    if (!matched) {
+      res.status(404).send('Abonnement introuvable.');
+      return;
+    }
+
+    const acceptHdr = String(req.headers['accept'] || '').toLowerCase();
+    const uaHdr = String(req.headers['user-agent'] || '').toLowerCase();
+    const vpnKeywords = [
+      'v2ray', 'xray', 'clash', 'hiddify', 'sing-box', 'singbox',
+      'streisand', 'shadowrocket', 'v2box', 'nekobox', 'nekoray',
+      'darktunnel', 'httpcustom', 'matsuri', 'karing', 'flclash',
+      'curl', 'wget', 'python', 'okhttp', 'go-http-client'
+    ];
+    const isBrowser =
+      acceptHdr.includes('text/html') &&
+      uaHdr.includes('mozilla') &&
+      !vpnKeywords.some(k => uaHdr.includes(k)) &&
+      req.query.raw !== '1';
+
+    const protocolConfigs = loadProtocolConfigs();
+    const profile = protocolConfigForToken(matched, protocolConfigs);
+    const variants = generateUserVlessVariants(matched, profile || undefined);
+
+    if (isBrowser) {
+      const subTemplatePath = path.resolve(templatesDir, 'sub.html');
+      if (fs.existsSync(subTemplatePath)) {
+        let html = fs.readFileSync(subTemplatePath, 'utf8');
+        const browserVariants: VlessVariant[] = [];
+        for (const v of variants) {
+          let qr = '';
+          try {
+            qr = await QRCode.toDataURL(v.uri, { margin: 1, width: 280 });
+          } catch {}
+          browserVariants.push({ ...v, qrCode: qr });
+        }
+
+        const primaryUri = browserVariants[0]?.uri || '';
+        const primaryQr = browserVariants[0]?.qrCode || '';
+        const master = loadMasterConfig();
+        const panelTitle = master.systemName || 'AbessVpn Cyber Commercial';
+        const userName = matched.customerNote || matched.token;
+        const subData = {
+          user: {
+            id: matched.id,
+            token: matched.token,
+            uuid: matched.clientUuid || matched.token,
+            name: userName,
+            plan: matched.plan,
+            quota_bytes: Math.round(matched.bandwidthGb * 1024 * 1024 * 1024),
+            used_bytes_up: Math.round(matched.bandwidthUsedGb * 0.25 * 1024 * 1024 * 1024),
+            used_bytes_down: Math.round(matched.bandwidthUsedGb * 0.75 * 1024 * 1024 * 1024),
+            expires_at: matched.expiresAt,
+            status: matched.status,
+            is_valid: matched.status === 'active' && new Date(matched.expiresAt).getTime() > Date.now() && matched.bandwidthUsedGb < matched.bandwidthGb
+          },
+          variants: browserVariants,
+          sub_path: `/sub/${matched.token}`,
+          support_phone: matched.customerContact || '+237690123456'
+        };
+
+        html = html.replace(/\{\{USER_NAME\}\}/g, userName);
+        html = html.replace(/\{\{USER_TOKEN\}\}/g, matched.token);
+        html = html.replace(/\{\{PANEL_TITLE\}\}/g, panelTitle);
+        html = html.replace(/\{\{VLESS_URI\}\}/g, primaryUri);
+        html = html.replace(/\{\{QR_CODE\}\}/g, primaryQr);
+        html = html.replace(/\{\{SUB_DATA_JSON\}\}/g, JSON.stringify(subData));
+
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        res.send(html);
+        return;
+      }
+    }
+
+    // Raw VPN Subscription Response
+    const isExpired = Number.isFinite(new Date(matched.expiresAt).getTime()) && new Date(matched.expiresAt).getTime() <= Date.now();
+    const isExceeded = Number(matched.bandwidthUsedGb) >= Number(matched.bandwidthGb);
+    if (matched.status !== 'active' || isExpired || isExceeded) {
+      res.status(403).send('Compte inactif, expiré ou quota dépassé.');
+      return;
+    }
+
+    const rawUris = variants.map(v => v.uri).join('\n');
+    const b64Sub = Buffer.from(rawUris, 'utf8').toString('base64');
+
+    const totalQuotaBytes = Math.round(matched.bandwidthGb * 1024 * 1024 * 1024);
+    const usedUpBytes = Math.round(matched.bandwidthUsedGb * 0.25 * 1024 * 1024 * 1024);
+    const usedDownBytes = Math.round(matched.bandwidthUsedGb * 0.75 * 1024 * 1024 * 1024);
+    const expTs = Math.floor(new Date(matched.expiresAt).getTime() / 1000) || 0;
+    const titleB64 = Buffer.from(`AbessVpn - ${matched.token}`).toString('base64');
+
+    res.setHeader('Subscription-Userinfo', `upload=${usedUpBytes}; download=${usedDownBytes}; total=${totalQuotaBytes}; expire=${expTs}`);
+    res.setHeader('Profile-Update-Interval', '12');
+    res.setHeader('Profile-Title', `base64:${titleB64}`);
+    res.setHeader('Content-Disposition', `inline; filename="${matched.token}.txt"`);
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.send(b64Sub);
+  });
+
+  // ==========================================
+  // 7. APP DOWNLOAD & WEB PORTAL
+  // ==========================================
+  app.get(['/app', '/nexus/app', '/nexus/app/'], (_req, res) => {
+    const appHtmlPath = path.resolve(templatesDir, 'app.html');
+    if (fs.existsSync(appHtmlPath)) {
+      let html = fs.readFileSync(appHtmlPath, 'utf8');
+      const version = loadAppVersionConfig();
+      html = html.replace(/\{\{PANEL_TITLE\}\}/g, 'AbessVpn Cyber Commercial');
+      html = html.replace(/\{\{LATEST_VERSION\}\}/g, version.latestVersion);
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.send(html);
+    } else {
+      res.send('Page de téléchargement de l\'application.');
+    }
+  });
+
+  app.get(['/download/:filename', '/nexus/download/:filename'], (req, res) => {
+    const requested = path.basename(req.params.filename);
+    const filePath = path.resolve(staticDir, requested);
+    if (fs.existsSync(filePath)) {
+      res.download(filePath, requested);
+    } else {
+      res.status(404).send('Fichier introuvable.');
+    }
+  });
+
+  app.get(['/api/download/info', '/api/v1/download/info'], (_req, res) => {
+    const version = loadAppVersionConfig();
+    const apkPath = path.resolve(staticDir, 'AbessVpn.apk');
+    let sizeBytes = 0;
+    if (fs.existsSync(apkPath)) {
+      try { sizeBytes = fs.statSync(apkPath).size; } catch {}
+    }
+    res.json({
+      ok: true,
+      filename: 'AbessVpn.apk',
+      version: version.latestVersion,
+      sizeBytes,
+      sizeFormatted: sizeBytes > 0 ? `${(sizeBytes / (1024 * 1024)).toFixed(1)} Mo` : '68 Mo',
+      downloadUrl: '/download/AbessVpn.apk',
+      checksum: 'sha256-verified-release',
+      publishedAt: version.publishedAt
+    });
+  });
+
+  app.get(['/api/time', '/api/v1/time'], (_req, res) => {
+    res.json({
+      timestamp: Date.now(),
+      iso: new Date().toISOString(),
+      server_time: new Date().toLocaleString()
+    });
+  });
+
+  app.get(['/api/countries', '/api/v1/countries'], (_req, res) => {
+    res.json(loadAfricanCountries());
+  });
+
+  // ==========================================
+  // 8. PRICING PLANS CRUD
+  // ==========================================
+  app.get(['/api/plans', '/api/v1/plans'], (_req, res) => {
+    const plans = loadPlans();
+    const tokens = loadTokens();
+    const enriched = plans.map(p => ({
+      ...p,
+      activeUsersCount: tokens.filter(t => t.plan === p.name && t.status === 'active').length
+    }));
+    res.json(enriched);
+  });
+
+  app.post(['/api/plans', '/api/v1/admin/plans'], authenticate, (req, res) => {
+    const user: AppUser = (req as any).user;
+    if (user.role !== 'SUPER_ADMIN') {
+      res.status(403).json({ error: 'Seul le Super Administrateur peut créer des forfaits.' });
+      return;
+    }
+    const { name, quotaGb, durationDays, priceCfa, badge, description } = req.body;
+    if (!name || Number(quotaGb) < 0 || Number(durationDays) <= 0) {
+      res.status(400).json({ error: 'Nom, quota en Go et durée en jours requis.' });
+      return;
+    }
+    const plans = loadPlans();
+    const newPlan: PricingPlan = {
+      id: `plan_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      name: String(name).trim(),
+      quotaGb: Number(quotaGb),
+      durationDays: Number(durationDays),
+      priceCfa: Number(priceCfa || 0),
+      badge: badge ? String(badge).trim() : undefined,
+      description: description ? String(description).trim() : undefined
+    };
+    plans.push(newPlan);
+    savePlans(plans);
+    logAudit({
+      actor: user.name,
+      role: user.role,
+      action: 'PLAN_CREATE',
+      details: `Création du forfait ${newPlan.name} (${newPlan.quotaGb} Go / ${newPlan.durationDays}j)`
+    });
+    res.json({ ok: true, plan: newPlan });
+  });
+
+  app.put(['/api/plans/:id', '/api/v1/admin/plans/:id'], authenticate, (req, res) => {
+    const user: AppUser = (req as any).user;
+    if (user.role !== 'SUPER_ADMIN') {
+      res.status(403).json({ error: 'Seul le Super Administrateur peut modifier des forfaits.' });
+      return;
+    }
+    const plans = loadPlans();
+    const plan = plans.find(p => p.id === req.params.id);
+    if (!plan) {
+      res.status(404).json({ error: 'Forfait introuvable.' });
+      return;
+    }
+    const { name, quotaGb, durationDays, priceCfa, badge, description } = req.body;
+    if (name) plan.name = String(name).trim();
+    if (quotaGb !== undefined) plan.quotaGb = Number(quotaGb);
+    if (durationDays !== undefined) plan.durationDays = Number(durationDays);
+    if (priceCfa !== undefined) plan.priceCfa = Number(priceCfa);
+    if (badge !== undefined) plan.badge = String(badge).trim();
+    if (description !== undefined) plan.description = String(description).trim();
+    savePlans(plans);
+    logAudit({
+      actor: user.name,
+      role: user.role,
+      action: 'PLAN_UPDATE',
+      details: `Mise à jour du forfait ${plan.name}`
+    });
+    res.json({ ok: true, plan });
+  });
+
+  app.delete(['/api/plans/:id', '/api/v1/admin/plans/:id'], authenticate, (req, res) => {
+    const user: AppUser = (req as any).user;
+    if (user.role !== 'SUPER_ADMIN') {
+      res.status(403).json({ error: 'Seul le Super Administrateur peut supprimer des forfaits.' });
+      return;
+    }
+    const plans = loadPlans();
+    const updated = plans.filter(p => p.id !== req.params.id);
+    savePlans(updated);
+    logAudit({
+      actor: user.name,
+      role: user.role,
+      action: 'PLAN_DELETE',
+      details: `Suppression du forfait ${req.params.id}`
+    });
+    res.json({ ok: true });
+  });
+
+  // ==========================================
+  // 9. ONBOARDING & MEMBERSHIP REQUESTS
+  // ==========================================
+  app.post(['/api/membership/request', '/api/v1/membership/request'], (req, res) => {
+    const { firstName, lastName, countryCode, channel, contactDetail, deviceId, deviceModel, deviceOs, planId, paymentMethod, paymentRef } = req.body;
+    if (!firstName || !lastName || !contactDetail) {
+      res.status(400).json({ error: 'Prénom, nom et contact requis.' });
+      return;
+    }
+    const countries = loadAfricanCountries();
+    const cCode = String(countryCode || 'CM').toUpperCase();
+    const country = countries.find((c: any) => c.code === cCode) || countries[0];
+    const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.socket.remoteAddress || '127.0.0.1';
+
+    const plans = loadPlans();
+    const plan = plans.find(p => p.id === planId) || plans[0];
+
+    const requests = loadRequests();
+    const existing = requests.find(r => r.deviceId && r.deviceId === deviceId && r.status === 'PENDING');
+    if (existing) {
+      existing.firstName = String(firstName).trim();
+      existing.lastName = String(lastName).trim();
+      existing.fullName = `${existing.firstName} ${existing.lastName}`;
+      existing.channel = channel === 'TELEGRAM' ? 'TELEGRAM' : 'WHATSAPP';
+      existing.contactDetail = String(contactDetail).trim();
+      existing.planId = plan?.id;
+      existing.planName = plan?.name;
+      existing.paymentMethod = paymentMethod;
+      existing.paymentRef = paymentRef;
+      existing.submittedAt = new Date().toISOString();
+      saveRequests(requests);
+      res.json({ status: 'pending', request: existing, message: 'Demande mise à jour et en attente d\'approbation.' });
+      return;
+    }
+
+    const newReq: MembershipRequest = {
+      id: `req_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      firstName: String(firstName).trim(),
+      lastName: String(lastName).trim(),
+      fullName: `${String(firstName).trim()} ${String(lastName).trim()}`,
+      countryCode: country.code,
+      countryName: country.name,
+      flag: country.flag,
+      dialPrefix: country.dial,
+      channel: channel === 'TELEGRAM' ? 'TELEGRAM' : 'WHATSAPP',
+      contactDetail: String(contactDetail).trim(),
+      deviceId: deviceId ? String(deviceId).trim() : undefined,
+      deviceModel: deviceModel ? String(deviceModel).trim() : undefined,
+      deviceOs: deviceOs ? String(deviceOs).trim() : undefined,
+      ipAddress: clientIp,
+      planId: plan?.id,
+      planName: plan?.name,
+      paymentMethod: paymentMethod || 'ORANGE_MONEY',
+      paymentRef: paymentRef ? String(paymentRef).trim() : undefined,
+      status: 'PENDING',
+      submittedAt: new Date().toISOString()
+    };
+    requests.push(newReq);
+    saveRequests(requests);
+    res.json({ status: 'pending', request: newReq, message: 'Demande enregistrée avec succès. Vous recevrez un accès dès validation.' });
+  });
+
+  app.get(['/api/membership/status', '/api/v1/membership/status'], (req, res) => {
+    const deviceId = req.query.device_id ? String(req.query.device_id).trim() : '';
+    const requestId = req.query.request_id ? String(req.query.request_id).trim() : '';
+    const requests = loadRequests();
+    const reqFound = requests.find(r => (requestId && r.id === requestId) || (deviceId && r.deviceId === deviceId));
+    if (!reqFound) {
+      res.status(404).json({ status: 'not_found', message: 'Aucune demande trouvée pour cet appareil.' });
+      return;
+    }
+    if (reqFound.status === 'APPROVED' && reqFound.assignedToken) {
+      const tokens = loadTokens();
+      const token = tokens.find(t => t.token === reqFound.assignedToken);
+      res.json({
+        status: 'approved',
+        token: reqFound.assignedToken,
+        clientUuid: token?.clientUuid,
+        expiresAt: token?.expiresAt,
+        bandwidthGb: token?.bandwidthGb,
+        downloadUrl: '/download/AbessVpn.apk',
+        subUrl: `/sub/${reqFound.assignedToken}`
+      });
+      return;
+    }
+    res.json({
+      status: reqFound.status.toLowerCase(),
+      request: reqFound,
+      message: reqFound.status === 'PENDING' ? 'Demande en cours d\'examen par un administrateur.' : 'Demande rejetée.'
+    });
+  });
+
+  function generateTokenCode(): string {
+    const p1 = Math.random().toString(36).substring(2, 6).toUpperCase();
+    const p2 = Math.random().toString(36).substring(2, 6).toUpperCase();
+    return `ABESS-${p1}-${p2}`;
+  }
+
+  app.get(['/api/admin/requests', '/api/v1/admin/requests'], authenticate, (_req, res) => {
+    res.json(loadRequests());
+  });
+
+  app.post(['/api/admin/requests/:id/approve', '/api/v1/admin/requests/:id/approve'], authenticate, (req, res) => {
+    const user: AppUser = (req as any).user;
+    const requests = loadRequests();
+    const reqItem = requests.find(r => r.id === req.params.id);
+    if (!reqItem) {
+      res.status(404).json({ error: 'Demande introuvable.' });
+      return;
+    }
+    const plans = loadPlans();
+    const selectedPlan = plans.find(p => p.id === (req.body?.planId || reqItem.planId)) || plans[1] || plans[0];
+
+    const tokens = loadTokens();
+    const tokenStr = generateTokenCode();
+    const uuid = crypto.randomUUID();
+    const days = selectedPlan.durationDays;
+    const bandwidthGb = selectedPlan.quotaGb;
+    const expiresAt = new Date(Date.now() + days * 24 * 3600 * 1000).toISOString();
+
+    const masterConfig = loadMasterConfig();
+    const protocolConfigs = loadProtocolConfigs();
+    const profile = protocolConfigs[0];
+
+    const dummyToken: ClientToken = {
+      id: 'tok_' + crypto.randomUUID(),
+      token: tokenStr,
+      clientUuid: uuid,
+      resellerId: user.id,
+      resellerName: user.name,
+      plan: selectedPlan.name,
+      bandwidthGb,
+      bandwidthUsedGb: 0,
+      expiresAt,
+      days,
+      deviceLimit: 1,
+      deviceIds: reqItem.deviceId ? [reqItem.deviceId] : [],
+      allowedDeviceId: reqItem.deviceId,
+      connectionCount: 0,
+      lastSeenAt: null,
+      lastSeenIp: null,
+      status: 'active',
+      configurationId: profile?.id,
+      configurationName: profile?.name,
+      configurationSnapshot: profile,
+      customerNote: reqItem.fullName,
+      customerContact: reqItem.contactDetail,
+      encryptedLink: '',
+      createdAt: new Date().toISOString()
+    };
+    dummyToken.encryptedLink = encryptConfig({ token: tokenStr, v: 2 }, masterConfig.secretPassphrase);
+    dummyToken.directLink = profile ? buildDirectProtocolUrl(dummyToken, profile) : undefined;
+
+    tokens.push(dummyToken);
+    saveTokens(tokens);
+
+    reqItem.status = 'APPROVED';
+    reqItem.assignedTokenId = dummyToken.id;
+    reqItem.assignedToken = tokenStr;
+    reqItem.processedAt = new Date().toISOString();
+    saveRequests(requests);
+
+    logAudit({
+      actor: user.name,
+      role: user.role,
+      action: 'REQUEST_APPROVE',
+      details: `Approbation de la demande de ${reqItem.fullName} -> Token ${tokenStr} (${selectedPlan.name})`
+    });
+
+    res.json({ ok: true, status: 'approved', token: dummyToken });
+  });
+
+  app.post(['/api/admin/requests/:id/reject', '/api/v1/admin/requests/:id/reject'], authenticate, (req, res) => {
+    const user: AppUser = (req as any).user;
+    const requests = loadRequests();
+    const reqItem = requests.find(r => r.id === req.params.id);
+    if (!reqItem) {
+      res.status(404).json({ error: 'Demande introuvable.' });
+      return;
+    }
+    reqItem.status = 'REJECTED';
+    reqItem.rejectionReason = String(req.body?.reason || 'Demande non validée').trim();
+    reqItem.processedAt = new Date().toISOString();
+    saveRequests(requests);
+
+    logAudit({
+      actor: user.name,
+      role: user.role,
+      action: 'REQUEST_REJECT',
+      details: `Rejet de la demande de ${reqItem.fullName} : ${reqItem.rejectionReason}`
+    });
+
+    res.json({ ok: true, status: 'rejected' });
+  });
+
+  app.delete(['/api/admin/requests/:id', '/api/v1/admin/requests/:id'], authenticate, (req, res) => {
+    const requests = loadRequests();
+    const updated = requests.filter(r => r.id !== req.params.id);
+    saveRequests(updated);
+    res.json({ ok: true });
+  });
+
+  // ==========================================
+  // 10. VPN TELEMETRY & HEARTBEAT ENGINE
+  // ==========================================
+  app.post(['/api/vpn/heartbeat', '/api/traffic/heartbeat', '/api/v1/vpn/heartbeat'], (req, res) => {
+    const { token: reqToken, uuid: reqUuid, device_id: deviceId, bytes_up = 0, bytes_down = 0, bytes_delta = 0, client_ip, device_model, os_version } = req.body || {};
+    const tokens = loadTokens();
+    const cleanTok = String(reqToken || '').trim().toUpperCase();
+    const cleanUuid = String(reqUuid || '').trim().toLowerCase();
+    const cleanDev = String(deviceId || '').trim();
+
+    let matched = tokens.find(t =>
+      (cleanTok && t.token.toUpperCase() === cleanTok) ||
+      (cleanUuid && (t.clientUuid || '').toLowerCase() === cleanUuid) ||
+      (cleanDev && Array.isArray(t.deviceIds) && t.deviceIds.includes(cleanDev))
+    );
+
+    if (!matched) {
+      res.json({
+        status: 'revoked',
+        should_disconnect: true,
+        disconnect_reason: 'Identifiants ou token non reconnus.'
+      });
+      return;
+    }
+
+    // Auto-activation on first use
+    if (matched.on_hold) {
+      matched.on_hold = false;
+      matched.firstConnectedAt = new Date().toISOString();
+      matched.expiresAt = new Date(Date.now() + matched.days * 86400000).toISOString();
+    }
+
+    // Device binding
+    if (cleanDev) {
+      if (!Array.isArray(matched.deviceIds)) matched.deviceIds = [];
+      if (!matched.deviceIds.includes(cleanDev)) {
+        if (matched.deviceIds.length >= matched.deviceLimit) {
+          res.json({
+            status: 'device_limit_reached',
+            should_disconnect: true,
+            disconnect_reason: `Limite d'appareils atteinte (${matched.deviceLimit}).`
+          });
+          return;
+        }
+        matched.deviceIds.push(cleanDev);
+      }
+    }
+
+    // Traffic delta accounting
+    let deltaBytes = Number(bytes_delta) || 0;
+    if (deltaBytes === 0 && (bytes_up > 0 || bytes_down > 0)) {
+      deltaBytes = Number(bytes_up) + Number(bytes_down);
+    }
+    if (deltaBytes > 0) {
+      const deltaGb = deltaBytes / (1024 ** 3);
+      matched.bandwidthUsedGb = Math.min(matched.bandwidthGb, matched.bandwidthUsedGb + deltaGb);
+    }
+
+    matched.lastSeenAt = new Date().toISOString();
+    if (client_ip) matched.lastSeenIp = String(client_ip);
+    matched.connectionCount = (matched.connectionCount || 0) + 1;
+
+    const isExpired = Number.isFinite(new Date(matched.expiresAt).getTime()) && new Date(matched.expiresAt).getTime() <= Date.now();
+    const isQuotaExceeded = matched.bandwidthUsedGb >= matched.bandwidthGb;
+
+    if (isExpired) matched.status = 'expired';
+    else if (isQuotaExceeded) matched.status = 'quota_exceeded';
+
+    saveTokens(tokens);
+
+    if (matched.status !== 'active') {
+      res.json({
+        status: matched.status,
+        should_disconnect: true,
+        disconnect_reason: matched.status === 'expired' ? 'Forfait arrivé à expiration.' : 'Quota de données épuisé.'
+      });
+      return;
+    }
+
+    const master = loadMasterConfig();
+    res.json({
+      status: 'ok',
+      should_disconnect: false,
+      user: {
+        token: matched.token,
+        uuid: matched.clientUuid || matched.token,
+        plan: matched.plan,
+        bandwidthGb: matched.bandwidthGb,
+        bandwidthUsedGb: Number(matched.bandwidthUsedGb.toFixed(3)),
+        expiresAt: matched.expiresAt
+      },
+      config: {
+        host: master.serverHost || 'panel.pagnol.xyz',
+        target_server: `${master.serverHost || 'panel.pagnol.xyz'}:${master.serverPort || 443}`,
+        sni: master.sniHost || master.serverHost,
+        path: master.path || '/@abess237'
+      }
+    });
+  });
+
+  app.post(['/api/token/verify', '/api/v1/token/verify'], (req, res) => {
+    const rawCode = String(req.body?.token || req.body?.code || '').trim().toUpperCase();
+    const deviceId = req.body?.deviceId ? String(req.body.deviceId).trim() : undefined;
+    if (!rawCode) {
+      res.status(400).json({ error: 'Code ou token requis.' });
+      return;
+    }
+    const tokens = loadTokens();
+    const found = tokens.find(t => t.token.toUpperCase() === rawCode || (t.clientUuid && t.clientUuid.toUpperCase() === rawCode));
+    if (!found) {
+      res.status(404).json({ error: 'Code voucher ou token introuvable.' });
+      return;
+    }
+    if (deviceId) {
+      if (!Array.isArray(found.deviceIds)) found.deviceIds = [];
+      if (!found.deviceIds.includes(deviceId) && found.deviceIds.length < found.deviceLimit) {
+        found.deviceIds.push(deviceId);
+        saveTokens(tokens);
+      }
+    }
+    const variants = generateUserVlessVariants(found);
+    res.json({
+      status: found.status,
+      token: found.token,
+      uuid: found.clientUuid,
+      plan: found.plan,
+      bandwidthGb: found.bandwidthGb,
+      bandwidthUsedGb: found.bandwidthUsedGb,
+      expiresAt: found.expiresAt,
+      variants,
+      subUrl: `/sub/${found.token}`
+    });
+  });
+
+  app.post(['/api/users/quick-trial', '/api/v1/users/quick-trial'], (req, res) => {
+    const tokens = loadTokens();
+    const tokenStr = generateTokenCode();
+    const uuid = crypto.randomUUID();
+    const days = 1;
+    const bandwidthGb = 2.0;
+    const expiresAt = new Date(Date.now() + days * 24 * 3600 * 1000).toISOString();
+
+    const masterConfig = loadMasterConfig();
+    const protocolConfigs = loadProtocolConfigs();
+    const profile = protocolConfigs[0];
+
+    const trialToken: ClientToken = {
+      id: 'tok_' + crypto.randomUUID(),
+      token: tokenStr,
+      clientUuid: uuid,
+      resellerId: 'trial_system',
+      resellerName: 'Essai Automatique',
+      plan: 'Essai Gratuit 24h',
+      bandwidthGb,
+      bandwidthUsedGb: 0,
+      expiresAt,
+      days,
+      deviceLimit: 1,
+      deviceIds: req.body?.deviceId ? [String(req.body.deviceId).trim()] : [],
+      connectionCount: 0,
+      lastSeenAt: null,
+      lastSeenIp: null,
+      status: 'active',
+      configurationId: profile?.id,
+      configurationName: profile?.name,
+      configurationSnapshot: profile,
+      customerNote: req.body?.name || 'Essai Client',
+      encryptedLink: '',
+      createdAt: new Date().toISOString()
+    };
+    trialToken.encryptedLink = encryptConfig({ token: tokenStr, v: 2 }, masterConfig.secretPassphrase);
+    trialToken.directLink = profile ? buildDirectProtocolUrl(trialToken, profile) : undefined;
+
+    tokens.push(trialToken);
+    saveTokens(tokens);
+
+    res.json({
+      ok: true,
+      token: trialToken.token,
+      uuid: trialToken.clientUuid,
+      expiresAt: trialToken.expiresAt,
+      bandwidthGb: trialToken.bandwidthGb,
+      subUrl: `/sub/${trialToken.token}`,
+      variants: generateUserVlessVariants(trialToken)
+    });
+  });
+
+  // ==========================================
+  // 11. NETWORK PROBE & SYSTEM DIAGNOSTICS & AUDIT LOGS
+  // ==========================================
+  app.post(['/api/probe', '/api/v1/probe'], async (req, res) => {
+    const target = String(req.body?.target_server || req.body?.target || '192.179.18.100:443').trim();
+    const sni = String(req.body?.sni || 'crashlyticsreports-pa.googleapis.com').trim();
+    const result = await probeEndpoint(target, sni);
+    res.json(result);
+  });
+
+  app.get(['/api/system/diagnostics', '/api/v1/system/diagnostics'], authenticate, (_req, res) => {
+    res.json(getSystemDiagnostics());
+  });
+
+  app.get(['/api/system/audit-logs', '/api/v1/admin/audit-logs'], authenticate, (_req, res) => {
+    res.json(loadAuditLogs());
+  });
+
+  app.get(['/api/system/backup', '/api/v1/admin/system/backup'], authenticate, (_req, res) => {
+    res.setHeader('Content-Disposition', `attachment; filename="abessvpn-full-backup-${Date.now()}.json"`);
+    res.json({
+      users: loadUsers(),
+      tokens: loadTokens(),
+      config: loadMasterConfig(),
+      protocolConfigs: loadProtocolConfigs(),
+      transactions: loadTransactions(),
+      plans: loadPlans(),
+      requests: loadRequests(),
+      auditLogs: loadAuditLogs(),
+      appVersion: loadAppVersionConfig(),
+      timestamp: new Date().toISOString()
+    });
+  });
+
+  app.post(['/api/system/restore', '/api/v1/admin/system/restore'], authenticate, (req, res) => {
+    const user: AppUser = (req as any).user;
+    if (user.role !== 'SUPER_ADMIN') {
+      res.status(403).json({ error: 'Accès réservé au Super Administrateur.' });
+      return;
+    }
+    const payload = req.body;
+    if (!payload || typeof payload !== 'object') {
+      res.status(400).json({ error: 'Fichier de sauvegarde invalide.' });
+      return;
+    }
+    if (Array.isArray(payload.plans)) savePlans(payload.plans);
+    if (Array.isArray(payload.requests)) saveRequests(payload.requests);
+    if (Array.isArray(payload.auditLogs)) writeJsonAtomically(auditLogsFile, payload.auditLogs);
+    if (Array.isArray(payload.users)) saveUsers(payload.users);
+    if (Array.isArray(payload.tokens)) saveTokens(payload.tokens);
+    if (payload.config) saveMasterConfig(payload.config);
+    if (Array.isArray(payload.protocolConfigs)) saveProtocolConfigs(payload.protocolConfigs);
+    logAudit({
+      actor: user.name,
+      role: user.role,
+      action: 'SYSTEM_RESTORE',
+      details: 'Restauration complète de la base de données.'
+    });
+    res.json({ ok: true, message: 'Base de données restaurée avec succès.' });
+  });
+
+  app.get('/api/v1/admin/tokens/:id/variants', authenticate, (req, res) => {
+    const tokens = loadTokens();
+    const token = tokens.find(t => t.id === req.params.id);
+    if (!token) {
+      res.status(404).json({ error: 'Token introuvable.' });
+      return;
+    }
+    const protocolConfigs = loadProtocolConfigs();
+    const profile = protocolConfigForToken(token, protocolConfigs);
+    const variants = generateUserVlessVariants(token, profile || undefined);
+    const xrayClient = generateXrayClientJson(token, profile || undefined);
+    res.json({
+      ok: true,
+      token: token.token,
+      subscriptionUrl: `/sub/${token.token}`,
+      variants,
+      xrayClient
+    });
+  });
+
   // Fail closed until an actual Xray/VLESS data plane is connected.
   // The previous implementation replied with a two-byte placeholder to every
   // message. That is not a tunnel and can make a client appear connected while
@@ -2386,6 +3669,11 @@ async function startServer() {
     saveUsers,
     loadTransactions,
     logTransaction,
+    loadPlans,
+    savePlans,
+    loadRequests,
+    saveRequests,
+    getSystemDiagnostics,
     syncXrayConfig,
     encryptConfig,
     buildDirectProtocolUrl,

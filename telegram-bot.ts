@@ -16,7 +16,9 @@ import type {
   ProtocolConfig,
   TransactionLog,
   AppVersionConfig,
-  ServerUpdateStatus
+  ServerUpdateStatus,
+  PricingPlan,
+  MembershipRequest
 } from './server.js';
 
 export interface TelegramBotContext {
@@ -33,6 +35,11 @@ export interface TelegramBotContext {
   saveUsers: (users: AppUser[]) => void;
   loadTransactions: () => TransactionLog[];
   logTransaction: (tx: Omit<TransactionLog, 'id' | 'timestamp'>) => void;
+  loadPlans?: () => PricingPlan[];
+  savePlans?: (plans: PricingPlan[]) => void;
+  loadRequests?: () => MembershipRequest[];
+  saveRequests?: (reqs: MembershipRequest[]) => void;
+  getSystemDiagnostics?: () => any;
   syncXrayConfig: (tokens?: ClientToken[]) => boolean;
   encryptConfig: (plainJson: object, secret: string) => string;
   buildDirectProtocolUrl: (token: ClientToken, profile: ProtocolConfig) => string;
@@ -255,6 +262,10 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
           { text: '🎟️ Nouveau Voucher', callback_data: 'menu_create' }
         ],
         [
+          { text: '💳 Plans & Tarifs', callback_data: 'menu_plans' },
+          { text: '📋 Demandes Adhésion', callback_data: 'menu_requests' }
+        ],
+        [
           { text: '📦 Lots de Vouchers', callback_data: 'menu_batch' },
           { text: '👥 Gestion Clients', callback_data: 'menu_clients_p0' }
         ],
@@ -271,6 +282,7 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
           { text: '🚀 MAJ Serveur Auto', callback_data: 'action_server_update' }
         ],
         [
+          { text: '🩺 Diagnostics Système', callback_data: 'menu_diagnostics' },
           { text: '❓ Aide & Commandes', callback_data: 'menu_help' }
         ]
       ]
@@ -770,6 +782,9 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
       `*Commandes disponibles :*\n` +
       `• \`/start\` ou \`/menu\` : Ouvrir le tableau de bord interactif\n` +
       `• \`/stats\` : Afficher les métriques serveur & RAM\n` +
+      `• \`/plans\` : Consulter le catalogue des forfaits et tarifs\n` +
+      `• \`/requests\` : Gérer les demandes d'adhésion en attente\n` +
+      `• \`/diagnostics\` : Diagnostic complet CPU, RAM, Xray & réseau\n` +
       `• \`/create [Go] [Jours] [Appareils] [Note]\` : Créer un voucher direct\n` +
       `   _Exemple :_ \`/create 50 30 2 Client Jean\`\n` +
       `• \`/batch [Quantité] [Go] [Jours]\` : Générer un lot de vouchers\n` +
@@ -784,6 +799,90 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
       `• \`/login [mot_de_passe]\` : Vous authentifier comme Super Admin\n` +
       `────────────────────────\n` +
       `_Toutes les opérations sont protégées par chiffrement et contrôle d'accès strict._`;
+  }
+
+  function getPlansMenuText(): string {
+    const plans = ctx.loadPlans ? ctx.loadPlans() : [];
+    let out = `💳 *CATALOGUE DES OFFRES COMMERCIALES*\n` +
+      `────────────────────────\n`;
+    if (plans.length === 0) {
+      out += `_Aucun forfait configuré._\n`;
+    } else {
+      plans.forEach((p, idx) => {
+        out += `*${idx + 1}. ${p.name}* [${p.badge || 'PRO'}]\n` +
+          `   • Quota : *${p.quotaGb} Go* | Validité : *${p.durationDays} jours*\n` +
+          `   • Tarif : *${p.priceCfa.toLocaleString('fr-FR')} FCFA*\n` +
+          (p.description ? `   • _${p.description}_\n` : '') + '\n';
+      });
+    }
+    out += `────────────────────────\nPour attribuer un accès, utilisez *🎟️ Nouveau Voucher* ou approuvez une demande en attente.`;
+    return out;
+  }
+
+  function getRequestsMenuData(): { text: string; keyboard: { inline_keyboard: InlineBtn[][] } } {
+    const reqs = ctx.loadRequests ? ctx.loadRequests() : [];
+    const pending = reqs.filter(r => r.status === 'PENDING');
+    let out = `📋 *DEMANDES D'ADHÉSION EN ATTENTE*\n` +
+      `────────────────────────\n`;
+    const buttons: InlineBtn[][] = [];
+
+    if (pending.length === 0) {
+      out += `✅ *Aucune demande en attente actuellement.*\n\n` +
+        `Les nouvelles demandes soumises depuis le portail d'adhésion ou l'application apparaîtront ici pour validation immédiate.`;
+    } else {
+      out += `Il y a *${pending.length}* demande(s) en attente de traitement :\n\n`;
+      pending.slice(0, 5).forEach((r, idx) => {
+        out += `*${idx + 1}. ${r.fullName}* (${r.flag || '🌍'} ${r.countryName || 'Afrique'})\n` +
+          `   • Contact : \`${r.dialPrefix || ''} ${r.contactDetail}\` (${r.channel || 'WHATSAPP'})\n` +
+          `   • Forfait : *${r.planName || 'Standard'}*\n` +
+          `   • Paiement : ${r.paymentMethod || 'Non spécifié'} ${r.paymentRef ? `(\`${r.paymentRef}\`)` : ''}\n` +
+          `   • Date : _${new Date(r.submittedAt).toLocaleString('fr-FR')}_\n\n`;
+
+        buttons.push([
+          { text: `✅ Approuver ${r.firstName || 'Client'}`, callback_data: `req_app_${r.id}` },
+          { text: `❌ Rejeter`, callback_data: `req_rej_${r.id}` }
+        ]);
+      });
+    }
+
+    buttons.push([
+      { text: '🔄 Actualiser', callback_data: 'menu_requests' },
+      { text: '⬅️ Menu Principal', callback_data: 'menu_main' }
+    ]);
+
+    return { text: out, keyboard: { inline_keyboard: buttons } };
+  }
+
+  function getDiagnosticsMenuText(): string {
+    const diag = ctx.getSystemDiagnostics ? ctx.getSystemDiagnostics() : null;
+    if (!diag) return getStatsText();
+
+    const srv = diag.server;
+    const vpn = diag.vpn;
+    const srvUptime = formatUptime(srv.uptimeSeconds);
+    const sysUptime = formatUptime(srv.systemUptimeSeconds);
+    const memUsedMb = Math.round(srv.memory.usedBytes / (1024 * 1024));
+    const memTotalMb = Math.round(srv.memory.totalBytes / (1024 * 1024));
+    const load = Array.isArray(srv.loadAverage) ? srv.loadAverage.map((v: number) => v.toFixed(2)).join(', ') : 'N/A';
+
+    return `🩺 *DIAGNOSTIC COMPLET DU SYSTÈME ABESS*\n` +
+      `────────────────────────\n` +
+      `💻 *Serveur & Système :*\n` +
+      `   • Plateforme : \`${srv.platform} ${srv.arch} (${srv.cpuCount} CPUs)\`\n` +
+      `   • Node.js : \`${srv.nodeVersion}\`\n` +
+      `   • Uptime Node : *${srvUptime}* (OS: *${sysUptime}*)\n` +
+      `   • Charge CPU (1/5/15m) : \`${load}\`\n` +
+      `   • RAM : *${memUsedMb} Mo* / *${memTotalMb} Mo* (${srv.memory.usedPercent}%)\n\n` +
+      `🌐 *Réseau & VPN :*\n` +
+      `   • Domaine Actif : \`${vpn.vpnDomain}\`\n` +
+      `   • Noyau Xray : *${vpn.xrayStatus === 'ready' ? '🟢 Opérationnel' : '🔴 Hors-ligne'}*\n` +
+      `   • Clients Actifs : *${vpn.activeTokensCount}* / ${vpn.totalTokensCount}\n` +
+      `   • Trafic Total : *${vpn.totalBandwidthUsedGb} Go*\n` +
+      `   • Forfaits Commerciaux : *${vpn.plansCount}*\n` +
+      `   • Demandes En Attente : *${vpn.pendingRequestsCount}*\n` +
+      `   • Version App Mobile : \`v${vpn.appVersion}\`\n` +
+      `────────────────────────\n` +
+      `_Données d'infrastructure actualisées en temps réel._`;
   }
 
   function getVersionMenuText(): string {
@@ -1113,6 +1212,159 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
         } else {
           await sendMessage(chatId, `❌ *Erreur lors de la mise à jour :*\n\`\`\`\n${updateRes.output}\n\`\`\``);
         }
+      } else if (data === 'menu_plans') {
+        await editMessageText(chatId, messageId, getPlansMenuText(), {
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: '🎟️ Créer un Voucher', callback_data: 'menu_create' },
+                { text: '🔄 Actualiser', callback_data: 'menu_plans' }
+              ],
+              [{ text: '⬅️ Retour Menu Principal', callback_data: 'menu_main' }]
+            ]
+          }
+        });
+      } else if (data === 'menu_requests') {
+        const reqData = getRequestsMenuData();
+        await editMessageText(chatId, messageId, reqData.text, {
+          reply_markup: reqData.keyboard
+        });
+      } else if (data === 'menu_diagnostics') {
+        await editMessageText(chatId, messageId, getDiagnosticsMenuText(), {
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: '🔄 Actualiser', callback_data: 'menu_diagnostics' },
+                { text: '⬅️ Retour Menu Principal', callback_data: 'menu_main' }
+              ]
+            ]
+          }
+        });
+      } else if (data.startsWith('req_app_')) {
+        const reqId = data.replace('req_app_', '');
+        const reqs = ctx.loadRequests ? ctx.loadRequests() : [];
+        const targetReq = reqs.find(r => r.id === reqId);
+        if (!targetReq) {
+          await answerCallbackQuery(cb.id, '❌ Demande introuvable.', true);
+          return;
+        }
+        if (targetReq.status !== 'PENDING') {
+          await answerCallbackQuery(cb.id, `⚠️ Demande déjà traitée (${targetReq.status}).`, true);
+          return;
+        }
+
+        const plans = ctx.loadPlans ? ctx.loadPlans() : [];
+        const plan = plans.find(p => p.id === targetReq.planId) || plans[0] || { quotaGb: 25, durationDays: 30, name: 'Standard 25 Go' };
+
+        const randomSuffix = Math.random().toString(36).substring(2, 6).toUpperCase() +
+          '-' + Math.random().toString(36).substring(2, 6).toUpperCase();
+        const tokenCode = `ABESS-${randomSuffix}`;
+        const clientUuid = crypto.randomUUID();
+        const expiresAt = new Date(Date.now() + plan.durationDays * 24 * 3600 * 1000).toISOString();
+        const profiles = ctx.loadProtocolConfigs();
+        const profile = profiles[0];
+
+        const encryptedPayload = {
+          vpnName: 'AbessVpn',
+          token: tokenCode,
+          bandwidthGb: plan.quotaGb,
+          expiresAt,
+          configurationId: profile?.id,
+          configurationName: profile?.name,
+          serverHost: profile?.serverHost || ctx.vpnDomain,
+          host: profile?.host || profile?.serverHost || ctx.vpnDomain,
+          serverPort: profile?.serverPort || 443,
+          path: profile?.path || '/abess-vless',
+          sniHost: profile?.sniHost || ctx.vpnDomain,
+          uuid: clientUuid,
+          protocol: profile?.protocol || 'vless',
+          transport: profile?.transport || 'ws',
+          security: 'tls'
+        };
+        const encryptedLink = ctx.encryptConfig(encryptedPayload, ctx.masterSecret);
+
+        const newToken: ClientToken = {
+          id: `tok_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+          token: tokenCode,
+          clientUuid,
+          resellerId: 'admin_telegram',
+          resellerName: 'Super Admin Telegram',
+          plan: plan.name,
+          bandwidthGb: plan.quotaGb,
+          bandwidthUsedGb: 0,
+          expiresAt,
+          days: plan.durationDays,
+          deviceLimit: 2,
+          deviceIds: targetReq.deviceId ? [targetReq.deviceId] : [],
+          allowedDeviceId: targetReq.deviceId,
+          connectionCount: 0,
+          lastSeenAt: null,
+          lastSeenIp: null,
+          status: 'active',
+          configurationId: profile?.id,
+          configurationName: profile?.name,
+          customerNote: `Adhésion ${targetReq.fullName} (${targetReq.dialPrefix || ''} ${targetReq.contactDetail})`,
+          customerContact: `${targetReq.dialPrefix || ''} ${targetReq.contactDetail}`,
+          on_hold: false,
+          firstConnectedAt: null,
+          encryptedLink,
+          createdAt: new Date().toISOString()
+        };
+
+        const tokens = ctx.loadTokens();
+        tokens.unshift(newToken);
+        ctx.saveTokens(tokens);
+        ctx.syncXrayConfig(tokens);
+
+        targetReq.status = 'APPROVED';
+        targetReq.assignedToken = tokenCode;
+        targetReq.assignedTokenId = newToken.id;
+        targetReq.processedAt = new Date().toISOString();
+        if (ctx.saveRequests) ctx.saveRequests(reqs);
+
+        ctx.logTransaction({
+          resellerId: 'admin_telegram',
+          resellerName: 'Super Admin Telegram',
+          type: 'TOKEN_CREATE',
+          amountGb: plan.quotaGb,
+          balanceBefore: 0,
+          balanceAfter: 0,
+          note: `Approbation demande adhésion ${targetReq.fullName} -> ${tokenCode}`
+        });
+
+        await answerCallbackQuery(cb.id, `✅ Approuvé pour ${targetReq.fullName} !`);
+        await sendMessage(chatId, `🎉 *DEMANDE APPROUVÉE AVEC SUCCÈS !*\n\n` +
+          `👤 *Client :* ${targetReq.fullName} (${targetReq.flag || '🌍'} ${targetReq.countryName})\n` +
+          `📞 *Contact :* \`${targetReq.dialPrefix || ''} ${targetReq.contactDetail}\` (${targetReq.channel || 'WHATSAPP'})\n` +
+          `📦 *Forfait :* *${plan.name}* (${plan.quotaGb} Go / ${plan.durationDays}j)\n` +
+          `🔑 *Code Voucher :* \`${tokenCode}\`\n` +
+          `🌐 *Lien Abonnement :* \`https://${ctx.vpnDomain}/sub/${tokenCode}\`\n\n` +
+          `_Le client peut coller ce code directement dans son application Abess Vpn._`, {
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '📋 Retour Demandes', callback_data: 'menu_requests' }],
+              [{ text: '⬅️ Menu Principal', callback_data: 'menu_main' }]
+            ]
+          }
+        });
+      } else if (data.startsWith('req_rej_')) {
+        const reqId = data.replace('req_rej_', '');
+        const reqs = ctx.loadRequests ? ctx.loadRequests() : [];
+        const targetReq = reqs.find(r => r.id === reqId);
+        if (targetReq) {
+          targetReq.status = 'REJECTED';
+          targetReq.processedAt = new Date().toISOString();
+          if (ctx.saveRequests) ctx.saveRequests(reqs);
+          await answerCallbackQuery(cb.id, `Demande rejetée.`);
+          await sendMessage(chatId, `❌ *Demande rejetée pour ${targetReq.fullName}* (${targetReq.dialPrefix || ''} ${targetReq.contactDetail}).`, {
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: '📋 Retour Demandes', callback_data: 'menu_requests' }],
+                [{ text: '⬅️ Menu Principal', callback_data: 'menu_main' }]
+              ]
+            }
+          });
+        }
       }
     } catch (err: unknown) {
       console.error('[TelegramBot] Callback Error:', err instanceof Error ? err.message : String(err));
@@ -1183,6 +1435,34 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
         reply_markup: {
           inline_keyboard: [
             [{ text: '🔄 Actualiser', callback_data: 'menu_stats' }, { text: '⬅️ Menu', callback_data: 'menu_main' }]
+          ]
+        }
+      });
+      return;
+    }
+
+    if (text === '/plans') {
+      await sendMessage(chatId, getPlansMenuText(), {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '🎟️ Créer un Voucher', callback_data: 'menu_create' }, { text: '⬅️ Menu', callback_data: 'menu_main' }]
+          ]
+        }
+      });
+      return;
+    }
+
+    if (text === '/requests' || text === '/adhesion') {
+      const res = getRequestsMenuData();
+      await sendMessage(chatId, res.text, { reply_markup: res.keyboard });
+      return;
+    }
+
+    if (text === '/diagnostics' || text === '/diag') {
+      await sendMessage(chatId, getDiagnosticsMenuText(), {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '🔄 Actualiser', callback_data: 'menu_diagnostics' }, { text: '⬅️ Menu', callback_data: 'menu_main' }]
           ]
         }
       });
