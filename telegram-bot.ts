@@ -14,7 +14,9 @@ import type {
   ClientToken,
   MasterServerConfig,
   ProtocolConfig,
-  TransactionLog
+  TransactionLog,
+  AppVersionConfig,
+  ServerUpdateStatus
 } from './server.js';
 
 export interface TelegramBotContext {
@@ -35,6 +37,10 @@ export interface TelegramBotContext {
   encryptConfig: (plainJson: object, secret: string) => string;
   buildDirectProtocolUrl: (token: ClientToken, profile: ProtocolConfig) => string;
   safeClientToken: (token: ClientToken) => any;
+  loadAppVersionConfig: () => AppVersionConfig;
+  saveAppVersionConfig: (config: AppVersionConfig) => void;
+  getServerUpdateStatus: () => Promise<ServerUpdateStatus>;
+  executeServerUpdate: () => Promise<{ success: boolean; output: string; currentCommit: string }>;
   xrayStatusFile: string;
   xrayConfigFile: string;
   dataDir: string;
@@ -259,6 +265,10 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
         [
           { text: '💰 Journal d\'Audit', callback_data: 'menu_ledger' },
           { text: '💾 Sauvegarde (Backup)', callback_data: 'action_backup' }
+        ],
+        [
+          { text: '📲 Version App & MAJ', callback_data: 'menu_version' },
+          { text: '🚀 MAJ Serveur Auto', callback_data: 'action_server_update' }
         ],
         [
           { text: '❓ Aide & Commandes', callback_data: 'menu_help' }
@@ -768,9 +778,43 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
       `• \`/reset [code_token]\` : Réinitialiser les slots d'appareils\n` +
       `• \`/backup\` : Télécharger une sauvegarde complète de la base\n` +
       `• \`/reload\` : Forcer la régénération de la config Xray\n` +
+      `• \`/update\` : Mettre à jour le serveur automatiquement (Git Pull + Build)\n` +
+      `• \`/version\` : Afficher la version mobile et la politique de mise à jour\n` +
+      `• \`/setversion [version] [obligatoire: 1/0] [url]\` : Publier une mise à jour d'application\n` +
       `• \`/login [mot_de_passe]\` : Vous authentifier comme Super Admin\n` +
       `────────────────────────\n` +
       `_Toutes les opérations sont protégées par chiffrement et contrôle d'accès strict._`;
+  }
+
+  function getVersionMenuText(): string {
+    const v = ctx.loadAppVersionConfig();
+    return `📲 *GESTION DES VERSIONS & MISES À JOUR APP*\n` +
+      `────────────────────────\n` +
+      `📱 *Dernière version publiée :* \`v${v.latestVersion}\`\n` +
+      `🔒 *Version minimale requise :* \`v${v.minRequiredVersion}\`\n` +
+      `⚠️ *Statut de mise à jour :* ${v.isMandatory ? '🔴 *OBLIGATOIRE (Bloquante)*' : '🟢 *Optionnelle*'}\n` +
+      `📥 *Lien de téléchargement :*\n\`${v.downloadUrl}\`\n` +
+      `────────────────────────\n` +
+      `📝 *Notes de version :*\n_${v.releaseNotes}_\n` +
+      `────────────────────────\n` +
+      `_💡 Si OBLIGATOIRE est actif, l'application mobile affiche un écran bloquant et coupe la connexion VPN tant que le client n'a pas mis à jour._`;
+  }
+
+  function getVersionMenuKeyboard(): { inline_keyboard: InlineBtn[][] } {
+    const v = ctx.loadAppVersionConfig();
+    return {
+      inline_keyboard: [
+        [
+          {
+            text: v.isMandatory ? '🟢 Rendre Optionnelle' : '🔴 Rendre Obligatoire (Bloquante)',
+            callback_data: 'action_toggle_mandatory'
+          }
+        ],
+        [
+          { text: '⬅️ Retour Menu Principal', callback_data: 'menu_main' }
+        ]
+      ]
+    };
   }
 
   // Handle incoming callback queries from inline buttons
@@ -1038,6 +1082,37 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
             ]
           }
         });
+      } else if (data === 'menu_version') {
+        await editMessageText(chatId, messageId, getVersionMenuText(), {
+          reply_markup: getVersionMenuKeyboard()
+        });
+      } else if (data === 'action_toggle_mandatory') {
+        const v = ctx.loadAppVersionConfig();
+        v.isMandatory = !v.isMandatory;
+        ctx.saveAppVersionConfig(v);
+        await answerCallbackQuery(cb.id, `Mise à jour passée en : ${v.isMandatory ? 'OBLIGATOIRE' : 'OPTIONNELLE'}`, true);
+        await editMessageText(chatId, messageId, getVersionMenuText(), {
+          reply_markup: getVersionMenuKeyboard()
+        });
+      } else if (data === 'action_server_update') {
+        await answerCallbackQuery(cb.id, 'Vérification mise à jour serveur...');
+        await sendMessage(chatId, '⏳ *Vérification du dépôt Git distant origin/main...*');
+        const status = await ctx.getServerUpdateStatus();
+        if (!status.isGitRepo) {
+          await sendMessage(chatId, `⚠️ ${status.error || 'Pas de dépôt git détecté (déploiement conteneur).'}`);
+          return;
+        }
+        if (!status.hasUpdate) {
+          await sendMessage(chatId, `✅ *Le serveur est déjà à jour !*\nCommit actuel : \`${status.currentCommit}\` (Branche \`${status.branch}\`).`);
+          return;
+        }
+        await sendMessage(chatId, `🚀 *Mise à jour détectée :* \`${status.currentCommit}\` -> \`${status.remoteCommit}\`\n*Exécution du git pull & recompilation...*`);
+        const updateRes = await ctx.executeServerUpdate();
+        if (updateRes.success) {
+          await sendMessage(chatId, `✅ *SERVEUR MIS À JOUR AVEC SUCCÈS !*\n\nCommit actif : \`${updateRes.currentCommit}\`\n\n_Les configurations Xray et services ont été rechargés._`);
+        } else {
+          await sendMessage(chatId, `❌ *Erreur lors de la mise à jour :*\n\`\`\`\n${updateRes.output}\n\`\`\``);
+        }
       }
     } catch (err: unknown) {
       console.error('[TelegramBot] Callback Error:', err instanceof Error ? err.message : String(err));
@@ -1233,6 +1308,61 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
     if (text === '/reload') {
       const ok = ctx.syncXrayConfig(ctx.loadTokens());
       await sendMessage(chatId, ok ? '✅ Configuration Xray rechargée avec succès !' : '⚠️ Erreur lors du rechargement de Xray.');
+      return;
+    }
+
+    if (text === '/update') {
+      await sendMessage(chatId, '⏳ *Vérification du dépôt Git origin/main...*');
+      const status = await ctx.getServerUpdateStatus();
+      if (!status.isGitRepo) {
+        await sendMessage(chatId, `⚠️ ${status.error || 'Dépôt git non accessible.'}`);
+        return;
+      }
+      if (!status.hasUpdate) {
+        await sendMessage(chatId, `✅ *Le serveur est déjà sur la dernière version !*\nCommit : \`${status.currentCommit}\``);
+        return;
+      }
+      await sendMessage(chatId, `🚀 *Mise à jour en cours vers \`${status.remoteCommit}\`...*`);
+      const res = await ctx.executeServerUpdate();
+      if (res.success) {
+        await sendMessage(chatId, `✅ *Mise à jour terminée avec succès !*\nNouveau commit : \`${res.currentCommit}\``);
+      } else {
+        await sendMessage(chatId, `❌ *Échec de la mise à jour :*\n\`\`\`\n${res.output}\n\`\`\``);
+      }
+      return;
+    }
+
+    if (text === '/version') {
+      await sendMessage(chatId, getVersionMenuText(), {
+        reply_markup: getVersionMenuKeyboard()
+      });
+      return;
+    }
+
+    if (text.startsWith('/setversion')) {
+      const args = text.replace('/setversion', '').trim().split(/\s+/).filter(Boolean);
+      const newVersion = args[0];
+      if (!newVersion) {
+        await sendMessage(chatId, 'ℹ️ Syntaxe : `/setversion <version> [obligatoire: 1/0] [url_apk]`\n_Exemple :_ `/setversion 2.2.0 1 https://t.me/Abess_Vpn`');
+        return;
+      }
+      const isMandatory = args[1] === '1' || args[1] === 'true' || args[1] === 'oui';
+      const downloadUrl = args.slice(2).join(' ') || 'https://t.me/Abess_Vpn';
+      const v = ctx.loadAppVersionConfig();
+      v.latestVersion = newVersion;
+      if (isMandatory) v.minRequiredVersion = newVersion;
+      v.isMandatory = isMandatory;
+      v.downloadUrl = downloadUrl;
+      v.publishedAt = new Date().toISOString();
+      ctx.saveAppVersionConfig(v);
+
+      await sendMessage(chatId, `✅ *NOUVELLE VERSION APPLICATION ENREGISTRÉE !*\n\n` +
+        `• Version : \`v${newVersion}\`\n` +
+        `• Obligatoire : *${isMandatory ? 'OUI (Bloquante)' : 'NON (Optionnelle)'}*\n` +
+        `• Téléchargement : \`${downloadUrl}\`\n\n` +
+        `_Tous les clients mobiles recevront immédiatement cette consigne._`, {
+        reply_markup: getVersionMenuKeyboard()
+      });
       return;
     }
 

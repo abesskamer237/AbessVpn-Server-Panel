@@ -4,7 +4,11 @@ import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
+import { exec } from 'child_process';
+import { promisify } from 'util';
 import { startTelegramBot } from './telegram-bot.js';
+
+const execAsync = promisify(exec);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -22,6 +26,7 @@ const tokensFile = path.resolve(dataDir, 'tokens.json');
 const configFile = path.resolve(dataDir, 'config.json');
 const protocolConfigsFile = path.resolve(dataDir, 'protocol-configs.json');
 const transactionsFile = path.resolve(dataDir, 'transactions.json');
+const appVersionFile = path.resolve(dataDir, 'app-version.json');
 const backupsDir = path.resolve(dataDir, 'backups');
 if (!fs.existsSync(backupsDir)) {
   fs.mkdirSync(backupsDir, { recursive: true });
@@ -53,7 +58,7 @@ export interface TransactionLog {
   id: string;
   resellerId: string;
   resellerName: string;
-  type: 'CREDIT_ADD' | 'TOKEN_CREATE' | 'BATCH_CREATE' | 'TOKEN_REVOKE' | 'RESET_DEVICES';
+  type: 'CREDIT_ADD' | 'TOKEN_CREATE' | 'BATCH_CREATE' | 'TOKEN_REVOKE' | 'RESET_DEVICES' | 'SERVER_UPDATE' | 'APP_VERSION_UPDATE';
   amountGb: number;
   balanceBefore: number;
   balanceAfter: number;
@@ -158,6 +163,128 @@ export interface ProtocolConfig {
   sniHost: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface AppVersionConfig {
+  latestVersion: string;
+  minRequiredVersion: string;
+  isMandatory: boolean;
+  downloadUrl: string;
+  releaseNotes: string;
+  publishedAt: string;
+}
+
+export function loadAppVersionConfig(): AppVersionConfig {
+  if (fs.existsSync(appVersionFile)) {
+    try {
+      const data = JSON.parse(fs.readFileSync(appVersionFile, 'utf8'));
+      if (data && typeof data.latestVersion === 'string') {
+        return {
+          latestVersion: String(data.latestVersion || '2.1.0').trim(),
+          minRequiredVersion: String(data.minRequiredVersion || data.latestVersion || '2.0.0').trim(),
+          isMandatory: Boolean(data.isMandatory),
+          downloadUrl: String(data.downloadUrl || 'https://t.me/Abess_Vpn').trim(),
+          releaseNotes: String(data.releaseNotes || 'Mise à jour majeure obligatoire avec protocoles optimisés.').trim(),
+          publishedAt: String(data.publishedAt || new Date().toISOString())
+        };
+      }
+    } catch {
+      // rewrite default
+    }
+  }
+  const defaultConfig: AppVersionConfig = {
+    latestVersion: '2.1.0',
+    minRequiredVersion: '2.0.0',
+    isMandatory: true,
+    downloadUrl: 'https://t.me/Abess_Vpn',
+    releaseNotes: 'Mise à jour obligatoire de sécurité et intégration des protocoles renforcés.',
+    publishedAt: new Date().toISOString()
+  };
+  writeJsonAtomically(appVersionFile, defaultConfig);
+  return defaultConfig;
+}
+
+export function saveAppVersionConfig(config: AppVersionConfig): void {
+  writeJsonAtomically(appVersionFile, config);
+}
+
+export interface ServerUpdateStatus {
+  isGitRepo: boolean;
+  currentCommit: string;
+  remoteCommit: string;
+  hasUpdate: boolean;
+  branch: string;
+  lastChecked: string;
+  error?: string;
+}
+
+export async function getServerUpdateStatus(): Promise<ServerUpdateStatus> {
+  const result: ServerUpdateStatus = {
+    isGitRepo: false,
+    currentCommit: 'unknown',
+    remoteCommit: 'unknown',
+    hasUpdate: false,
+    branch: 'main',
+    lastChecked: new Date().toISOString()
+  };
+
+  try {
+    if (!fs.existsSync(path.resolve(__dirname, '.git'))) {
+      result.error = 'Pas de dépôt git détecté.';
+      return result;
+    }
+    result.isGitRepo = true;
+    const { stdout: localHead } = await execAsync('git rev-parse --short HEAD', { cwd: __dirname });
+    result.currentCommit = localHead.trim();
+
+    await execAsync('git fetch origin main --quiet', { cwd: __dirname, timeout: 15000 });
+    const { stdout: remoteHead } = await execAsync('git rev-parse --short origin/main', { cwd: __dirname });
+    result.remoteCommit = remoteHead.trim();
+    result.hasUpdate = result.currentCommit !== result.remoteCommit;
+  } catch (err: unknown) {
+    result.error = err instanceof Error ? err.message : String(err);
+  }
+  return result;
+}
+
+export async function executeServerUpdate(): Promise<{ success: boolean; output: string; currentCommit: string }> {
+  try {
+    if (!fs.existsSync(path.resolve(__dirname, '.git'))) {
+      return { success: false, output: 'Dépôt git absent', currentCommit: 'unknown' };
+    }
+    const { stdout: pullOut } = await execAsync('git pull origin main', { cwd: __dirname, timeout: 30000 });
+    const { stdout: newCommit } = await execAsync('git rev-parse --short HEAD', { cwd: __dirname });
+
+    syncXrayConfig();
+
+    try {
+      await execAsync('npm run build', { cwd: __dirname, timeout: 60000 });
+    } catch (buildErr) {
+      console.error('[AUTO-UPDATE] Note build frontend:', buildErr);
+    }
+
+    logTransaction({
+      resellerId: 'system',
+      resellerName: 'Système Auto-Update',
+      type: 'SERVER_UPDATE',
+      amountGb: 0,
+      balanceBefore: 0,
+      balanceAfter: 0,
+      note: `Mise à jour serveur vers commit ${newCommit.trim()}`
+    });
+
+    return {
+      success: true,
+      output: pullOut.trim(),
+      currentCommit: newCommit.trim()
+    };
+  } catch (err: unknown) {
+    return {
+      success: false,
+      output: err instanceof Error ? err.message : String(err),
+      currentCommit: 'error'
+    };
+  }
 }
 
 // Master Configuration Helper
@@ -884,6 +1011,16 @@ async function startServer() {
   });
 
   const server = http.createServer(app);
+
+  // Public App Version endpoint for Android app auto-update and mandatory update enforcement
+  app.get('/api/v1/app/version', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    const versionConfig = loadAppVersionConfig();
+    res.json({
+      ok: true,
+      ...versionConfig
+    });
+  });
 
   // Public health check used by the mobile client before token operations.
   app.get('/api/v1/ping', (_req, res) => {
@@ -1891,6 +2028,70 @@ async function startServer() {
   });
 
   // ==========================================
+  // APP VERSION & MANDATORY UPDATE MANAGEMENT
+  // ==========================================
+  app.get('/api/v1/admin/app-version', authenticate, (_req, res) => {
+    res.json(loadAppVersionConfig());
+  });
+
+  app.post('/api/v1/admin/app-version', authenticate, (req, res) => {
+    const user: AppUser = (req as any).user;
+    if (user.role !== 'SUPER_ADMIN') {
+      res.status(403).json({ error: 'Accès réservé au Super Administrateur.' });
+      return;
+    }
+    const latestVersion = String(req.body?.latestVersion || '').trim();
+    if (!latestVersion) {
+      res.status(400).json({ error: 'latestVersion requis (ex: 2.1.0).' });
+      return;
+    }
+    const minRequiredVersion = String(req.body?.minRequiredVersion || latestVersion).trim();
+    const isMandatory = Boolean(req.body?.isMandatory);
+    const downloadUrl = String(req.body?.downloadUrl || 'https://t.me/Abess_Vpn').trim();
+    const releaseNotes = String(req.body?.releaseNotes || '').trim();
+
+    const config: AppVersionConfig = {
+      latestVersion,
+      minRequiredVersion,
+      isMandatory,
+      downloadUrl,
+      releaseNotes,
+      publishedAt: new Date().toISOString()
+    };
+    saveAppVersionConfig(config);
+
+    logTransaction({
+      resellerId: user.id,
+      resellerName: user.name,
+      type: 'APP_VERSION_UPDATE',
+      amountGb: 0,
+      balanceBefore: 0,
+      balanceAfter: 0,
+      note: `Publication version ${latestVersion} (Obligatoire: ${isMandatory ? 'OUI' : 'NON'})`
+    });
+
+    res.json({ ok: true, config });
+  });
+
+  // ==========================================
+  // SERVER AUTOMATED UPDATE & HEALTH
+  // ==========================================
+  app.get('/api/v1/admin/system/update-status', authenticate, async (_req, res) => {
+    const status = await getServerUpdateStatus();
+    res.json(status);
+  });
+
+  app.post('/api/v1/admin/system/update', authenticate, async (req, res) => {
+    const user: AppUser = (req as any).user;
+    if (user.role !== 'SUPER_ADMIN') {
+      res.status(403).json({ error: 'Accès réservé au Super Administrateur.' });
+      return;
+    }
+    const result = await executeServerUpdate();
+    res.json(result);
+  });
+
+  // ==========================================
   // 6. CLIENT MOBILE APPLICATION AUTHENTICATION
   // (Called by flutter_v2ray on Android/iOS)
   // ==========================================
@@ -2149,6 +2350,25 @@ async function startServer() {
     console.log(`[ABESSVPN MASTER SERVER] Control plane listening on ${PORT}; VPN domain: ${process.env.VPN_DOMAIN}`);
   });
 
+  // Automated background server updater: checks every 6 hours if git remote has updates
+  const autoUpdateTimer = setInterval(async () => {
+    try {
+      const status = await getServerUpdateStatus();
+      if (status.hasUpdate && status.isGitRepo) {
+        console.log(`[AUTO-UPDATE] Mise à jour distante détectée (${status.currentCommit} -> ${status.remoteCommit}). Application automatique...`);
+        const updateResult = await executeServerUpdate();
+        if (updateResult.success) {
+          console.log(`[AUTO-UPDATE] ✅ Serveur mis à jour avec succès vers ${updateResult.currentCommit}`);
+        } else {
+          console.error(`[AUTO-UPDATE] ❌ Échec mise à jour automatique:`, updateResult.output);
+        }
+      }
+    } catch {
+      // background silent error
+    }
+  }, 6 * 3600 * 1000);
+  autoUpdateTimer.unref();
+
   // Start Integrated Telegram Management Bot (if configured in .env)
   const tgBotToken = process.env.TELEGRAM_BOT_TOKEN?.trim();
   const tgAdminIds = process.env.TELEGRAM_ADMIN_IDS?.split(',').map(s => s.trim()).filter(Boolean);
@@ -2170,6 +2390,10 @@ async function startServer() {
     encryptConfig,
     buildDirectProtocolUrl,
     safeClientToken,
+    loadAppVersionConfig,
+    saveAppVersionConfig,
+    getServerUpdateStatus,
+    executeServerUpdate,
     xrayStatusFile,
     xrayConfigFile,
     dataDir,

@@ -38,7 +38,8 @@ import {
   Search,
   Filter,
   History,
-  Share2
+  Share2,
+  Smartphone
 } from 'lucide-react';
 
 interface UserSession {
@@ -214,6 +215,26 @@ export default function App() {
   const [backupLoading, setBackupLoading] = useState<boolean>(false);
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState<string>('');
 
+  // App Version & Server Update State
+  const [appVersionConfig, setAppVersionConfig] = useState<{
+    latestVersion: string;
+    minRequiredVersion: string;
+    isMandatory: boolean;
+    downloadUrl: string;
+    releaseNotes: string;
+  }>({
+    latestVersion: '2.1.0',
+    minRequiredVersion: '2.0.0',
+    isMandatory: true,
+    downloadUrl: 'https://t.me/Abess_Vpn',
+    releaseNotes: 'Mise à jour majeure obligatoire : protocoles Xray renforcés et sécurité optimisée.'
+  });
+  const [appVersionSaving, setAppVersionSaving] = useState<boolean>(false);
+  const [appVersionSaved, setAppVersionSaved] = useState<boolean>(false);
+  const [serverUpdateStatus, setServerUpdateStatus] = useState<any>(null);
+  const [serverUpdating, setServerUpdating] = useState<boolean>(false);
+  const [serverUpdateMsg, setServerUpdateMsg] = useState<string | null>(null);
+
   // Server logs are populated by real actions; do not seed simulated startup status.
   const [systemLogs, setSystemLogs] = useState<string[]>([]);
 
@@ -261,6 +282,12 @@ export default function App() {
       if (currentUser?.role === 'SUPER_ADMIN') {
         const resellersRes = await fetch('/api/v1/admin/resellers', { headers });
         if (resellersRes.ok) setResellers(await resellersRes.json());
+
+        const appVerRes = await fetch('/api/v1/admin/app-version', { headers });
+        if (appVerRes.ok) setAppVersionConfig(await appVerRes.json());
+
+        const srvUpdRes = await fetch('/api/v1/admin/system/update-status', { headers });
+        if (srvUpdRes.ok) setServerUpdateStatus(await srvUpdRes.json());
       }
 
       // Transactions Ledger
@@ -571,6 +598,54 @@ export default function App() {
       setBatchError(err instanceof Error ? err.message : String(err));
     } finally {
       setBatchLoading(false);
+    }
+  };
+
+  const handleSaveAppVersion = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAppVersionSaving(true);
+    setAppVersionSaved(false);
+    try {
+      const res = await fetch('/api/v1/admin/app-version', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${authToken}`
+        },
+        body: JSON.stringify(appVersionConfig)
+      });
+      if (res.ok) {
+        setAppVersionSaved(true);
+        addLog(`[APP VERSION] Version publiée v${appVersionConfig.latestVersion} (Obligatoire: ${appVersionConfig.isMandatory ? 'OUI' : 'NON'})`);
+        setTimeout(() => setAppVersionSaved(false), 4000);
+      }
+    } catch (_) {}
+    finally {
+      setAppVersionSaving(false);
+    }
+  };
+
+  const handleExecuteServerUpdate = async () => {
+    setServerUpdating(true);
+    setServerUpdateMsg(null);
+    try {
+      const res = await fetch('/api/v1/admin/system/update', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${authToken}` }
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setServerUpdateMsg(`✅ Serveur mis à jour vers commit ${data.currentCommit}`);
+        addLog(`[SERVER UPDATE] Mise à jour effectuée vers ${data.currentCommit}`);
+        const updRes = await fetch('/api/v1/admin/system/update-status', { headers: { Authorization: `Bearer ${authToken}` } });
+        if (updRes.ok) setServerUpdateStatus(await updRes.json());
+      } else {
+        setServerUpdateMsg(`❌ Échec: ${data.output || data.error || 'Erreur'}`);
+      }
+    } catch (err: unknown) {
+      setServerUpdateMsg(`❌ Erreur: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setServerUpdating(false);
     }
   };
 
@@ -1551,6 +1626,144 @@ export default function App() {
                 </form>
               </section>
             )}
+
+            {/* App Version & Mandatory Updates Management */}
+            <section className="rounded-2xl border border-cyan-900/60 bg-[#060c18] p-6 shadow-xl space-y-4">
+              <div className="flex items-center justify-between pb-3 border-b border-cyan-950">
+                <div className="flex items-center gap-2.5">
+                  <Smartphone className="w-5 h-5 text-cyan-400" />
+                  <div>
+                    <h2 className="text-sm font-bold text-white">Application Mobile — Version &amp; Mises à Jour Obligatoires</h2>
+                    <p className="text-xs text-slate-400">Configurez la version minimale exigée pour bloquer les anciennes versions et forcer la mise à jour.</p>
+                  </div>
+                </div>
+                {appVersionSaved && (
+                  <span className="text-xs text-emerald-400 font-bold flex items-center gap-1">
+                    <CheckCircle2 className="w-4 h-4" /> Enregistré &amp; Publié !
+                  </span>
+                )}
+              </div>
+
+              <form onSubmit={handleSaveAppVersion} className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                <div>
+                  <label className="block text-slate-300 font-bold mb-1">Dernière Version Publiée</label>
+                  <input
+                    type="text"
+                    value={appVersionConfig.latestVersion}
+                    onChange={(e) => setAppVersionConfig({ ...appVersionConfig, latestVersion: e.target.value })}
+                    className="w-full bg-[#03060e] border border-cyan-900 rounded-lg px-3 py-2 text-cyan-200"
+                    placeholder="ex: 2.1.0"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-slate-300 font-bold mb-1">Version Minimale Requise (Bloquante)</label>
+                  <input
+                    type="text"
+                    value={appVersionConfig.minRequiredVersion}
+                    onChange={(e) => setAppVersionConfig({ ...appVersionConfig, minRequiredVersion: e.target.value })}
+                    className="w-full bg-[#03060e] border border-cyan-900 rounded-lg px-3 py-2 text-cyan-200"
+                    placeholder="ex: 2.0.0"
+                    required
+                  />
+                </div>
+
+                <div className="md:col-span-2">
+                  <label className="block text-slate-300 font-bold mb-1">Lien de Téléchargement Direct (APK ou Canal Telegram)</label>
+                  <input
+                    type="url"
+                    value={appVersionConfig.downloadUrl}
+                    onChange={(e) => setAppVersionConfig({ ...appVersionConfig, downloadUrl: e.target.value })}
+                    className="w-full bg-[#03060e] border border-cyan-900 rounded-lg px-3 py-2 text-cyan-200"
+                    placeholder="https://t.me/Abess_Vpn ou lien direct APK"
+                    required
+                  />
+                </div>
+
+                <div className="md:col-span-2">
+                  <label className="block text-slate-300 font-bold mb-1">Notes de Version / Nouveautés</label>
+                  <textarea
+                    value={appVersionConfig.releaseNotes}
+                    onChange={(e) => setAppVersionConfig({ ...appVersionConfig, releaseNotes: e.target.value })}
+                    className="w-full bg-[#03060e] border border-cyan-900 rounded-lg px-3 py-2 text-cyan-200 h-20"
+                    placeholder="Décrivez les nouveautés ou raisons de la mise à jour..."
+                  />
+                </div>
+
+                <div className="md:col-span-2 p-3 rounded-xl border border-rose-900/60 bg-rose-950/20 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <AlertTriangle className="w-5 h-5 text-rose-400 shrink-0" />
+                    <div>
+                      <span className="font-bold text-rose-200">Mise à jour STRICTEMENT OBLIGATOIRE (Bloquante)</span>
+                      <p className="text-slate-400 text-[11px]">Si activé, l'application mobile refuse toute connexion VPN et affiche un écran bloquant sans bouton "Plus tard".</p>
+                    </div>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                    <input
+                      type="checkbox"
+                      checked={appVersionConfig.isMandatory}
+                      onChange={(e) => setAppVersionConfig({ ...appVersionConfig, isMandatory: e.target.checked })}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-rose-600"></div>
+                  </label>
+                </div>
+
+                <div className="md:col-span-2 flex justify-end">
+                  <button
+                    type="submit"
+                    disabled={appVersionSaving}
+                    className="px-5 py-2.5 bg-cyan-600 hover:bg-cyan-500 text-black font-black rounded-xl text-xs flex items-center gap-1.5 transition shadow"
+                  >
+                    <Check className="w-4 h-4" />
+                    <span>{appVersionSaving ? 'Publication...' : 'Publier la Version Immédiatement'}</span>
+                  </button>
+                </div>
+              </form>
+            </section>
+
+            {/* Server Auto-Update Management */}
+            <section className="rounded-2xl border border-emerald-900/60 bg-[#060c18] p-6 shadow-xl space-y-4">
+              <div className="flex items-center justify-between pb-3 border-b border-emerald-950">
+                <div className="flex items-center gap-2.5">
+                  <RefreshCw className="w-5 h-5 text-emerald-400" />
+                  <div>
+                    <h2 className="text-sm font-bold text-white">Mises à Jour Automatiques du Serveur</h2>
+                    <p className="text-xs text-slate-400">Le serveur surveille automatiquement le dépôt Git origin/main toutes les 6 heures pour appliquer les mises à jour.</p>
+                  </div>
+                </div>
+                {serverUpdateStatus?.currentCommit && (
+                  <span className="text-xs bg-slate-900 border border-slate-700 px-2.5 py-1 rounded text-slate-300 font-mono">
+                    Commit : <code className="text-emerald-400">{serverUpdateStatus.currentCommit}</code>
+                  </span>
+                )}
+              </div>
+
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-4 rounded-xl border border-emerald-950 bg-black/40">
+                <div>
+                  <span className="font-bold text-slate-200">Statut du Serveur : </span>
+                  {serverUpdateStatus?.hasUpdate ? (
+                    <span className="text-amber-400 font-bold">⚠️ Nouvelle version disponible ({serverUpdateStatus.remoteCommit})</span>
+                  ) : (
+                    <span className="text-emerald-400 font-bold">✅ Le serveur est à jour avec origin/main</span>
+                  )}
+                  {serverUpdateMsg && (
+                    <p className="mt-1 text-xs text-cyan-300 font-mono">{serverUpdateMsg}</p>
+                  )}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleExecuteServerUpdate}
+                  disabled={serverUpdating}
+                  className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-black font-black rounded-xl text-xs flex items-center gap-1.5 shrink-0 transition shadow disabled:opacity-60"
+                >
+                  <RefreshCw className={`w-4 h-4 ${serverUpdating ? 'animate-spin' : ''}`} />
+                  <span>{serverUpdating ? 'Mise à jour en cours...' : 'Mettre à Jour le Serveur Maintenant'}</span>
+                </button>
+              </div>
+            </section>
           </div>
         )}
 
