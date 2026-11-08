@@ -248,10 +248,20 @@ interface SystemDiagnostics {
 }
 
 const EMPTY_PROTOCOL_CONFIG: MasterConfig = {
-  name: '', serverHost: '', host: '', serverPort: 443, protocol: 'vless',
-  transport: 'ws', path: '/@abess237', sniHost: '', uuid: '',
+  name: '', serverHost: 'server.nexustunnel.me', host: '', serverPort: 443, protocol: 'vless',
+  transport: 'ws', path: '/@abess237', sniHost: 'server.nexustunnel.me', uuid: '',
+  payload: '', remarks: '',
   secretPassphrase: '', systemName: 'AbessVpn', contactTelegram: '@abess237'
 };
+
+function generateUnifiedToken(): string {
+  const chars = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+  let rand = '';
+  for (let i = 0; i < 11; i++) {
+    rand += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return `ABESS-${rand}`;
+}
 
 export default function App() {
   // Session State
@@ -308,7 +318,7 @@ export default function App() {
 
   // New Client Token Modal
   const [tokenModalOpen, setTokenModalOpen] = useState<boolean>(false);
-  const [newTokenCode, setNewTokenCode] = useState<string>('');
+  const [newTokenCode, setNewTokenCode] = useState<string>(generateUnifiedToken());
   const [newTokenPlan, setNewTokenPlan] = useState<string>('PASS COMMERCE 30J');
   const [newTokenBandwidth, setNewTokenBandwidth] = useState<number>(50); // Go
   const [newTokenExpiryDate, setNewTokenExpiryDate] = useState<string>(
@@ -317,13 +327,6 @@ export default function App() {
   const [newTokenDeviceLimit, setNewTokenDeviceLimit] = useState<number>(2);
   const [newTokenAllowedDeviceId, setNewTokenAllowedDeviceId] = useState<string>('');
   const [newTokenConfigurationId, setNewTokenConfigurationId] = useState<string>('');
-  const [newTokenProtocol, setNewTokenProtocol] = useState<'vless' | 'ssh'>('vless');
-  const [newSshUsername, setNewSshUsername] = useState<string>('');
-  const [newSshPassword, setNewSshPassword] = useState<string>('#12345');
-  const [newSshPort, setNewSshPort] = useState<number>(80);
-  const [newSshPayload, setNewSshPayload] = useState<string>(
-    'GET / HTTP/1.1[crlf]FoxNews.com;www.epicgames.com;us.shop.battle.net;unity3d.com;www.icloud.com;www.bing.com;www.samsung.com;store.nintendo.com.br;www.garena.com;n41-06-05.opera-mini.net[crlf]Host: m.batch.com[crlf][crlf]X / HTTP/1.1[crlf]FoxNews.com;www.epicgames.com;us.shop.battle.net;unity3d.com;www.icloud.com;www.bing.com;www.samsung.com;store.nintendo.com.br;www.garena.com;n41-06-05.opera-mini.net[crlf]Host: [host][crlf][crlf]GET /loic HTTP/1.1[crlf]Host: dbl5i9lrmmeui.cloudfront.net[crlf]Backend: crashlyticsreports-pa.googleapis.com[crlf]Upgrade: websocket[crlf]Connection: Upgrade[crlf]User-agent:[ua][crlf][crlf]'
-  );
   const [tokenCreating, setTokenCreating] = useState<boolean>(false);
   const [tokenCreationError, setTokenCreationError] = useState<string | null>(null);
 
@@ -680,7 +683,7 @@ export default function App() {
     setTokenCreating(true);
     setTokenCreationError(null);
 
-    const generatedCode = newTokenCode.trim() || 'ABESS-' + Math.random().toString(36).substring(2, 8).toUpperCase();
+    const generatedCode = newTokenCode.trim() || generateUnifiedToken();
 
     try {
       const res = await fetch('/api/v1/admin/tokens', {
@@ -697,20 +700,14 @@ export default function App() {
           deviceLimit: Number(newTokenDeviceLimit),
           allowedDeviceId: newTokenAllowedDeviceId.trim() || undefined,
           customerNote: newTokenCustomerNote.trim() || undefined,
-          configurationId: newTokenProtocol === 'ssh' ? undefined : newTokenConfigurationId,
-          protocolType: newTokenProtocol,
-          sshUsername: newTokenProtocol === 'ssh' ? (newSshUsername.trim() || undefined) : undefined,
-          sshPassword: newTokenProtocol === 'ssh' ? (newSshPassword.trim() || undefined) : undefined,
-          sshPort: newTokenProtocol === 'ssh' ? Number(newSshPort) : undefined,
-          payload: newTokenProtocol === 'ssh' ? newSshPayload : undefined,
-          remarks: newTokenProtocol === 'ssh' ? newTokenPlan : undefined,
+          configurationId: newTokenConfigurationId
         })
       });
 
       const data = await res.json();
       if (res.ok) {
         setTokenModalOpen(false);
-        setNewTokenCode('');
+        setNewTokenCode(generateUnifiedToken());
         setNewTokenAllowedDeviceId('');
         setNewTokenCustomerNote('');
         refreshData();
@@ -974,11 +971,13 @@ export default function App() {
           name: masterConfig.name,
           serverHost: masterConfig.serverHost,
           host: masterConfig.host,
-          serverPort: masterConfig.serverPort,
+          serverPort: Number(masterConfig.serverPort),
           protocol: masterConfig.protocol,
           transport: masterConfig.transport,
           path: masterConfig.path,
-          sniHost: masterConfig.sniHost
+          sniHost: masterConfig.sniHost,
+          payload: masterConfig.payload,
+          remarks: masterConfig.remarks
         })
       });
       const payload = await response.json().catch(() => ({}));
@@ -1459,7 +1458,7 @@ export default function App() {
           <div className="flex items-center gap-2.5">
             <button
               onClick={() => {
-                setNewTokenCode('ABESS-' + Math.random().toString(36).substring(2, 8).toUpperCase());
+                setNewTokenCode(generateUnifiedToken());
                 setTokenCreationError(null);
                 setNewTokenConfigurationId(current => current && availableConfigs.some(config => config.id === current) ? current : (availableConfigs[0]?.id || ''));
                 setTokenCreationError(null);
@@ -1623,7 +1622,7 @@ export default function App() {
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
                 <button
                   onClick={() => {
-                    setNewTokenCode('ABESS-' + Math.random().toString(36).substring(2, 8).toUpperCase());
+                    setNewTokenCode(generateUnifiedToken());
                     setNewTokenConfigurationId(current => current && availableConfigs.some(config => config.id === current) ? current : (availableConfigs[0]?.id || ''));
                 setTokenCreationError(null);
                 setTokenModalOpen(true);
@@ -1795,7 +1794,7 @@ export default function App() {
 
                   <button
                     onClick={() => {
-                      setNewTokenCode('ABESS-' + Math.random().toString(36).substring(2, 8).toUpperCase());
+                      setNewTokenCode(generateUnifiedToken());
                       setTokenCreationError(null);
                       setNewTokenConfigurationId(current => current && availableConfigs.some(config => config.id === current) ? current : (availableConfigs[0]?.id || ''));
                       setNewTokenCustomerNote('');
@@ -2083,44 +2082,125 @@ export default function App() {
                   </div>
                   <div>
                     <label className="block text-slate-300 font-semibold mb-1">Port du service</label>
-                    <input type="number" value={masterConfig.serverPort} readOnly className="w-full bg-[#03060e] border border-slate-800 rounded-lg px-3 py-3 text-slate-300" />
-                    <p className="mt-1 text-slate-500">Calculé selon le transport : HTTPS, TCP direct ou UDP natif.</p>
+                    <input
+                      type="number"
+                      value={masterConfig.serverPort}
+                      readOnly={masterConfig.protocol !== 'ssh'}
+                      onChange={(e) => setMasterConfig({ ...masterConfig, serverPort: Number(e.target.value) })}
+                      className="w-full bg-[#03060e] border border-slate-800 rounded-lg px-3 py-3 text-slate-300"
+                    />
+                    <p className="mt-1 text-slate-500">
+                      {masterConfig.protocol === 'ssh' ? 'Port Dropbear WebSocket (80 direct ou 8880 proxy).' : 'Calculé selon le transport : HTTPS (443) ou TCP direct (10050).'}
+                    </p>
                   </div>
                   <div>
                     <label className="block text-slate-300 font-semibold mb-1">Protocole</label>
-                    <select value="vless" disabled className="w-full bg-[#03060e] border border-emerald-900 rounded-lg px-3 py-3 text-emerald-200">
-                      <option value="vless">VLESS (Optimisé 100% TCP)</option>
+                    <select
+                      value={masterConfig.protocol}
+                      onChange={(e) => {
+                        const proto = e.target.value;
+                        if (proto === 'ssh') {
+                          setMasterConfig({
+                            ...masterConfig,
+                            protocol: 'ssh',
+                            transport: 'ws',
+                            serverPort: 80,
+                            host: 'm.batch.com',
+                            path: '/loic',
+                            sniHost: masterConfig.serverHost || 'server.nexustunnel.me',
+                            payload: masterConfig.payload || 'GET / HTTP/1.1[crlf]FoxNews.com;www.epicgames.com;us.shop.battle.net;unity3d.com;www.icloud.com;www.bing.com;www.samsung.com;store.nintendo.com.br;www.garena.com;n41-06-05.opera-mini.net[crlf]Host: m.batch.com[crlf][crlf]X / HTTP/1.1[crlf]FoxNews.com;www.epicgames.com;us.shop.battle.net;unity3d.com;www.icloud.com;www.bing.com;www.samsung.com;store.nintendo.com.br;www.garena.com;n41-06-05.opera-mini.net[crlf]Host: [host][crlf][crlf]GET /loic HTTP/1.1[crlf]Host: dbl5i9lrmmeui.cloudfront.net[crlf]Backend: crashlyticsreports-pa.googleapis.com[crlf]Upgrade: websocket[crlf]Connection: Upgrade[crlf]User-agent:[ua][crlf][crlf]',
+                            remarks: masterConfig.remarks || masterConfig.name || '𖤍 ORANGE🍊〆DANNY 𖤍'
+                          });
+                        } else {
+                          setMasterConfig({
+                            ...masterConfig,
+                            protocol: 'vless',
+                            transport: 'ws',
+                            serverPort: 443,
+                            path: '/@abess237'
+                          });
+                        }
+                      }}
+                      className="w-full bg-[#03060e] border border-emerald-900 rounded-lg px-3 py-3 text-emerald-200 font-bold"
+                    >
+                      <option value="vless">VLESS (Optimisé 100% TCP • Xray)</option>
+                      <option value="ssh">SSH-Payload (Dropbear / WebSocket Injection)</option>
                     </select>
                   </div>
                   <div>
                     <label className="block text-slate-300 font-semibold mb-1">Transport</label>
-                    <select value={masterConfig.transport} onChange={(e) => {
-                      const transport = e.target.value;
-                      const serverPort = transport === 'tcp' ? 10050 : 443;
-                      setMasterConfig({ ...masterConfig, transport, serverPort, sniHost: transport === 'tcp' ? '' : masterConfig.sniHost });
-                    }} className="w-full bg-[#03060e] border border-emerald-900 rounded-lg px-3 py-3 text-emerald-200">
-                      <option value="tcp">TCP Direct (Port 10050 • Ultra Faible Latence)</option>
+                    <select
+                      value={masterConfig.transport}
+                      disabled={masterConfig.protocol === 'ssh'}
+                      onChange={(e) => {
+                        const transport = e.target.value;
+                        const serverPort = transport === 'tcp' ? 10050 : 443;
+                        setMasterConfig({ ...masterConfig, transport, serverPort, sniHost: transport === 'tcp' ? '' : masterConfig.sniHost });
+                      }}
+                      className="w-full bg-[#03060e] border border-emerald-900 rounded-lg px-3 py-3 text-emerald-200 disabled:opacity-50"
+                    >
                       <option value="ws">WebSocket sur TCP (Port 443 • Cloudflare / TLS)</option>
+                      <option value="tcp">TCP Direct (Port 10050 • Ultra Faible Latence)</option>
                       <option value="grpc">gRPC sur TCP (Port 443 • Haute Vitesse HTTP/2)</option>
                       <option value="httpupgrade">HTTPUpgrade sur TCP (Port 443)</option>
                       <option value="xhttp">XHTTP sur TCP (Port 443)</option>
                     </select>
                   </div>
-                  <div className="md:col-span-2 rounded-xl border border-cyan-900/80 bg-cyan-950/20 p-3">
-                    <label className="block text-cyan-200 font-semibold mb-1">Host HTTP / WebSocket / :authority (facultatif)</label>
-                    <input type="text" value={masterConfig.host} onChange={(e) => setMasterConfig({ ...masterConfig, host: e.target.value })} className="w-full bg-[#03060e] border border-cyan-800 rounded-lg px-3 py-3 text-cyan-100" placeholder="Host distinct, sans http:// ni chemin" autoComplete="off" />
-                    <p className="mt-1 text-slate-400">Cet en-tête est séparé de l’adresse de destination et du SNI. Laisse vide pour utiliser l’adresse de destination.</p>
-                  </div>
-                  <div className="md:col-span-2 rounded-xl border border-amber-900/80 bg-amber-950/15 p-3">
-                    <label className="block text-amber-200 font-semibold mb-1">SNI TLS — nom présenté au serveur TLS</label>
-                    <input type="text" value={masterConfig.sniHost} onChange={(e) => setMasterConfig({ ...masterConfig, sniHost: e.target.value })} className="w-full bg-[#03060e] border border-amber-800 rounded-lg px-3 py-3 text-amber-100 disabled:opacity-50" placeholder={masterConfig.transport === 'tcp' ? 'Non utilisé pour TCP direct' : 'Nom couvert par le certificat présenté'} disabled={masterConfig.transport === 'tcp'} required={masterConfig.transport !== 'tcp'} />
-                    <p className="mt-1 text-slate-400">Pour ce déploiement, Caddy présente le certificat associé à la variable VPN_DOMAIN. Pour WS, gRPC, HTTPUpgrade et XHTTP, le SNI doit donc être exactement ce domaine. Le Host HTTP reste séparé et ne remplace pas le certificat. Pour un autre SNI, configurez d’abord un domaine et son certificat sur Caddy.</p>
-                  </div>
-                  <div className="md:col-span-2">
-                    <label className="block text-slate-300 font-semibold mb-1">Chemin de transport</label>
-                    <input type="text" value={masterConfig.path || '/@abess237'} readOnly className="w-full bg-[#03060e] border border-slate-800 rounded-lg px-3 py-2 text-slate-300" />
-                    <p className="mt-1 text-slate-500">Le chemin technique est généré par Xray selon le protocole et le transport.</p>
-                  </div>
+
+                  {masterConfig.protocol === 'ssh' ? (
+                    <>
+                      <div className="md:col-span-2 rounded-xl border border-amber-900/80 bg-amber-950/20 p-3">
+                        <label className="block text-amber-200 font-semibold mb-1">Host HTTP d'Injection / Bug Host (ex: m.batch.com)</label>
+                        <input
+                          type="text"
+                          value={masterConfig.host}
+                          onChange={(e) => setMasterConfig({ ...masterConfig, host: e.target.value })}
+                          className="w-full bg-[#03060e] border border-amber-800 rounded-lg px-3 py-2 text-amber-100"
+                          placeholder="m.batch.com"
+                        />
+                      </div>
+                      <div className="md:col-span-2 rounded-xl border border-amber-900/80 bg-amber-950/20 p-3">
+                        <label className="block text-amber-200 font-semibold mb-1">Payload HTTP d'Injection Complet</label>
+                        <textarea
+                          value={masterConfig.payload || ''}
+                          onChange={(e) => setMasterConfig({ ...masterConfig, payload: e.target.value })}
+                          rows={4}
+                          className="w-full bg-[#03060e] border border-amber-800 rounded-lg px-3 py-2 text-amber-300 font-mono text-[11px]"
+                          placeholder="GET / HTTP/1.1[crlf]Host: m.batch.com..."
+                          required
+                        />
+                        <p className="mt-1 text-slate-400">Ce payload modèle sera automatiquement injecté pour tous les tokens créés sur ce profil.</p>
+                      </div>
+                      <div className="md:col-span-2 rounded-xl border border-amber-900/80 bg-amber-950/20 p-3">
+                        <label className="block text-amber-200 font-semibold mb-1">Remarques / Nom de la configuration (JSON)</label>
+                        <input
+                          type="text"
+                          value={masterConfig.remarks || ''}
+                          onChange={(e) => setMasterConfig({ ...masterConfig, remarks: e.target.value })}
+                          className="w-full bg-[#03060e] border border-amber-800 rounded-lg px-3 py-2 text-amber-200"
+                          placeholder="Ex: 𖤍 ORANGE🍊〆DANNY 𖤍"
+                        />
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="md:col-span-2 rounded-xl border border-cyan-900/80 bg-cyan-950/20 p-3">
+                        <label className="block text-cyan-200 font-semibold mb-1">Host HTTP / WebSocket / :authority (facultatif)</label>
+                        <input type="text" value={masterConfig.host} onChange={(e) => setMasterConfig({ ...masterConfig, host: e.target.value })} className="w-full bg-[#03060e] border border-cyan-800 rounded-lg px-3 py-3 text-cyan-100" placeholder="Host distinct, sans http:// ni chemin" autoComplete="off" />
+                        <p className="mt-1 text-slate-400">Cet en-tête est séparé de l’adresse de destination et du SNI. Laisse vide pour utiliser l’adresse de destination.</p>
+                      </div>
+                      <div className="md:col-span-2 rounded-xl border border-amber-900/80 bg-amber-950/15 p-3">
+                        <label className="block text-amber-200 font-semibold mb-1">SNI TLS — nom présenté au serveur TLS</label>
+                        <input type="text" value={masterConfig.sniHost} onChange={(e) => setMasterConfig({ ...masterConfig, sniHost: e.target.value })} className="w-full bg-[#03060e] border border-amber-800 rounded-lg px-3 py-3 text-amber-100 disabled:opacity-50" placeholder={masterConfig.transport === 'tcp' ? 'Non utilisé pour TCP direct' : 'Nom couvert par le certificat présenté'} disabled={masterConfig.transport === 'tcp'} required={masterConfig.transport !== 'tcp'} />
+                        <p className="mt-1 text-slate-400">Pour ce déploiement, Caddy présente le certificat associé à la variable VPN_DOMAIN. Pour WS, gRPC, HTTPUpgrade et XHTTP, le SNI doit donc être exactement ce domaine.</p>
+                      </div>
+                      <div className="md:col-span-2">
+                        <label className="block text-slate-300 font-semibold mb-1">Chemin de transport</label>
+                        <input type="text" value={masterConfig.path || '/@abess237'} readOnly className="w-full bg-[#03060e] border border-slate-800 rounded-lg px-3 py-2 text-slate-300" />
+                        <p className="mt-1 text-slate-500">Le chemin technique est généré par Xray selon le protocole et le transport.</p>
+                      </div>
+                    </>
+                  )}
                   <div className="md:col-span-2 rounded-xl border border-slate-800 bg-black/20 p-3 text-slate-400">
                     <span className={masterConfig.transport === 'tcp' ? 'text-amber-300' : 'text-emerald-300'}>{masterConfig.transport === 'tcp' ? 'Transport TCP direct ultra-faible latence sans couche TLS' : 'TLS sécurisé sur le point d’entrée HTTPS'}</span>
                     <p className="mt-1">Les modifications du profil n’altèrent pas les paramètres déjà copiés dans les licences existantes : chaque token garde son instantané de configuration.</p>
@@ -2472,7 +2552,7 @@ export default function App() {
                         setNewTokenExpiryDate(
                           new Date(Date.now() + p.durationDays * 24 * 3600 * 1000 - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)
                         );
-                        setNewTokenCode('ABESS-' + Math.random().toString(36).substring(2, 8).toUpperCase());
+                        setNewTokenCode(generateUnifiedToken());
                         setTokenModalOpen(true);
                       }}
                       className="flex-1 py-2 bg-emerald-950/70 hover:bg-emerald-900/80 border border-emerald-800 text-emerald-300 rounded-xl text-center font-bold text-xs"
@@ -3246,13 +3326,14 @@ export default function App() {
                     value={newTokenCode}
                     onChange={(e) => setNewTokenCode(e.target.value.toUpperCase())}
                     className="flex-1 bg-[#03060e] border border-emerald-950 rounded-xl px-3 py-2 text-emerald-300 font-bold"
-                    placeholder="ABESS-XXXXXX"
+                    placeholder="ABESS-XXXXXXXXXXX"
                     required
                   />
                   <button
                     type="button"
-                    onClick={() => setNewTokenCode('ABESS-' + Math.random().toString(36).substring(2, 8).toUpperCase())}
+                    onClick={() => setNewTokenCode(generateUnifiedToken())}
                     className="px-3 bg-slate-900 border border-slate-700 rounded-xl hover:text-white"
+                    title="Générer un code aléatoire"
                   >
                     🎲
                   </button>
@@ -3283,112 +3364,31 @@ export default function App() {
               </div>
 
               <div>
-                <label className="block text-slate-300 mb-1 font-bold">Protocole Réseau</label>
-                <div className="grid grid-cols-2 gap-2 mb-2">
-                  <button
-                    type="button"
-                    onClick={() => setNewTokenProtocol('vless')}
-                    className={`py-2 px-3 rounded-xl border text-center font-bold text-xs transition ${
-                      newTokenProtocol === 'vless'
-                        ? 'bg-emerald-950/60 border-emerald-500 text-emerald-300 shadow'
-                        : 'bg-[#03060e] border-slate-800 text-slate-400 hover:text-white'
-                    }`}
-                  >
-                    VLESS / Xray
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setNewTokenProtocol('ssh');
-                      if (!newSshUsername) {
-                        setNewSshUsername('client_' + Math.random().toString(36).substring(2, 7));
-                      }
-                    }}
-                    className={`py-2 px-3 rounded-xl border text-center font-bold text-xs transition ${
-                      newTokenProtocol === 'ssh'
-                        ? 'bg-amber-950/60 border-amber-500 text-amber-300 shadow'
-                        : 'bg-[#03060e] border-slate-800 text-slate-400 hover:text-white'
-                    }`}
-                  >
-                    SSH-Payload (Dropbear)
-                  </button>
-                </div>
+                <label className="block text-slate-300 mb-1 font-bold">Configuration VPN associée</label>
+                <select
+                  value={newTokenConfigurationId}
+                  onChange={(e) => setNewTokenConfigurationId(e.target.value)}
+                  className="w-full bg-[#03060e] border border-cyan-900 rounded-xl px-3 py-2 text-cyan-200 font-bold"
+                  required
+                  disabled={availableConfigs.length === 0}
+                >
+                  <option value="">Choisir une configuration…</option>
+                  {availableConfigs.map((config) => (
+                    <option key={config.id} value={config.id}>
+                      {config.name} — {config.protocol.toUpperCase()} / {config.transport.toUpperCase()} · Port {config.serverPort}
+                    </option>
+                  ))}
+                </select>
+                {availableConfigs.find(c => c.id === newTokenConfigurationId)?.protocol === 'ssh' && (
+                  <div className="mt-2 p-2 bg-amber-950/30 border border-amber-800/50 rounded-xl text-amber-300 text-[11px] flex items-center gap-2">
+                    <Terminal className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                    <span>Protocole SSH-Payload : Le compte Dropbear et le payload d'injection sont gérés automatiquement selon le modèle administrateur.</span>
+                  </div>
+                )}
+                {availableConfigs.length === 0 && (
+                  <p className="mt-1 text-amber-300">Aucune configuration disponible. L’administrateur principal doit d’abord créer un profil dans Infrastructure.</p>
+                )}
               </div>
-
-              {newTokenProtocol === 'vless' ? (
-                <div>
-                  <label className="block text-slate-300 mb-1 font-bold">Configuration VPN associée</label>
-                  <select
-                    value={newTokenConfigurationId}
-                    onChange={(e) => setNewTokenConfigurationId(e.target.value)}
-                    className="w-full bg-[#03060e] border border-cyan-900 rounded-xl px-3 py-2 text-cyan-200"
-                    required
-                    disabled={availableConfigs.length === 0}
-                  >
-                    <option value="">Choisir une configuration…</option>
-                    {availableConfigs.map((config) => (
-                      <option key={config.id} value={config.id}>{config.name} — {config.protocol.toUpperCase()} / {config.transport.toUpperCase()} · {config.serverPort}</option>
-                    ))}
-                  </select>
-                  {availableConfigs.length === 0 && (
-                    <p className="mt-1 text-amber-300">Aucune configuration disponible. L’administrateur principal doit d’abord créer un profil dans Infrastructure.</p>
-                  )}
-                </div>
-              ) : (
-                <div className="p-3 bg-amber-950/20 border border-amber-800/60 rounded-2xl space-y-2.5">
-                  <div className="text-[11px] font-bold text-amber-300 flex items-center gap-1.5">
-                    <Terminal className="w-3.5 h-3.5 text-amber-400" />
-                    <span>Paramètres du Compte SSH Dropbear &amp; Injection</span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="block text-slate-400 mb-1 text-[10px]">Identifiant SSH</label>
-                      <input
-                        type="text"
-                        value={newSshUsername}
-                        onChange={(e) => setNewSshUsername(e.target.value.trim().toLowerCase())}
-                        className="w-full bg-[#03060e] border border-amber-900/60 rounded-xl px-2.5 py-1.5 text-amber-200 font-mono text-[11px]"
-                        placeholder="Ex: dany"
-                        required
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-slate-400 mb-1 text-[10px]">Mot de Passe SSH</label>
-                      <input
-                        type="text"
-                        value={newSshPassword}
-                        onChange={(e) => setNewSshPassword(e.target.value)}
-                        className="w-full bg-[#03060e] border border-amber-900/60 rounded-xl px-2.5 py-1.5 text-amber-200 font-mono text-[11px]"
-                        placeholder="Ex: #12345"
-                        required
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="block text-slate-400 mb-1 text-[10px]">Port WebSocket Dropbear</label>
-                    <input
-                      type="number"
-                      value={newSshPort}
-                      onChange={(e) => setNewSshPort(Number(e.target.value))}
-                      className="w-full bg-[#03060e] border border-amber-900/60 rounded-xl px-2.5 py-1.5 text-amber-300 font-mono text-[11px]"
-                      placeholder="80 ou 8880"
-                      min="1"
-                      max="65535"
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-slate-400 mb-1 text-[10px]">Payload HTTP Injection (Orange CM / Cloudfront)</label>
-                    <textarea
-                      value={newSshPayload}
-                      onChange={(e) => setNewSshPayload(e.target.value)}
-                      rows={3}
-                      className="w-full bg-[#03060e] border border-amber-900/60 rounded-xl px-2.5 py-1.5 text-amber-300 font-mono text-[10px]"
-                      required
-                    />
-                  </div>
-                </div>
-              )}
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -3454,7 +3454,7 @@ export default function App() {
                 </button>
                 <button
                   type="submit"
-                  disabled={tokenCreating || (newTokenProtocol === 'vless' && (!newTokenConfigurationId || availableConfigs.length === 0)) || (newTokenProtocol === 'ssh' && (!newSshUsername || !newSshPassword))}
+                  disabled={tokenCreating || !newTokenConfigurationId || availableConfigs.length === 0}
                   className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-black font-black rounded-xl shadow disabled:opacity-50"
                 >
                   {tokenCreating ? 'Création...' : 'Valider & Déduire'}

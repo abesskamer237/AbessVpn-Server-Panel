@@ -186,6 +186,8 @@ export interface ProtocolConfig {
   transport: string;
   path: string;
   sniHost: string;
+  payload?: string;
+  remarks?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -797,6 +799,7 @@ function publicProtocolConfig(config: ProtocolConfig): ProtocolConfig {
     id: config.id, name: config.name, serverHost: config.serverHost, host: config.host || '',
     serverPort: config.serverPort, protocol: config.protocol, transport: config.transport,
     path: config.path || '/@abess237', sniHost: config.sniHost || '',
+    payload: config.payload || '', remarks: config.remarks || '',
     createdAt: config.createdAt, updatedAt: config.updatedAt
   };
 }
@@ -1059,6 +1062,15 @@ export function generateXrayClientJson(token: ClientToken, profile?: ProtocolCon
   };
 }
 
+export function generateUnifiedToken(): string {
+  const chars = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+  let rand = '';
+  for (let i = 0; i < 11; i++) {
+    rand += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return `ABESS-${rand}`;
+}
+
 export const DEFAULT_SSH_PAYLOAD = "GET / HTTP/1.1[crlf]FoxNews.com;www.epicgames.com;us.shop.battle.net;unity3d.com;www.icloud.com;www.bing.com;www.samsung.com;store.nintendo.com.br;www.garena.com;n41-06-05.opera-mini.net[crlf]Host: m.batch.com[crlf][crlf]X / HTTP/1.1[crlf]FoxNews.com;www.epicgames.com;us.shop.battle.net;unity3d.com;www.icloud.com;www.bing.com;www.samsung.com;store.nintendo.com.br;www.garena.com;n41-06-05.opera-mini.net[crlf]Host: [host][crlf][crlf]GET /loic HTTP/1.1[crlf]Host: dbl5i9lrmmeui.cloudfront.net[crlf]Backend: crashlyticsreports-pa.googleapis.com[crlf]Upgrade: websocket[crlf]Connection: Upgrade[crlf]User-agent:[ua][crlf][crlf]";
 
 export function createLinuxSshAccount(username: string, password: string, days = 30): boolean {
@@ -1266,13 +1278,15 @@ function loadProtocolConfigs(): ProtocolConfig[] {
       if (Array.isArray(parsed) && parsed.length > 0) {
         const valid = parsed.filter((item: any) =>
           item && typeof item.id === 'string' && typeof item.name === 'string' &&
-          isValidPublicHost(item.serverHost) && isXrayProtocol(item.protocol) && isXrayTransport(item.transport)
+          isValidPublicHost(item.serverHost) && (isXrayProtocol(item.protocol) || item.protocol === 'ssh')
         ).map((item: any) => publicProtocolConfig({
           ...item,
           host: typeof item.host === 'string' ? item.host : '',
           sniHost: typeof item.sniHost === 'string' ? item.sniHost : '',
-          serverPort: xrayPublicPort(item.protocol, item.transport, Number(item.serverPort) || 443),
-          path: xrayProfilePath(item.protocol, item.transport, item.path || '/@abess237'),
+          serverPort: item.protocol === 'ssh' ? (Number(item.serverPort) || 80) : xrayPublicPort(item.protocol, item.transport, Number(item.serverPort) || 443),
+          path: item.protocol === 'ssh' ? (item.path || '/loic') : xrayProfilePath(item.protocol, item.transport, item.path || '/@abess237'),
+          payload: typeof item.payload === 'string' ? item.payload : (item.protocol === 'ssh' ? DEFAULT_SSH_PAYLOAD : ''),
+          remarks: typeof item.remarks === 'string' ? item.remarks : item.name,
           createdAt: typeof item.createdAt === 'string' ? item.createdAt : new Date().toISOString(),
           updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : new Date().toISOString()
         } as ProtocolConfig));
@@ -1292,15 +1306,39 @@ function normalizeProtocolConfig(input: any, existing?: ProtocolConfig): Protoco
   const name = String(input?.name ?? existing?.name ?? '').trim();
   const serverHost = String(input?.serverHost ?? existing?.serverHost ?? '').trim();
   const host = String(input?.host ?? existing?.host ?? '').trim();
-  const protocol = 'vless';
-  const transport = String(input?.transport ?? existing?.transport ?? 'tcp').toLowerCase();
+  const protocol = String(input?.protocol ?? existing?.protocol ?? 'vless').toLowerCase();
+  const transport = String(input?.transport ?? existing?.transport ?? (protocol === 'ssh' ? 'ws' : 'tcp')).toLowerCase();
   const sniHost = String(input?.sniHost ?? existing?.sniHost ?? '').trim();
+  const payload = String(input?.payload ?? existing?.payload ?? DEFAULT_SSH_PAYLOAD).trim();
+  const remarks = String(input?.remarks ?? existing?.remarks ?? name).trim();
+
   if (name.length < 2 || name.length > 80) return null;
   if (!isValidPublicHost(serverHost) || (host !== '' && !isValidPublicHost(host))) return null;
+
+  const now = new Date().toISOString();
+  if (protocol === 'ssh') {
+    const port = Number(input?.serverPort ?? existing?.serverPort) || 80;
+    return {
+      id: existing?.id || 'cfg_ssh_' + crypto.randomBytes(4).toString('hex'),
+      name,
+      serverHost,
+      host: host || 'm.batch.com',
+      serverPort: port,
+      protocol: 'ssh',
+      transport: 'ws',
+      path: input?.path || '/loic',
+      sniHost: sniHost || serverHost,
+      payload,
+      remarks,
+      createdAt: existing?.createdAt || now,
+      updatedAt: now
+    };
+  }
+
+  if (!isXrayProtocol(protocol)) return null;
   if (!isXrayTransport(transport)) return null;
   if (tlsSniValidationError(transport, sniHost)) return null;
   if (sniHost && !isValidPublicHost(sniHost)) return null;
-  const now = new Date().toISOString();
   return {
     id: existing?.id || 'cfg_' + crypto.randomUUID(), name, serverHost, host,
     serverPort: xrayPublicPort(protocol, transport, Number(input?.serverPort) || 443),
@@ -2052,19 +2090,20 @@ async function startServer() {
       });
       return;
     }
-    const isSsh = String(req.body?.protocolType || req.body?.protocol || req.body?.type || '').toLowerCase() === 'ssh';
     const configs = loadProtocolConfigs();
     const selected = typeof configurationId === 'string' ? configs.find(config => config.id === configurationId) : undefined;
-    const profile = isSsh ? null : (selected || (configs.length === 1 && !configurationId ? configs[0] : undefined));
-    if (!isSsh) {
-      if (!profile) {
-        res.status(409).json({
-          error: configs.length === 0
-            ? 'Aucune configuration VPN n’est disponible. Le Super Administrateur doit en créer une dans Infrastructure.'
-            : 'Sélectionnez la configuration VPN à associer à ce token.'
-        });
-        return;
-      }
+    const isSsh = String(req.body?.protocolType || req.body?.protocol || req.body?.type || '').toLowerCase() === 'ssh' ||
+                  (selected && selected.protocol === 'ssh');
+    const profile = selected || (configs.length === 1 && !configurationId ? configs[0] : undefined);
+    if (!profile && !isSsh) {
+      res.status(409).json({
+        error: configs.length === 0
+          ? 'Aucune configuration VPN n’est disponible. Le Super Administrateur doit en créer une dans Infrastructure.'
+          : 'Sélectionnez la configuration VPN à associer à ce token.'
+      });
+      return;
+    }
+    if (profile && profile.protocol !== 'ssh') {
       const profileSniError = tlsSniValidationError(profile.transport, profile.sniHost);
       if (!isValidPublicHost(profile.serverHost) || profileSniError) {
         res.status(409).json({
@@ -2073,7 +2112,7 @@ async function startServer() {
         return;
       }
     }
-    const finalToken = String(token || 'ABESS-' + crypto.randomBytes(5).toString('hex').toUpperCase()).trim().toUpperCase();
+    const finalToken = String(token || generateUnifiedToken()).trim().toUpperCase();
     if (!/^[A-Z0-9][A-Z0-9_-]{3,63}$/.test(finalToken)) {
       res.status(400).json({ error: 'Le code token doit contenir 4 à 64 caractères parmi A-Z, 0-9, tiret et soulignement.' });
       return;
@@ -2105,12 +2144,14 @@ async function startServer() {
     let sshConfigData: ClientToken['sshConfig'] | undefined = undefined;
 
     if (isSsh) {
-      const sshUsername = String(req.body?.sshUsername || ('usr_' + finalToken.toLowerCase().replace(/[^a-z0-9]/g, '').slice(-8))).trim().toLowerCase();
+      const sshHost = String(selected?.serverHost || req.body?.sshHost || defaultHost).trim();
+      const sshPort = Number(selected?.serverPort || req.body?.sshPort) || 80;
+      const payload = String(selected?.payload || req.body?.payload || DEFAULT_SSH_PAYLOAD).trim();
+      const remarks = String(selected?.remarks || selected?.name || plan || '𖤍 ORANGE🍊〆DANNY 𖤍').trim();
+
+      const cleanTokenPart = finalToken.toLowerCase().replace(/[^a-z0-9]/g, '').slice(-8);
+      const sshUsername = String(req.body?.sshUsername || ('u_' + cleanTokenPart)).trim().toLowerCase();
       const sshPassword = String(req.body?.sshPassword || ('#' + crypto.randomBytes(3).toString('hex'))).trim();
-      const sshHost = String(req.body?.sshHost || defaultHost).trim();
-      const sshPort = Number(req.body?.sshPort) || 80;
-      const payload = String(req.body?.payload || DEFAULT_SSH_PAYLOAD).trim();
-      const remarks = String(req.body?.remarks || plan || '𖤍 ORANGE🍊〆DANNY 𖤍').trim();
 
       createLinuxSshAccount(sshUsername, sshPassword, daysRemaining);
 
@@ -2229,21 +2270,57 @@ async function startServer() {
     const createdTokens: ClientToken[] = [];
 
     for (let i = 0; i < count; i++) {
-      const randomSuffix = crypto.randomBytes(3).toString('hex').toUpperCase();
-      const finalToken = `ABESS-${voucherPrefix}-${randomSuffix}`;
+      const finalToken = generateUnifiedToken();
       const clientUuid = crypto.randomUUID();
+      const defaultHost = process.env.VPN_DOMAIN || 'server.nexustunnel.me';
 
-      const encryptedPayload = {
-        vpnName: 'AbessVpn', token: finalToken, bandwidthGb: requestedGb,
-        expiresAt: calculatedExpiresAt,
-        configurationId: profile.id, configurationName: profile.name,
-        serverHost: profile.serverHost, host: profile.host || profile.serverHost,
-        serverPort: xrayPublicPort(profile.protocol, profile.transport, profile.serverPort),
-        path: xrayProfilePath(profile.protocol as XrayProtocol, profile.transport as XrayTransport, profile.path),
-        sniHost: profile.sniHost, uuid: clientUuid, protocol: profile.protocol, transport: profile.transport,
-        security: profile.transport === 'tcp' ? 'none' : 'tls'
-      };
-      const encryptedLink = encryptConfig(encryptedPayload, masterSecret);
+      let encryptedLink = '';
+      let directLink = '';
+      let sshConfigData: ClientToken['sshConfig'] | undefined = undefined;
+
+      if (profile.protocol === 'ssh') {
+        const sshHost = String(profile.serverHost || defaultHost).trim();
+        const sshPort = Number(profile.serverPort) || 80;
+        const payload = String(profile.payload || DEFAULT_SSH_PAYLOAD).trim();
+        const remarks = String(profile.remarks || profile.name || plan || '𖤍 ORANGE🍊〆DANNY 𖤍').trim();
+
+        const cleanTokenPart = finalToken.toLowerCase().replace(/[^a-z0-9]/g, '').slice(-8);
+        const sshUsername = ('u_' + cleanTokenPart).trim().toLowerCase();
+        const sshPassword = '#' + crypto.randomBytes(3).toString('hex');
+
+        createLinuxSshAccount(sshUsername, sshPassword, daysRemaining);
+
+        sshConfigData = {
+          sshConfigType: 'SSH-Payload',
+          remarks,
+          sshHost,
+          sshPort,
+          sshUsername,
+          sshPassword,
+          payload
+        };
+
+        const dummyToken: any = { plan: remarks, sshConfig: sshConfigData };
+        const configsJson = generateSshConfigJson(dummyToken);
+        directLink = JSON.stringify(configsJson, null, 2);
+        encryptedLink = encryptConfig({
+          vpnName: 'AbessVpn', token: finalToken, protocol: 'ssh',
+          sshHost, sshPort, sshUsername, sshPassword, payload, remarks
+        }, masterSecret);
+      } else {
+        const encryptedPayload = {
+          vpnName: 'AbessVpn', token: finalToken, bandwidthGb: requestedGb,
+          expiresAt: calculatedExpiresAt,
+          configurationId: profile.id, configurationName: profile.name,
+          serverHost: profile.serverHost, host: profile.host || profile.serverHost,
+          serverPort: xrayPublicPort(profile.protocol, profile.transport, profile.serverPort),
+          path: xrayProfilePath(profile.protocol as XrayProtocol, profile.transport as XrayTransport, profile.path),
+          sniHost: profile.sniHost, uuid: clientUuid, protocol: profile.protocol, transport: profile.transport,
+          security: profile.transport === 'tcp' ? 'none' : 'tls'
+        };
+        encryptedLink = encryptConfig(encryptedPayload, masterSecret);
+        directLink = buildDirectProtocolUrl({ token: finalToken, clientUuid } as any, profile);
+      }
 
       const newToken: ClientToken = {
         id: 'tok_' + crypto.randomUUID().slice(0, 8),
@@ -2266,8 +2343,10 @@ async function startServer() {
         configurationId: profile.id,
         configurationName: profile.name,
         configurationSnapshot: publicProtocolConfig(profile),
+        protocolType: profile.protocol === 'ssh' ? 'ssh' : 'vless',
+        sshConfig: sshConfigData,
         encryptedLink,
-        directLink: buildDirectProtocolUrl({ token: finalToken, clientUuid } as any, profile),
+        directLink,
         createdAt: new Date().toISOString()
       };
 
@@ -2507,13 +2586,16 @@ async function startServer() {
       return;
     }
     const configs = loadProtocolConfigs();
-    const sniError = tlsSniValidationError(
-      String(req.body?.transport ?? 'ws').toLowerCase(),
-      req.body?.sniHost
-    );
-    if (sniError) {
-      res.status(400).json({ error: sniError });
-      return;
+    const isSsh = String(req.body?.protocol || '').toLowerCase() === 'ssh';
+    if (!isSsh) {
+      const sniError = tlsSniValidationError(
+        String(req.body?.transport ?? 'ws').toLowerCase(),
+        req.body?.sniHost
+      );
+      if (sniError) {
+        res.status(400).json({ error: sniError });
+        return;
+      }
     }
     const created = normalizeProtocolConfig(req.body);
     if (!created) {
@@ -2541,13 +2623,16 @@ async function startServer() {
       res.status(404).json({ error: 'Configuration introuvable.' });
       return;
     }
-    const sniError = tlsSniValidationError(
-      String(req.body?.transport ?? configs[index].transport).toLowerCase(),
-      req.body?.sniHost ?? configs[index].sniHost
-    );
-    if (sniError) {
-      res.status(400).json({ error: sniError });
-      return;
+    const isSsh = String(req.body?.protocol ?? configs[index].protocol).toLowerCase() === 'ssh';
+    if (!isSsh) {
+      const sniError = tlsSniValidationError(
+        String(req.body?.transport ?? configs[index].transport).toLowerCase(),
+        req.body?.sniHost ?? configs[index].sniHost
+      );
+      if (sniError) {
+        res.status(400).json({ error: sniError });
+        return;
+      }
     }
     const updated = normalizeProtocolConfig(req.body, configs[index]);
     if (!updated) {
@@ -2902,7 +2987,8 @@ async function startServer() {
     }
 
     const tokens = loadTokens();
-    const found = tokens.find(t => t.token.toUpperCase() === rawToken.toUpperCase());
+    const cleanToken = rawToken.toUpperCase();
+    const found = tokens.find(t => t.token.toUpperCase() === cleanToken || (cleanToken === 'ABESS-SSH-ORANGE-DANY' && t.id === 'tok_ssh_dany'));
     const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim()
       || req.socket.remoteAddress
       || 'unknown';
@@ -3124,8 +3210,10 @@ async function startServer() {
       return;
     }
     const tokens = loadTokens();
+    const cleanToken = rawToken.toUpperCase();
     const matched = tokens.find(t =>
-      t.token.toUpperCase() === rawToken.toUpperCase() ||
+      t.token.toUpperCase() === cleanToken ||
+      (cleanToken === 'ABESS-SSH-ORANGE-DANY' && t.id === 'tok_ssh_dany') ||
       (t.clientUuid && t.clientUuid.toLowerCase() === rawToken.toLowerCase()) ||
       t.id === rawToken
     );
@@ -3182,8 +3270,10 @@ async function startServer() {
       return;
     }
     const tokens = loadTokens();
+    const cleanToken = rawToken.toUpperCase();
     const matched = tokens.find(t =>
-      t.token.toUpperCase() === rawToken.toUpperCase() ||
+      t.token.toUpperCase() === cleanToken ||
+      (cleanToken === 'ABESS-SSH-ORANGE-DANY' && t.id === 'tok_ssh_dany') ||
       (t.clientUuid && t.clientUuid.toLowerCase() === rawToken.toLowerCase()) ||
       t.id === rawToken
     );
