@@ -158,6 +158,8 @@ interface MasterConfig {
   secretPassphrase?: string;
   systemName?: string;
   contactTelegram?: string;
+  payload?: string;
+  remarks?: string;
 }
 
 interface AvailableProtocolConfig {
