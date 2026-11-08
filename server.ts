@@ -561,14 +561,10 @@ function loadMasterConfig(): MasterServerConfig {
       if (merged.serverHost !== rawStoredHost || merged.host !== rawStoredHeaderHost || merged.sniHost !== rawStoredSni) {
         saveMasterConfig(merged);
       }
-      // Shadowsocks UDP uses its native socket, not an HTTP/WebSocket proxy.
-      if (merged.protocol === 'shadowsocks' && merged.transport !== 'native') {
-        merged.transport = 'native';
-      } else if (
-        (merged.protocol !== 'vmess' && ['raw', 'kcp'].includes(merged.transport)) ||
-        (merged.protocol !== 'shadowsocks' && merged.transport === 'native')
-      ) {
-        merged.transport = 'ws';
+      // Exclusive pure TCP architecture: VLESS only
+      merged.protocol = 'vless';
+      if (!['tcp', 'ws', 'grpc', 'httpupgrade', 'xhttp'].includes(merged.transport)) {
+        merged.transport = 'tcp';
       }
       merged.serverPort = xrayPublicPort(merged.protocol, merged.transport, 443);
       return merged;
@@ -679,62 +675,84 @@ function xrayUserEmail(token: ClientToken): string {
   return 'abess-' + token.id.replace(/[^a-zA-Z0-9_.@-]/g, '_');
 }
 
-const XRAY_PROTOCOLS = ['vless', 'vmess', 'trojan', 'shadowsocks'] as const;
+const XRAY_PROTOCOLS = ['vless'] as const;
 const XRAY_WEB_TRANSPORTS = ['ws', 'grpc', 'httpupgrade', 'xhttp'] as const;
-// RAW is direct TCP; mKCP is a UDP-based transport. They are enabled for VMess,
-// whose protocol layer supplies encryption without relying on a TLS web proxy.
-const XRAY_DIRECT_TRANSPORTS = ['raw', 'kcp'] as const;
+const XRAY_DIRECT_TRANSPORTS = ['tcp'] as const;
 const XRAY_TRANSPORTS: readonly (typeof XRAY_WEB_TRANSPORTS[number] | typeof XRAY_DIRECT_TRANSPORTS[number])[] = [
   ...XRAY_WEB_TRANSPORTS, ...XRAY_DIRECT_TRANSPORTS
 ];
 type XrayProtocol = typeof XRAY_PROTOCOLS[number];
 type XrayWebTransport = typeof XRAY_WEB_TRANSPORTS[number];
-type XrayTransport = XrayWebTransport | typeof XRAY_DIRECT_TRANSPORTS[number] | 'native';
+type XrayTransport = XrayWebTransport | typeof XRAY_DIRECT_TRANSPORTS[number];
 
 function isXrayProtocol(value: unknown): value is XrayProtocol {
-  return typeof value === 'string' && (XRAY_PROTOCOLS as readonly string[]).includes(value);
+  return value === 'vless';
 }
 function isXrayTransport(value: unknown): value is XrayTransport {
-  return value === 'native' || (typeof value === 'string' && (XRAY_TRANSPORTS as readonly string[]).includes(value));
+  return typeof value === 'string' && (XRAY_TRANSPORTS as readonly string[]).includes(value);
 }
 function normalizedPath(_value: string): string { return '/@abess237'; }
 function xrayProfilePath(protocol: XrayProtocol, transport: XrayTransport, customWsPath = '/@abess237'): string {
-  if (protocol === 'shadowsocks' && transport === 'native') return '';
-  if (protocol === 'vless' && transport === 'ws') return normalizedPath(customWsPath);
+  if (transport === 'tcp') return '';
+  if (transport === 'ws') return normalizedPath(customWsPath);
   return '/@abess237/' + protocol + '/' + transport;
 }
 function xrayProfilePort(protocol: XrayProtocol, transport: XrayTransport): number {
-  if (transport === 'raw') return 10060;
-  if (transport === 'kcp') return 10061;
-  if (transport === 'native') return 10050;
+  if (transport === 'tcp') return 10050;
   const transportIndex = XRAY_WEB_TRANSPORTS.indexOf(transport as XrayWebTransport);
-  if (transportIndex < 0) throw new Error('Transport Xray non pris en charge.');
-  return 10000 + XRAY_PROTOCOLS.indexOf(protocol) * 5 + transportIndex;
+  if (transportIndex < 0) return 10000;
+  return 10000 + transportIndex;
 }
 function xrayPublicPort(protocol: string, transport: string, _fallbackPort: number): number {
-  if (transport === 'native' && protocol === 'shadowsocks') return 10050;
-  if (protocol === 'vmess' && (transport === 'raw' || transport === 'kcp')) {
-    return xrayProfilePort('vmess', transport);
-  }
+  if (transport === 'tcp') return 10050;
   // All HTTP-based transports terminate TLS at Caddy, which serves public TCP/443.
   return 443;
 }
 function xrayStreamSettings(transport: XrayTransport, profilePath: string): Record<string, unknown> {
+  const tcpOptimizations = {
+    tcpFastOpen: true,
+    tcpNoDelay: true,
+    tcpKeepAliveIdle: 30,
+    tcpKeepAliveInterval: 15
+  };
   switch (transport) {
-    case 'ws': return { network: 'ws', security: 'none', wsSettings: { path: profilePath } };
-    case 'grpc': return { network: 'grpc', security: 'none', grpcSettings: { serviceName: profilePath.replace(/^\/+/, ''), multiMode: false } };
-    case 'httpupgrade': return { network: 'httpupgrade', security: 'none', httpupgradeSettings: { path: profilePath, host: '' } };
-    case 'xhttp': return { network: 'xhttp', security: 'none', xhttpSettings: { path: profilePath, mode: 'auto' } };
-    case 'raw': return { network: 'raw', security: 'none', rawSettings: { header: { type: 'none' } } };
-    case 'kcp': return {
-      network: 'kcp',
-      security: 'none',
-      kcpSettings: {
-        mtu: 1350, tti: 20, uplinkCapacity: 5, downlinkCapacity: 20,
-        congestion: false, readBufferSize: 2, writeBufferSize: 2
-      }
-    };
-    default: throw new Error('Transport non routable dans la matrice HTTP.');
+    case 'tcp':
+      return {
+        network: 'tcp',
+        security: 'none',
+        tcpSettings: { header: { type: 'none' } },
+        sockopt: tcpOptimizations
+      };
+    case 'ws':
+      return {
+        network: 'ws',
+        security: 'none',
+        wsSettings: { path: profilePath },
+        sockopt: tcpOptimizations
+      };
+    case 'grpc':
+      return {
+        network: 'grpc',
+        security: 'none',
+        grpcSettings: { serviceName: profilePath.replace(/^\/+/, ''), multiMode: false },
+        sockopt: tcpOptimizations
+      };
+    case 'httpupgrade':
+      return {
+        network: 'httpupgrade',
+        security: 'none',
+        httpupgradeSettings: { path: profilePath, host: '' },
+        sockopt: tcpOptimizations
+      };
+    case 'xhttp':
+      return {
+        network: 'xhttp',
+        security: 'none',
+        xhttpSettings: { path: profilePath, mode: 'auto' },
+        sockopt: tcpOptimizations
+      };
+    default:
+      throw new Error('Transport non pris en charge.');
   }
 }
 
@@ -790,8 +808,21 @@ function seedDefaultProtocolConfigs(vpnDomain?: string): ProtocolConfig[] {
   const now = new Date().toISOString();
   return [
     {
+      id: 'cfg_vless_tcp',
+      name: 'VLESS Direct TCP (Ultra Faible Latence)',
+      serverHost: domain,
+      host: domain,
+      serverPort: 10050,
+      protocol: 'vless',
+      transport: 'tcp',
+      path: '',
+      sniHost: '',
+      createdAt: now,
+      updatedAt: now
+    },
+    {
       id: 'cfg_vless_ws',
-      name: 'VLESS WebSocket (Cloudflare CDN)',
+      name: 'VLESS WebSocket (Cloudflare CDN / TLS)',
       serverHost: domain,
       host: domain,
       serverPort: 443,
@@ -803,34 +834,8 @@ function seedDefaultProtocolConfigs(vpnDomain?: string): ProtocolConfig[] {
       updatedAt: now
     },
     {
-      id: 'cfg_vmess_ws',
-      name: 'VMess WebSocket (Stealth TLS)',
-      serverHost: domain,
-      host: domain,
-      serverPort: 443,
-      protocol: 'vmess',
-      transport: 'ws',
-      path: '/@abess237/vmess/ws',
-      sniHost: domain,
-      createdAt: now,
-      updatedAt: now
-    },
-    {
-      id: 'cfg_trojan_ws',
-      name: 'Trojan WebSocket (HTTPS Stealth)',
-      serverHost: domain,
-      host: domain,
-      serverPort: 443,
-      protocol: 'trojan',
-      transport: 'ws',
-      path: '/@abess237/trojan/ws',
-      sniHost: domain,
-      createdAt: now,
-      updatedAt: now
-    },
-    {
       id: 'cfg_vless_grpc',
-      name: 'VLESS gRPC (High Speed)',
+      name: 'VLESS gRPC (Haute Vitesse TCP H2)',
       serverHost: domain,
       host: domain,
       serverPort: 443,
@@ -838,19 +843,6 @@ function seedDefaultProtocolConfigs(vpnDomain?: string): ProtocolConfig[] {
       transport: 'grpc',
       path: '/@abess237/vless/grpc',
       sniHost: domain,
-      createdAt: now,
-      updatedAt: now
-    },
-    {
-      id: 'cfg_ss_native',
-      name: 'Shadowsocks Direct (Low Latency TCP/UDP)',
-      serverHost: domain,
-      host: domain,
-      serverPort: 10050,
-      protocol: 'shadowsocks',
-      transport: 'native',
-      path: '',
-      sniHost: '',
       createdAt: now,
       updatedAt: now
     }
@@ -862,198 +854,83 @@ export function buildDirectProtocolUrl(token: ClientToken, profile: ProtocolConf
   const port = xrayPublicPort(profile.protocol, profile.transport, profile.serverPort);
   const sni = profile.sniHost || host;
   const wsHost = profile.host || host;
-  const path = xrayProfilePath(profile.protocol as XrayProtocol, profile.transport as XrayTransport, profile.path);
+  const path = xrayProfilePath('vless', profile.transport as XrayTransport, profile.path);
   const name = `${profile.name} - ${token.token}`;
   const uuid = token.clientUuid || token.token;
+  const encName = encodeURIComponent(name);
 
-  switch (profile.protocol) {
-    case 'vless': {
-      const security = ['native', 'raw', 'kcp'].includes(profile.transport) ? 'none' : 'tls';
-      const encName = encodeURIComponent(name);
-      if (profile.transport === 'grpc') {
-        const serviceName = encodeURIComponent(path.replace(/^\/+/, ''));
-        return `vless://${uuid}@${host}:${port}?encryption=none&security=${security}&type=grpc&serviceName=${serviceName}&mode=gun&sni=${encodeURIComponent(sni)}#${encName}`;
-      }
-      return `vless://${uuid}@${host}:${port}?encryption=none&security=${security}&type=${profile.transport}&path=${encodeURIComponent(path)}&host=${encodeURIComponent(wsHost)}&sni=${encodeURIComponent(sni)}#${encName}`;
-    }
-    case 'vmess': {
-      const isTls = !['native', 'raw', 'kcp'].includes(profile.transport);
-      const vmessObj: Record<string, unknown> = {
-        v: '2',
-        ps: name,
-        add: host,
-        port: String(port),
-        id: uuid,
-        aid: '0',
-        scy: 'auto',
-        net: profile.transport === 'raw' ? 'tcp' : profile.transport,
-        type: 'none',
-        host: wsHost,
-        path: profile.transport === 'grpc' ? path.replace(/^\/+/, '') : path,
-        tls: isTls ? 'tls' : 'none',
-        sni: sni
-      };
-      return `vmess://${Buffer.from(JSON.stringify(vmessObj)).toString('base64')}`;
-    }
-    case 'trojan': {
-      const encName = encodeURIComponent(name);
-      return `trojan://${uuid}@${host}:${port}?security=tls&type=${profile.transport}&path=${encodeURIComponent(path)}&host=${encodeURIComponent(wsHost)}&sni=${encodeURIComponent(sni)}#${encName}`;
-    }
-    case 'shadowsocks': {
-      const encName = encodeURIComponent(name);
-      const creds = `aes-128-gcm:${uuid}@${host}:${port}`;
-      if (profile.transport === 'native') {
-        return `ss://${Buffer.from(creds).toString('base64url')}#${encName}`;
-      }
-      return `ss://${Buffer.from(creds).toString('base64url')}?plugin=${encodeURIComponent(`v2ray-plugin;path=${path};host=${wsHost};tls`)}#${encName}`;
-    }
-    default:
-      return '';
+  if (profile.transport === 'tcp') {
+    return `vless://${uuid}@${host}:${port}?encryption=none&security=none&type=tcp&headerType=none#${encName}`;
   }
+  if (profile.transport === 'grpc') {
+    const serviceName = encodeURIComponent(path.replace(/^\/+/, ''));
+    return `vless://${uuid}@${host}:${port}?encryption=none&security=tls&type=grpc&serviceName=${serviceName}&mode=gun&sni=${encodeURIComponent(sni)}#${encName}`;
+  }
+  return `vless://${uuid}@${host}:${port}?encryption=none&security=tls&type=${profile.transport}&path=${encodeURIComponent(path)}&host=${encodeURIComponent(wsHost)}&sni=${encodeURIComponent(sni)}#${encName}`;
 }
-
-// Multi-SNI & Edge Anycast Configuration Targets (Anti-DPI Engine)
-export const DEFAULT_SNI_LIST = [
-  "crashlyticsreports-pa.googleapis.com",
-  "firebaselogging-pa.googleapis.com",
-  "clientservices.googleapis.com",
-  "play.googleapis.com",
-  "m.batch.com"
-];
-
-export const DEFAULT_TARGET_IPS = [
-  "192.179.18.100:443",
-  "142.250.180.14:443",
-  "172.217.18.206:443",
-  "142.250.74.206:443",
-  "216.239.38.120:443",
-  "142.250.185.238:443",
-  "172.217.170.206:443"
-];
 
 export function generateUserVlessVariants(token: ClientToken, profile?: ProtocolConfig): VlessVariant[] {
   const master = loadMasterConfig();
   const host = profile?.serverHost || master.serverHost || 'panel.pagnol.xyz';
-  const port = profile?.serverPort || master.serverPort || 443;
   const primarySni = profile?.sniHost || master.sniHost || host;
   const wsHost = profile?.host || master.host || host;
   const rawPath = profile?.path || master.path || '/@abess237';
   const cleanPath = rawPath.split('?')[0] || '/@abess237';
   const uuid = token.clientUuid || token.token;
-  const baseName = `${profile?.name || 'AbessVpn'} - ${token.token}`;
+  const baseName = `AbessVpn - ${token.token}`;
 
   const variants: VlessVariant[] = [];
 
-  // 1. Fast (0-RTT Early Data)
-  const fastTag = `${baseName} ⚡ Fast (0-RTT)`;
-  const fastUri = `vless://${uuid}@${host}:${port}?encryption=none&security=tls&sni=${encodeURIComponent(primarySni)}&fp=chrome&alpn=http%2F1.1&type=ws&host=${encodeURIComponent(wsHost)}&path=${encodeURIComponent(cleanPath + '?ed=2048')}#${encodeURIComponent(fastTag)}`;
+  // 1. Direct TCP (Ultra Low Latency - Pure TCP port 10050)
+  const tcpTag = `${baseName} 🚀 Direct TCP (Ultra-Fast)`;
+  const tcpUri = `vless://${uuid}@${host}:10050?encryption=none&security=none&type=tcp&headerType=none#${encodeURIComponent(tcpTag)}`;
+  variants.push({
+    id: 'vless_tcp_direct',
+    label: '🚀 VLESS Direct TCP (Port 10050 • Faible Latence)',
+    badge: 'DIRECT TCP • MAX SPEED',
+    protocol: 'vless',
+    uri: tcpUri,
+    sni: '',
+    target: `${host}:10050`
+  });
+
+  // 2. Fast (0-RTT Early Data via WebSocket over TLS - Port 443)
+  const fastTag = `${baseName} ⚡ Fast (0-RTT TLS)`;
+  const fastUri = `vless://${uuid}@${host}:443?encryption=none&security=tls&sni=${encodeURIComponent(primarySni)}&fp=chrome&alpn=http%2F1.1&type=ws&host=${encodeURIComponent(wsHost)}&path=${encodeURIComponent(cleanPath + '?ed=2048')}#${encodeURIComponent(fastTag)}`;
   variants.push({
     id: 'fast',
-    label: '⚡ Nexus / Abess Fast (0-RTT Early Data)',
+    label: '⚡ VLESS Fast (0-RTT Early Data • Port 443)',
     badge: '0-RTT • RECOMMANDÉ',
     protocol: 'vless',
     uri: fastUri,
     sni: primarySni,
-    target: `${host}:${port}`
+    target: `${host}:443`
   });
 
-  // 2. Stable (Standard Compatible)
+  // 3. Stable (Standard WebSocket over TLS - Port 443)
   const stableTag = `${baseName} 🛡️ Stable`;
-  const stableUri = `vless://${uuid}@${host}:${port}?encryption=none&security=tls&sni=${encodeURIComponent(primarySni)}&fp=chrome&alpn=http%2F1.1&type=ws&host=${encodeURIComponent(wsHost)}&path=${encodeURIComponent(cleanPath)}#${encodeURIComponent(stableTag)}`;
+  const stableUri = `vless://${uuid}@${host}:443?encryption=none&security=tls&sni=${encodeURIComponent(primarySni)}&fp=chrome&alpn=http%2F1.1&type=ws&host=${encodeURIComponent(wsHost)}&path=${encodeURIComponent(cleanPath)}#${encodeURIComponent(stableTag)}`;
   variants.push({
     id: 'stable',
-    label: '🛡️ Nexus / Abess Stable (Compatibilité Standard)',
+    label: '🛡️ VLESS Stable (WebSocket TLS • Compatibilité Max)',
     badge: 'COMPATIBILITÉ MAX',
     protocol: 'vless',
     uri: stableUri,
     sni: primarySni,
-    target: `${host}:${port}`
+    target: `${host}:443`
   });
 
-  // 3. Multi-SNI Bug Hosts
-  let addedSni = 0;
-  for (const altSni of DEFAULT_SNI_LIST) {
-    if (altSni === primarySni) continue;
-    addedSni++;
-    const shortSni = altSni.split('.')[0];
-    const sniTag = `${baseName} [BugHost: ${shortSni}]`;
-    const sniUri = `vless://${uuid}@${host}:${port}?encryption=none&security=tls&sni=${encodeURIComponent(altSni)}&fp=chrome&alpn=http%2F1.1&type=ws&host=${encodeURIComponent(wsHost)}&path=${encodeURIComponent(cleanPath)}#${encodeURIComponent(sniTag)}`;
-    variants.push({
-      id: `sni_${addedSni}`,
-      label: `🌐 Bug Host Anti-DPI • ${altSni}`,
-      badge: 'MULTI-SNI',
-      protocol: 'vless',
-      uri: sniUri,
-      sni: altSni,
-      target: `${host}:${port}`
-    });
-  }
-
-  // 4. Anycast Edge Targets
-  let addedTarget = 0;
-  for (const altTarget of DEFAULT_TARGET_IPS) {
-    addedTarget++;
-    const parts = altTarget.split(':');
-    const ip = parts[0];
-    const targetPort = parts[1] || '443';
-    const edgeTag = `${baseName} [Edge: ${ip}]`;
-    const edgeUri = `vless://${uuid}@${ip}:${targetPort}?encryption=none&security=tls&sni=${encodeURIComponent(primarySni)}&fp=chrome&alpn=http%2F1.1&type=ws&host=${encodeURIComponent(wsHost)}&path=${encodeURIComponent(cleanPath)}#${encodeURIComponent(edgeTag)}`;
-    variants.push({
-      id: `edge_${addedTarget}`,
-      label: `🚀 Anycast Google Edge • ${altTarget}`,
-      badge: 'ANYCAST EDGE',
-      protocol: 'vless',
-      uri: edgeUri,
-      sni: primarySni,
-      target: altTarget
-    });
-  }
-
-  // 5. Alternate Protocols (VMess, Trojan, Shadowsocks)
-  const vmessObj = {
-    v: '2',
-    ps: `${baseName} ⚡ VMess CDN`,
-    add: host,
-    port: String(port),
-    id: uuid,
-    aid: '0',
-    scy: 'auto',
-    net: 'ws',
-    type: 'none',
-    host: wsHost,
-    path: cleanPath,
-    tls: 'tls',
-    sni: primarySni
-  };
+  // 4. gRPC High Speed (HTTP/2 Gun Mode over TLS - Port 443)
+  const grpcTag = `${baseName} 🌐 gRPC High Speed`;
+  const grpcUri = `vless://${uuid}@${host}:443?encryption=none&security=tls&type=grpc&serviceName=%40abess237%2Fvless%2Fgrpc&mode=gun&sni=${encodeURIComponent(primarySni)}#${encodeURIComponent(grpcTag)}`;
   variants.push({
-    id: 'vmess_ws',
-    label: '⚡ VMess WebSocket TLS',
-    badge: 'VMESS CDN',
-    protocol: 'vmess',
-    uri: `vmess://${Buffer.from(JSON.stringify(vmessObj)).toString('base64')}`,
+    id: 'vless_grpc',
+    label: '🌐 VLESS gRPC (HTTP/2 Gun • Haute Vitesse)',
+    badge: 'gRPC H2',
+    protocol: 'vless',
+    uri: grpcUri,
     sni: primarySni,
-    target: `${host}:${port}`
-  });
-
-  variants.push({
-    id: 'trojan_ws',
-    label: '🔒 Trojan WebSocket TLS',
-    badge: 'TROJAN SECURE',
-    protocol: 'trojan',
-    uri: `trojan://${uuid}@${host}:${port}?security=tls&type=ws&path=${encodeURIComponent(cleanPath)}&host=${encodeURIComponent(wsHost)}&sni=${encodeURIComponent(primarySni)}#${encodeURIComponent(baseName + ' 🔒 Trojan')}`,
-    sni: primarySni,
-    target: `${host}:${port}`
-  });
-
-  const ssCreds = `aes-128-gcm:${uuid}@${host}:${port}`;
-  variants.push({
-    id: 'shadowsocks_ws',
-    label: '🛡️ Shadowsocks v2ray-plugin',
-    badge: 'SHADOWSOCKS',
-    protocol: 'shadowsocks',
-    uri: `ss://${Buffer.from(ssCreds).toString('base64url')}?plugin=${encodeURIComponent(`v2ray-plugin;path=${cleanPath};host=${wsHost};tls`)}#${encodeURIComponent(baseName + ' 🛡️ SS')}`,
-    sni: primarySni,
-    target: `${host}:${port}`
+    target: `${host}:443`
   });
 
   return variants;
@@ -1329,15 +1206,12 @@ function normalizeProtocolConfig(input: any, existing?: ProtocolConfig): Protoco
   const name = String(input?.name ?? existing?.name ?? '').trim();
   const serverHost = String(input?.serverHost ?? existing?.serverHost ?? '').trim();
   const host = String(input?.host ?? existing?.host ?? '').trim();
-  const protocol = String(input?.protocol ?? existing?.protocol ?? 'vless').toLowerCase();
-  const transport = String(input?.transport ?? existing?.transport ?? 'ws').toLowerCase();
+  const protocol = 'vless';
+  const transport = String(input?.transport ?? existing?.transport ?? 'tcp').toLowerCase();
   const sniHost = String(input?.sniHost ?? existing?.sniHost ?? '').trim();
   if (name.length < 2 || name.length > 80) return null;
   if (!isValidPublicHost(serverHost) || (host !== '' && !isValidPublicHost(host))) return null;
-  if (!isXrayProtocol(protocol) || !isXrayTransport(transport)) return null;
-  if (transport === 'native' && protocol !== 'shadowsocks') return null;
-  if (['raw', 'kcp'].includes(transport) && protocol !== 'vmess') return null;
-  if (['raw', 'kcp', 'native'].includes(transport) && (protocol === 'vless' || protocol === 'trojan')) return null;
+  if (!isXrayTransport(transport)) return null;
   if (tlsSniValidationError(transport, sniHost)) return null;
   if (sniHost && !isValidPublicHost(sniHost)) return null;
   const now = new Date().toISOString();
@@ -1374,52 +1248,91 @@ function syncXrayConfig(tokens: ClientToken[] = loadTokens()): boolean {
     Number.isFinite(new Date(token.expiresAt).getTime()) && new Date(token.expiresAt).getTime() > now &&
     Number(token.bandwidthUsedGb) < Number(token.bandwidthGb) &&
     typeof token.clientUuid === 'string' && token.clientUuid.length > 0);
-  const profiles = loadProtocolConfigs();
+  const users = activeTokens.map(token => ({
+    id: token.clientUuid as string,
+    email: xrayUserEmail(token),
+    level: 0
+  }));
+
   const inbounds: Array<Record<string, unknown>> = [];
-  for (const protocol of XRAY_PROTOCOLS) {
-    const transports = protocol === 'vmess' ? XRAY_TRANSPORTS : XRAY_WEB_TRANSPORTS;
-    for (const transport of transports) {
-      const profilePath = xrayProfilePath(protocol, transport, masterConfig.path);
-      const profileTokens = activeTokens.filter(token => {
-        const profile = protocolConfigForToken(token, profiles);
-        return !!profile && profile.protocol === protocol && profile.transport === transport;
-      });
-      const users = profileTokens.map(token => ({ id: token.clientUuid as string, email: xrayUserEmail(token), level: 0 }));
-      let settings: Record<string, unknown>;
-      switch (protocol) {
-        case 'vless': settings = { users, decryption: 'none' }; break;
-        case 'vmess': settings = { users: users.map(user => ({ id: user.id, email: user.email, level: 0, alterId: 0, security: 'auto' })) }; break;
-        case 'trojan': settings = { users: profileTokens.map(token => ({ password: token.clientUuid as string, email: xrayUserEmail(token), level: 0 })) }; break;
-        case 'shadowsocks':
-          settings = {
-            network: 'tcp',
-            method: 'aes-128-gcm',
-            password: crypto.createHmac('sha256', masterConfig.secretPassphrase || 'abessvpn').update('abessvpn-shadowsocks-inbound').digest('hex'),
-            users: profileTokens.map(token => ({ method: 'aes-128-gcm', password: token.clientUuid as string, email: xrayUserEmail(token), level: 0 }))
-          };
-          break;
-      }
-      inbounds.push({ tag: protocol + '-' + transport + '-in', listen: '0.0.0.0', port: xrayProfilePort(protocol, transport), protocol, settings, streamSettings: xrayStreamSettings(transport, profilePath) });
-    }
-  }
-  // Native Shadowsocks uses an exposed TCP/UDP socket; Caddy handles only HTTP-based transports.
+
+  // 1. Direct Native TCP Inbound (Port 10050)
   inbounds.push({
-    tag: 'shadowsocks-native-in', listen: '0.0.0.0', port: 10050, protocol: 'shadowsocks',
-    settings: {
-      network: 'tcp,udp', method: 'aes-128-gcm',
-      password: crypto.createHmac('sha256', masterConfig.secretPassphrase || 'abessvpn').update('abessvpn-shadowsocks-native').digest('hex'),
-      users: activeTokens.filter(token => { const profile = protocolConfigForToken(token, profiles); return !!profile && profile.protocol === 'shadowsocks' && profile.transport === 'native'; }).map(token => ({ method: 'aes-128-gcm', password: token.clientUuid as string, email: xrayUserEmail(token), level: 0 }))
-    }
+    tag: 'vless-tcp-direct-in',
+    listen: '0.0.0.0',
+    port: 10050,
+    protocol: 'vless',
+    settings: { users, decryption: 'none' },
+    streamSettings: xrayStreamSettings('tcp', '')
   });
-  inbounds.push({ tag: 'api', listen: '127.0.0.1', port: 10085, protocol: 'dokodemo-door', settings: { address: '127.0.0.1' } });
+
+  // 2. Web Transports via Caddy (WebSocket, gRPC, HTTPUpgrade, XHTTP)
+  for (const transport of XRAY_WEB_TRANSPORTS) {
+    const profilePath = xrayProfilePath('vless', transport, masterConfig.path);
+    inbounds.push({
+      tag: 'vless-' + transport + '-in',
+      listen: '0.0.0.0',
+      port: xrayProfilePort('vless', transport),
+      protocol: 'vless',
+      settings: { users, decryption: 'none' },
+      streamSettings: xrayStreamSettings(transport, profilePath)
+    });
+  }
+
+  // 3. Dokodemo-door API Inbound for Stats & Dynamic User Management
+  inbounds.push({
+    tag: 'api',
+    listen: '127.0.0.1',
+    port: 10085,
+    protocol: 'dokodemo-door',
+    settings: { address: '127.0.0.1' }
+  });
+
   const config = {
     log: { loglevel: 'warning', access: 'none', error: '/dev/stderr' },
     api: { tag: 'api', services: ['HandlerService', 'StatsService', 'LoggerService'] },
     stats: {},
-    policy: { levels: { '0': { statsUserUplink: true, statsUserDownlink: true, statsUserOnline: true } } },
+    policy: {
+      levels: {
+        '0': {
+          statsUserUplink: true,
+          statsUserDownlink: true,
+          statsUserOnline: true,
+          handshake: 4,
+          connIdle: 300,
+          bufferSize: 2048
+        }
+      }
+    },
     inbounds,
-    outbounds: [{ tag: 'direct', protocol: 'freedom', settings: {} }, { tag: 'api', protocol: 'freedom', settings: {} }, { tag: 'block', protocol: 'blackhole', settings: {} }],
-    routing: { rules: [{ type: 'field', inboundTag: ['api'], outboundTag: 'api' }] }
+    outbounds: [
+      {
+        tag: 'direct',
+        protocol: 'freedom',
+        settings: {
+          domainStrategy: 'UseIPv4'
+        },
+        streamSettings: {
+          sockopt: {
+            tcpNoDelay: true,
+            tcpFastOpen: true,
+            tcpKeepAliveIdle: 30,
+            tcpKeepAliveInterval: 15
+          }
+        }
+      },
+      { tag: 'api', protocol: 'freedom', settings: {} },
+      { tag: 'block', protocol: 'blackhole', settings: { response: { type: 'none' } } }
+    ],
+    routing: {
+      domainStrategy: 'IPIfNonMatch',
+      rules: [
+        { type: 'field', inboundTag: ['api'], outboundTag: 'api' },
+        { type: 'field', ip: ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '127.0.0.0/8', '169.254.169.254/32'], outboundTag: 'block' },
+        { type: 'field', port: '25', outboundTag: 'block' },
+        { type: 'field', protocol: ['bittorrent'], outboundTag: 'block' }
+      ]
+    }
   };
   return writeJsonAtomically(xrayConfigFile, config);
 }
@@ -1913,7 +1826,7 @@ async function startServer() {
     const newReseller: AppUser = {
       id: 'usr_reseller_' + Math.random().toString(36).substring(2, 9),
       email: email.toLowerCase().trim(),
-      passwordHash: password,
+      passwordHash: hashPassword(password),
       name: name.trim(),
       role: 'RESELLER',
       credits: Number(initialCredits) || 100, // Solde initial
@@ -2105,7 +2018,7 @@ async function startServer() {
       serverPort: xrayPublicPort(profile.protocol, profile.transport, profile.serverPort),
       path: xrayProfilePath(profile.protocol as XrayProtocol, profile.transport as XrayTransport, profile.path),
       sniHost: profile.sniHost, uuid: clientUuid, protocol: profile.protocol, transport: profile.transport,
-      security: ['native', 'raw', 'kcp'].includes(profile.transport) ? 'none' : 'tls'
+      security: profile.transport === 'tcp' ? 'none' : 'tls'
     };
     const encryptedLink = encryptConfig(encryptedPayload, masterSecret);
     const tokens = loadTokens();
@@ -2199,7 +2112,7 @@ async function startServer() {
         serverPort: xrayPublicPort(profile.protocol, profile.transport, profile.serverPort),
         path: xrayProfilePath(profile.protocol as XrayProtocol, profile.transport as XrayTransport, profile.path),
         sniHost: profile.sniHost, uuid: clientUuid, protocol: profile.protocol, transport: profile.transport,
-        security: ['native', 'raw', 'kcp'].includes(profile.transport) ? 'none' : 'tls'
+        security: profile.transport === 'tcp' ? 'none' : 'tls'
       };
       const encryptedLink = encryptConfig(encryptedPayload, masterSecret);
 
@@ -2555,18 +2468,12 @@ async function startServer() {
     }
 
     const current = loadMasterConfig();
-    const requestedProtocol = req.body?.protocol ?? current.protocol;
-    const requestedTransport = req.body?.transport ?? current.transport;
-    if (
-      !isXrayProtocol(requestedProtocol) ||
-      !isXrayTransport(requestedTransport) ||
-      (requestedTransport === 'native' && requestedProtocol !== 'shadowsocks') ||
-      (requestedProtocol === 'shadowsocks' && requestedTransport !== 'native') ||
-      ((requestedTransport === 'raw' || requestedTransport === 'kcp') && requestedProtocol !== 'vmess')
-    ) {
+    const requestedProtocol = 'vless';
+    const requestedTransport = String(req.body?.transport ?? current.transport).toLowerCase();
+    if (!isXrayTransport(requestedTransport)) {
       res.status(400).json({
         success: false,
-        error: 'VLESS, VMess et Trojan sont disponibles en WS/gRPC/HTTPUpgrade/XHTTP. VMess prend aussi en charge RAW/TCP et mKCP/UDP ; Shadowsocks doit utiliser le transport natif TCP + UDP.'
+        error: 'Transports supportés pour VLESS TCP : tcp (direct), ws, grpc, httpupgrade, xhttp.'
       });
       return;
     }
@@ -2588,16 +2495,13 @@ async function startServer() {
       });
       return;
     }
-    const effectivePort = requestedTransport === 'native' ? 10050
-      : requestedTransport === 'raw' ? 10060
-      : requestedTransport === 'kcp' ? 10061
-      : 443;
+    const effectivePort = requestedTransport === 'tcp' ? 10050 : 443;
     const updated: MasterServerConfig = {
       ...current,
       ...req.body,
       serverHost: requestedHost,
       host: requestedHeaderHost,
-      sniHost: requestedSni,
+      sniHost: requestedTransport === 'tcp' ? '' : requestedSni,
       serverPort: effectivePort,
       protocol: requestedProtocol,
       transport: requestedTransport,
@@ -2986,10 +2890,10 @@ async function startServer() {
         sni: profile.sniHost,
         host: profile.host || profile.serverHost,
         wsHost: profile.host || profile.serverHost,
-        method: profile.protocol === 'shadowsocks' ? 'aes-128-gcm' : undefined,
-        protocol: profile.protocol,
+        method: undefined,
+        protocol: 'vless',
         transport: profile.transport,
-        security: ['native', 'raw', 'kcp'].includes(profile.transport) ? 'none' : 'tls',
+        security: profile.transport === 'tcp' ? 'none' : 'tls',
         allowedDeviceId: found.allowedDeviceId || undefined
       }
     });

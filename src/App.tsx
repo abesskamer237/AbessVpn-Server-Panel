@@ -2042,29 +2042,22 @@ export default function App() {
                   </div>
                   <div>
                     <label className="block text-slate-300 font-semibold mb-1">Protocole</label>
-                    <select value={masterConfig.protocol} onChange={(e) => {
-                      const protocol = e.target.value;
-                      const transport = protocol === 'shadowsocks' ? 'native' : (masterConfig.transport === 'native' || (protocol !== 'vmess' && ['raw', 'kcp'].includes(masterConfig.transport))) ? 'ws' : masterConfig.transport;
-                      const serverPort = transport === 'native' ? 10050 : transport === 'raw' ? 10060 : transport === 'kcp' ? 10061 : 443;
-                      setMasterConfig({ ...masterConfig, protocol, transport, serverPort, sniHost: ['native','raw','kcp'].includes(transport) ? '' : masterConfig.sniHost });
-                    }} className="w-full bg-[#03060e] border border-emerald-900 rounded-lg px-3 py-3 text-emerald-200">
-                      <option value="vless">VLESS</option><option value="vmess">VMess</option><option value="trojan">Trojan</option><option value="shadowsocks">Shadowsocks AEAD</option>
+                    <select value="vless" disabled className="w-full bg-[#03060e] border border-emerald-900 rounded-lg px-3 py-3 text-emerald-200">
+                      <option value="vless">VLESS (Optimisé 100% TCP)</option>
                     </select>
                   </div>
                   <div>
                     <label className="block text-slate-300 font-semibold mb-1">Transport</label>
                     <select value={masterConfig.transport} onChange={(e) => {
                       const transport = e.target.value;
-                      const serverPort = transport === 'native' ? 10050 : transport === 'raw' ? 10060 : transport === 'kcp' ? 10061 : 443;
-                      setMasterConfig({ ...masterConfig, transport, serverPort, sniHost: ['native','raw','kcp'].includes(transport) ? '' : masterConfig.sniHost });
+                      const serverPort = transport === 'tcp' ? 10050 : 443;
+                      setMasterConfig({ ...masterConfig, transport, serverPort, sniHost: transport === 'tcp' ? '' : masterConfig.sniHost });
                     }} className="w-full bg-[#03060e] border border-emerald-900 rounded-lg px-3 py-3 text-emerald-200">
-                      <option value="ws" disabled={masterConfig.protocol === 'shadowsocks'}>WebSocket (WS)</option>
-                      <option value="grpc" disabled={masterConfig.protocol === 'shadowsocks'}>gRPC</option>
-                      <option value="httpupgrade" disabled={masterConfig.protocol === 'shadowsocks'}>HTTPUpgrade</option>
-                      <option value="xhttp" disabled={masterConfig.protocol === 'shadowsocks'}>XHTTP</option>
-                      <option value="raw" disabled={masterConfig.protocol !== 'vmess'}>RAW / TCP direct (VMess)</option>
-                      <option value="kcp" disabled={masterConfig.protocol !== 'vmess'}>mKCP / UDP (VMess)</option>
-                      <option value="native" disabled={masterConfig.protocol !== 'shadowsocks'}>TCP + UDP natifs (Shadowsocks)</option>
+                      <option value="tcp">TCP Direct (Port 10050 • Ultra Faible Latence)</option>
+                      <option value="ws">WebSocket sur TCP (Port 443 • Cloudflare / TLS)</option>
+                      <option value="grpc">gRPC sur TCP (Port 443 • Haute Vitesse HTTP/2)</option>
+                      <option value="httpupgrade">HTTPUpgrade sur TCP (Port 443)</option>
+                      <option value="xhttp">XHTTP sur TCP (Port 443)</option>
                     </select>
                   </div>
                   <div className="md:col-span-2 rounded-xl border border-cyan-900/80 bg-cyan-950/20 p-3">
@@ -2074,7 +2067,7 @@ export default function App() {
                   </div>
                   <div className="md:col-span-2 rounded-xl border border-amber-900/80 bg-amber-950/15 p-3">
                     <label className="block text-amber-200 font-semibold mb-1">SNI TLS — nom présenté au serveur TLS</label>
-                    <input type="text" value={masterConfig.sniHost} onChange={(e) => setMasterConfig({ ...masterConfig, sniHost: e.target.value })} className="w-full bg-[#03060e] border border-amber-800 rounded-lg px-3 py-3 text-amber-100 disabled:opacity-50" placeholder={['native','raw','kcp'].includes(masterConfig.transport) ? 'Non utilisé pour ce transport' : 'Nom couvert par le certificat présenté'} disabled={['native','raw','kcp'].includes(masterConfig.transport)} required={!['native','raw','kcp'].includes(masterConfig.transport)} />
+                    <input type="text" value={masterConfig.sniHost} onChange={(e) => setMasterConfig({ ...masterConfig, sniHost: e.target.value })} className="w-full bg-[#03060e] border border-amber-800 rounded-lg px-3 py-3 text-amber-100 disabled:opacity-50" placeholder={masterConfig.transport === 'tcp' ? 'Non utilisé pour TCP direct' : 'Nom couvert par le certificat présenté'} disabled={masterConfig.transport === 'tcp'} required={masterConfig.transport !== 'tcp'} />
                     <p className="mt-1 text-slate-400">Pour ce déploiement, Caddy présente le certificat associé à la variable VPN_DOMAIN. Pour WS, gRPC, HTTPUpgrade et XHTTP, le SNI doit donc être exactement ce domaine. Le Host HTTP reste séparé et ne remplace pas le certificat. Pour un autre SNI, configurez d’abord un domaine et son certificat sur Caddy.</p>
                   </div>
                   <div className="md:col-span-2">
@@ -2083,7 +2076,7 @@ export default function App() {
                     <p className="mt-1 text-slate-500">Le chemin technique est généré par Xray selon le protocole et le transport.</p>
                   </div>
                   <div className="md:col-span-2 rounded-xl border border-slate-800 bg-black/20 p-3 text-slate-400">
-                    <span className={['native','raw','kcp'].includes(masterConfig.transport) ? 'text-amber-300' : 'text-emerald-300'}>{['native','raw','kcp'].includes(masterConfig.transport) ? 'Transport direct sans TLS sur ce socket' : 'TLS sur le point d’entrée HTTPS'}</span>
+                    <span className={masterConfig.transport === 'tcp' ? 'text-amber-300' : 'text-emerald-300'}>{masterConfig.transport === 'tcp' ? 'Transport TCP direct ultra-faible latence sans couche TLS' : 'TLS sécurisé sur le point d’entrée HTTPS'}</span>
                     <p className="mt-1">Les modifications du profil n’altèrent pas les paramètres déjà copiés dans les licences existantes : chaque token garde son instantané de configuration.</p>
                   </div>
                   <div className="md:col-span-2 flex flex-wrap justify-end gap-2 pt-2">

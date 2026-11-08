@@ -15,6 +15,9 @@ WORKDIR /app
 COPY --from=build --chown=node:node /app/package.json ./package.json
 COPY --from=build --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/server.ts ./server.ts
+COPY --from=build --chown=node:node /app/telegram-bot.ts ./telegram-bot.ts
+COPY --from=build --chown=node:node /app/templates ./templates
+COPY --from=build --chown=node:node /app/static ./static
 COPY --from=build --chown=node:node /app/dist ./dist
 
 RUN mkdir -p /app/data && chown -R node:node /app/data

@@ -1394,9 +1394,22 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
       } else {
         const superAdmin = users.find(u => u.role === 'SUPER_ADMIN');
         if (superAdmin) {
-          const sha = crypto.createHash('sha256').update(passwordAttempt).digest('hex');
-          if (superAdmin.passwordHash === sha || superAdmin.passwordHash === passwordAttempt) {
-            isMatch = true;
+          const storedHash = superAdmin.passwordHash || '';
+          if (storedHash.startsWith('scrypt$')) {
+            const parts = storedHash.split('$');
+            if (parts.length === 3) {
+              try {
+                const salt = Buffer.from(parts[1], 'hex');
+                const expected = Buffer.from(parts[2], 'hex');
+                const actual = crypto.scryptSync(passwordAttempt, salt, expected.length);
+                if (crypto.timingSafeEqual(actual, expected)) isMatch = true;
+              } catch {}
+            }
+          } else {
+            const sha = crypto.createHash('sha256').update(passwordAttempt).digest('hex');
+            if (storedHash === sha || storedHash === passwordAttempt) {
+              isMatch = true;
+            }
           }
         }
       }

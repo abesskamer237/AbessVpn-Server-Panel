@@ -214,23 +214,23 @@ jobs:
           assert.equal(legacyProfile.id, 'cfg_legacy');
           assert.equal(legacyProfile.serverHost, 'profile.example.test');
 
-          const createVmessProfileResponse = await fetch(`${base}/api/v1/admin/protocol-configs`, {
+          const createVlessTcpProfileResponse = await fetch(`${base}/api/v1/admin/protocol-configs`, {
             method: 'POST',
             headers: adminHeaders,
             body: JSON.stringify({
-              name: 'CI VMess TCP Profile',
-              serverHost: 'profile-vmess.example.test',
-              host: 'header-vmess.example.test',
+              name: 'CI VLESS Direct TCP Profile',
+              serverHost: 'profile-tcp.example.test',
+              host: 'header-tcp.example.test',
               sniHost: '',
-              protocol: 'vmess',
-              transport: 'raw',
+              protocol: 'vless',
+              transport: 'tcp',
             }),
           });
-          assert.equal(createVmessProfileResponse.status, 201);
-          const vmessProfile = (await createVmessProfileResponse.json()).config;
-          assert.equal(vmessProfile.protocol, 'vmess');
-          assert.equal(vmessProfile.transport, 'raw');
-          assert.equal(vmessProfile.serverPort, 10060);
+          assert.equal(createVlessTcpProfileResponse.status, 201);
+          const vlessTcpProfile = (await createVlessTcpProfileResponse.json()).config;
+          assert.equal(vlessTcpProfile.protocol, 'vless');
+          assert.equal(vlessTcpProfile.transport, 'tcp');
+          assert.equal(vlessTcpProfile.serverPort, 10050);
 
           const availableProfilesResponse = await fetch(`${base}/api/v1/admin/available-configs`, {
             headers: { Authorization: `Bearer ${login.token}` },
@@ -347,12 +347,12 @@ jobs:
           const createC = await fetch(`${base}/api/v1/admin/tokens`, {
             method: 'POST',
             headers: adminHeaders,
-            body: JSON.stringify({ plan: 'CI VMess RAW', bandwidthGb: 2, days: 1, deviceLimit: 1, configurationId: vmessProfile.id }),
+            body: JSON.stringify({ plan: 'CI VLESS TCP Direct', bandwidthGb: 2, days: 1, deviceLimit: 1, configurationId: vlessTcpProfile.id }),
           });
           assert.equal(createC.status, 201);
           const licenceC = await createC.json();
-          assert.equal(licenceC.configurationId, vmessProfile.id);
-          assert.equal(licenceC.configurationName, 'CI VMess TCP Profile');
+          assert.equal(licenceC.configurationId, vlessTcpProfile.id);
+          assert.equal(licenceC.configurationName, 'CI VLESS Direct TCP Profile');
           assert.ok(!('configurationSnapshot' in licenceC), 'licence API must not expose private profile snapshot');
 
           const tokenCValidation = await fetch(`${base}/api/v1/auth/token`, {
@@ -362,39 +362,30 @@ jobs:
           });
           assert.equal(tokenCValidation.status, 200);
           const configC = await tokenCValidation.json();
-          assert.equal(configC.serverConfig.protocol, 'vmess');
-          assert.equal(configC.serverConfig.transport, 'raw');
-          assert.equal(configC.serverConfig.address, 'profile-vmess.example.test');
-          assert.equal(configC.serverConfig.port, 10060);
-          assert.equal(configC.serverConfig.host, 'header-vmess.example.test');
+          assert.equal(configC.serverConfig.protocol, 'vless');
+          assert.equal(configC.serverConfig.transport, 'tcp');
+          assert.equal(configC.serverConfig.address, 'profile-tcp.example.test');
+          assert.equal(configC.serverConfig.port, 10050);
+          assert.equal(configC.serverConfig.host, 'header-tcp.example.test');
 
           const configResponse = JSON.parse(fs.readFileSync(`${dataDir}/xray-config.json`, 'utf8'));
           assert.equal(configResponse.outbounds[0].tag, 'direct', 'default VPN traffic must egress through the direct outbound');
           assert.ok(configResponse.outbounds.some(outbound => outbound.tag === 'api'), 'Xray control API outbound must exist');
           assert.equal(configResponse.routing.rules[0].outboundTag, 'api');
           assert.equal(configResponse.inbounds[0].protocol, 'vless');
-          assert.equal(configResponse.inbounds[0].streamSettings.network, 'ws');
-          assert.equal(configResponse.inbounds[0].streamSettings.security, 'none', 'TLS is terminated by Caddy');
-          const xrayUsers = configResponse.inbounds[0].settings.users;
-          assert.ok(xrayUsers.some(user => user.id === licenceA.clientUuid));
-          assert.ok(xrayUsers.some(user => user.id === licenceB.clientUuid));
-          assert.ok(!xrayUsers.some(user => user.id === licenceC.clientUuid), 'a VMess RAW licence must not be added to the VLESS WS inbound');
 
-          const vmessRawInbound = configResponse.inbounds.find(inbound => inbound.tag === 'vmess-raw-in');
-          const vmessKcpInbound = configResponse.inbounds.find(inbound => inbound.tag === 'vmess-kcp-in');
-          assert.ok(vmessRawInbound, 'VMess RAW/TCP inbound must be generated');
-          assert.equal(vmessRawInbound.port, 10060);
-          assert.equal(vmessRawInbound.streamSettings.network, 'raw');
-          assert.ok(vmessRawInbound.settings.users.some(user => user.id === licenceC.clientUuid), 'the assigned VMess RAW licence must be present in its own inbound');
-          assert.ok(!vmessRawInbound.settings.users.some(user => user.id === licenceA.clientUuid), 'VLESS WS licences must not be added to VMess RAW');
-          assert.ok(vmessKcpInbound, 'VMess mKCP/UDP inbound must be generated');
-          assert.equal(vmessKcpInbound.port, 10061);
-          assert.equal(vmessKcpInbound.streamSettings.network, 'kcp');
+          const directTcpInbound = configResponse.inbounds.find(inbound => inbound.tag === 'vless-tcp-direct-in');
+          assert.ok(directTcpInbound, 'VLESS Direct TCP inbound must be generated');
+          assert.equal(directTcpInbound.port, 10050);
+          assert.equal(directTcpInbound.streamSettings.network, 'tcp');
+          assert.equal(directTcpInbound.streamSettings.sockopt.tcpFastOpen, true);
+          assert.equal(directTcpInbound.streamSettings.sockopt.tcpNoDelay, true);
+          assert.ok(directTcpInbound.settings.users.some(user => user.id === licenceA.clientUuid));
+          assert.ok(directTcpInbound.settings.users.some(user => user.id === licenceB.clientUuid));
+          assert.ok(directTcpInbound.settings.users.some(user => user.id === licenceC.clientUuid));
+
           const compose = fs.readFileSync('docker-compose.yml', 'utf8');
-          assert.ok(compose.includes('"10060:10060/tcp"'), 'VMess RAW/TCP must be published by Docker Compose');
-          assert.ok(compose.includes('"10061:10061/udp"'), 'VMess mKCP/UDP must be published by Docker Compose');
-          assert.ok(!configResponse.inbounds.some(inbound => inbound.tag === 'vless-raw-in'), 'RAW must not expose VLESS without TLS');
-          assert.ok(!configResponse.inbounds.some(inbound => inbound.tag === 'trojan-kcp-in'), 'mKCP must not expose Trojan without TLS');
+          assert.ok(compose.includes('"10050:10050/tcp"'), 'VLESS Direct TCP must be published by Docker Compose');
 
           // The API must never fake an HTTP/WebSocket handshake as a VPN tunnel.
           const crlf = String.fromCharCode(13, 10);
