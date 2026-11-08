@@ -48,7 +48,9 @@ import {
   XCircle,
   Globe,
   Megaphone,
-  Bell
+  Bell,
+  Sun,
+  Moon
 } from 'lucide-react';
 
 interface Announcement {
@@ -267,6 +269,23 @@ function generateUnifiedToken(): string {
 }
 
 export default function App() {
+  // Theme State: "light" (Noir sur Blanc) par défaut, ou "dark" (Mode Sombre)
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    const saved = localStorage.getItem('abess_panel_theme');
+    return saved === 'dark' ? 'dark' : 'light';
+  });
+
+  useEffect(() => {
+    localStorage.setItem('abess_panel_theme', theme);
+    if (theme === 'light') {
+      document.documentElement.classList.add('theme-light');
+      document.body.classList.add('theme-light');
+    } else {
+      document.documentElement.classList.remove('theme-light');
+      document.body.classList.remove('theme-light');
+    }
+  }, [theme]);
+
   // Session State
   const [currentUser, setCurrentUser] = useState<UserSession | null>(null);
   const [authToken, setAuthToken] = useState<string>('');
@@ -1290,6 +1309,26 @@ export default function App() {
     return (
       <div className="min-h-screen bg-[#03060e] text-emerald-400 font-mono flex items-center justify-center p-4 selection:bg-emerald-500 selection:text-black">
         <div className="w-full max-w-md bg-[#060c18] border border-emerald-900/80 rounded-3xl p-6 sm:p-8 shadow-2xl relative overflow-hidden space-y-6">
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}
+              className="px-2.5 py-1 rounded-lg border text-[10px] font-bold flex items-center gap-1.5 transition bg-slate-900/50 hover:bg-slate-800 text-slate-300 border-slate-700"
+              title="Basculer le mode d'affichage"
+            >
+              {theme === 'light' ? (
+                <>
+                  <Moon className="w-3 h-3 text-slate-700" />
+                  <span>Mode Sombre</span>
+                </>
+              ) : (
+                <>
+                  <Sun className="w-3 h-3 text-amber-400" />
+                  <span>Noir sur Blanc</span>
+                </>
+              )}
+            </button>
+          </div>
           <div className="text-center space-y-2">
             <div className="h-14 w-14 mx-auto rounded-2xl bg-gradient-to-tr from-emerald-500 to-cyan-500 p-0.5 shadow-[0_0_30px_rgba(16,185,129,0.3)]">
               <div className="w-full h-full bg-[#03060e] rounded-[14px] flex items-center justify-center">
@@ -1423,6 +1462,28 @@ export default function App() {
           <span className="text-slate-300">
             Connecté : <strong className="text-emerald-300">{currentUser.name}</strong> ({currentUser.email})
           </span>
+
+          <button
+            onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}
+            className={`px-2.5 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1.5 transition border ${
+              theme === 'light'
+                ? 'bg-slate-100 hover:bg-slate-200 text-slate-800 border-slate-300'
+                : 'bg-slate-900 hover:bg-slate-800 text-amber-300 border-amber-500/40'
+            }`}
+            title="Basculer entre Noir sur Blanc et Mode Sombre"
+          >
+            {theme === 'light' ? (
+              <>
+                <Moon className="w-3.5 h-3.5 text-slate-700" />
+                <span>Mode Sombre</span>
+              </>
+            ) : (
+              <>
+                <Sun className="w-3.5 h-3.5 text-amber-400" />
+                <span>Noir sur Blanc</span>
+              </>
+            )}
+          </button>
 
           <button
             onClick={handleLogout}
