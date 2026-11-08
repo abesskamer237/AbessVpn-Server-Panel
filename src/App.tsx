@@ -241,6 +241,9 @@ interface SystemDiagnostics {
     plansCount: number;
     pendingRequestsCount: number;
     xrayStatus: string;
+    dropbearStatus?: string;
+    wsDropbearStatus?: string;
+    activeSshConnections?: number;
     vpnDomain: string;
     appVersion: string;
   };
@@ -2769,7 +2772,7 @@ export default function App() {
 
             {/* Gauges & Realtime Metrics */}
             {diagnostics && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
                 <div className="bg-[#060c18] border border-emerald-900/80 p-4 rounded-2xl space-y-2">
                   <div className="flex items-center justify-between text-slate-400">
                     <span className="text-[10px] uppercase font-bold">Mémoire RAM</span>
@@ -2832,6 +2835,23 @@ export default function App() {
                   </div>
                   <div className="text-[10px] text-slate-400">
                     Domaine : <code className="text-cyan-400">{diagnostics.vpn.vpnDomain}</code>
+                  </div>
+                </div>
+
+                <div className="bg-[#060c18] border border-cyan-900/80 p-4 rounded-2xl space-y-2">
+                  <div className="flex items-center justify-between text-slate-400">
+                    <span className="text-[10px] uppercase font-bold">Dropbear SSH & WS</span>
+                    <Terminal className="w-4 h-4 text-cyan-400" />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className={`w-2.5 h-2.5 rounded-full ${diagnostics.vpn.dropbearStatus === 'ready' ? 'bg-cyan-400 animate-pulse' : 'bg-rose-500'}`} />
+                    <span className="text-xl font-black text-cyan-300 uppercase">
+                      {diagnostics.vpn.dropbearStatus === 'ready' ? 'Opérationnel' : 'Inactif'}
+                    </span>
+                  </div>
+                  <div className="text-[10px] text-slate-400 flex items-center justify-between">
+                    <span>Ports 80, 8880, 143</span>
+                    <span className="text-emerald-400 font-bold">{diagnostics.vpn.activeSshConnections ?? 0} actif(s)</span>
                   </div>
                 </div>
               </div>

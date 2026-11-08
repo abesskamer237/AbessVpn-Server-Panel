@@ -1146,6 +1146,32 @@ export function generateSshConfigJson(token: ClientToken): Record<string, unknow
   };
 }
 
+export function enforceSshDeviceLimits(): void {
+  try {
+    const tokens = loadTokens();
+    const sshTokens = tokens.filter(t => t.status === 'active' && (t.protocolType === 'ssh' || t.sshConfig?.sshUsername));
+    for (const t of sshTokens) {
+      const username = t.sshConfig?.sshUsername;
+      if (!username || !/^[a-zA-Z0-9_-]{3,32}$/.test(username)) continue;
+      const limit = Math.max(1, Math.floor(Number(t.deviceLimit) || 1));
+      try {
+        const out = execSync(`pgrep -u ${username} dropbear 2>/dev/null || true`, { encoding: 'utf8' }).trim();
+        if (out) {
+          const pids = out.split('\n').map(p => p.trim()).filter(Boolean);
+          if (pids.length > limit) {
+            const excess = pids.slice(0, pids.length - limit);
+            for (const pid of excess) {
+              try {
+                execSync(`sudo kill -9 ${pid} 2>/dev/null || true`);
+              } catch {}
+            }
+          }
+        }
+      } catch {}
+    }
+  } catch {}
+}
+
 export function probeEndpoint(targetServer: string, sni: string, timeoutMs = 3000): Promise<{ tcp_latency_ms: number; tls_latency_ms: number; latency_ms: number; status: string; error?: string }> {
   return new Promise((resolve) => {
     let host = targetServer.trim();
@@ -1238,6 +1264,20 @@ export function getSystemDiagnostics() {
   const totalBandwidthUsedGb = tokens.reduce((acc, t) => acc + (Number(t.bandwidthUsedGb) || 0), 0);
   const activeTokens = tokens.filter(t => t.status === 'active' && new Date(t.expiresAt).getTime() > Date.now());
 
+  let dropbearStatus = 'not-ready';
+  let wsDropbearStatus = 'not-ready';
+  let activeSshConnections = 0;
+  try {
+    dropbearStatus = execSync('systemctl is-active dropbear 2>/dev/null || true', { encoding: 'utf8' }).trim() === 'active' ? 'ready' : 'inactive';
+  } catch {}
+  try {
+    wsDropbearStatus = execSync('systemctl is-active ws-dropbear 2>/dev/null || true', { encoding: 'utf8' }).trim() === 'active' ? 'ready' : 'inactive';
+  } catch {}
+  try {
+    const pids = execSync('pgrep dropbear 2>/dev/null || true', { encoding: 'utf8' }).trim().split('\n').filter(Boolean);
+    activeSshConnections = Math.max(0, pids.length - 1);
+  } catch {}
+
   return {
     ok: true,
     server: {
@@ -1264,6 +1304,9 @@ export function getSystemDiagnostics() {
       plansCount: plans.length,
       pendingRequestsCount: requests.filter(r => r.status === 'PENDING').length,
       xrayStatus: fs.existsSync(xrayStatusFile) ? 'ready' : 'not-ready',
+      dropbearStatus,
+      wsDropbearStatus,
+      activeSshConnections,
       vpnDomain: master.serverHost || 'panel.pagnol.xyz',
       appVersion: version.latestVersion
     },
@@ -1599,6 +1642,46 @@ function recordLoginAttempt(ip: string, success: boolean): void {
   loginAttempts.set(ip, record);
 }
 
+// Anti-Brute-Force Rate Limiting for Public Endpoints (Tokens, Subs, SSH configs)
+interface PublicRateBucket {
+  count: number;
+  resetAt: number;
+  blockedUntil: number;
+}
+const publicRateLimits = new Map<string, PublicRateBucket>();
+
+function publicApiRateLimiter(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.socket.remoteAddress || '127.0.0.1';
+  const now = Date.now();
+  let bucket = publicRateLimits.get(ip);
+  if (!bucket || now >= bucket.resetAt) {
+    bucket = { count: 1, resetAt: now + 60000, blockedUntil: 0 };
+    publicRateLimits.set(ip, bucket);
+    return next();
+  }
+  if (bucket.blockedUntil > now) {
+    const retryAfter = Math.ceil((bucket.blockedUntil - now) / 1000);
+    res.set('Retry-After', String(retryAfter));
+    return res.status(429).json({
+      valid: false,
+      error: `Trop de requêtes. Veuillez patienter ${retryAfter} secondes.`,
+      status: 'rate_limited'
+    });
+  }
+  bucket.count++;
+  if (bucket.count > 60) {
+    bucket.blockedUntil = now + 60000;
+    const retryAfter = 60;
+    res.set('Retry-After', String(retryAfter));
+    return res.status(429).json({
+      valid: false,
+      error: 'Limite de requêtes atteinte (60 req/min). Veuillez patienter 60 secondes.',
+      status: 'rate_limited'
+    });
+  }
+  next();
+}
+
 // Periodic TTL session and rate limiter cleanup
 setInterval(() => {
   const now = Date.now();
@@ -1610,6 +1693,11 @@ setInterval(() => {
   for (const [ip, record] of loginAttempts.entries()) {
     if (record.blockedUntil > 0 && now >= record.blockedUntil) {
       loginAttempts.delete(ip);
+    }
+  }
+  for (const [ip, bucket] of publicRateLimits.entries()) {
+    if (now >= bucket.resetAt && now >= bucket.blockedUntil) {
+      publicRateLimits.delete(ip);
     }
   }
 }, 60 * 60 * 1000);
@@ -2498,6 +2586,39 @@ async function startServer() {
     });
   });
 
+  function performAutoBackup(): void {
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const backupFile = path.resolve(backupsDir, `abessvpn-auto-${today}.json`);
+      const backupData = {
+        timestamp: new Date().toISOString(),
+        type: 'AUTOMATIC_DAILY',
+        version: '2.5.0-commercial',
+        masterConfig: loadMasterConfig(),
+        protocolConfigs: loadProtocolConfigs(),
+        users: loadUsers().map(u => ({ ...u, passwordHash: u.passwordHash })),
+        tokens: loadTokens(),
+        transactions: loadTransactions()
+      };
+      writeJsonAtomically(backupFile, backupData);
+
+      const files = fs.readdirSync(backupsDir);
+      const autoFiles = files
+        .filter(f => f.startsWith('abessvpn-auto-') && f.endsWith('.json'))
+        .sort()
+        .reverse();
+      if (autoFiles.length > 7) {
+        for (const oldFile of autoFiles.slice(7)) {
+          try {
+            fs.unlinkSync(path.resolve(backupsDir, oldFile));
+          } catch {}
+        }
+      }
+    } catch (err) {
+      console.error('[AutoBackup] Erreur lors de la sauvegarde automatique:', err);
+    }
+  }
+
   // Suspend/reactivate a licence without deleting its audit history.
   app.put('/api/v1/admin/tokens/:id/status', authenticate, (req, res) => {
     const user: AppUser = (req as any).user;
@@ -3153,13 +3274,13 @@ async function startServer() {
     });
   };
 
-  app.post('/api/v1/auth/token', (req, res) => {
+  app.post('/api/v1/auth/token', publicApiRateLimiter, (req, res) => {
     validateMobileToken(req, res, req.body?.token, req.body?.deviceId);
   });
 
   // Decrypt panel-issued links on the server; the master secret never enters the mobile app.
   // Continue through the same expiry, quota, status, and device-limit validation as a typed token.
-  app.post('/api/v1/auth/import-link', (req, res) => {
+  app.post('/api/v1/auth/import-link', publicApiRateLimiter, (req, res) => {
     const link = req.body?.link?.toString()?.trim();
     if (!link || !link.startsWith('abess://')) {
       res.status(400).json({ valid: false, error: 'Lien ABESS chiffré manquant ou invalide.' });
@@ -3203,7 +3324,7 @@ async function startServer() {
   });
 
   // Dedicated SSH Config JSON Endpoint
-  app.get(['/api/v1/ssh/config/:token', '/ssh/config/:token'], (req, res) => {
+  app.get(['/api/v1/ssh/config/:token', '/ssh/config/:token'], publicApiRateLimiter, (req, res) => {
     const rawToken = String(req.params.token || '').trim();
     if (!rawToken) {
       res.status(400).json({ error: 'Jeton requis.' });
@@ -3263,7 +3384,7 @@ async function startServer() {
   // 6. UNIVERSAL SUBSCRIPTION PORTAL (/sub/:token)
   // Dual-mode: Interactive HTML for browsers & Base64 for VPN clients
   // ==========================================
-  app.get(['/sub/:token', '/nexus/sub/:token', '/api/v1/sub/:token'], async (req, res) => {
+  app.get(['/sub/:token', '/nexus/sub/:token', '/api/v1/sub/:token'], publicApiRateLimiter, async (req, res) => {
     const rawToken = String(req.params.token || '').trim();
     if (!rawToken) {
       res.status(400).send('Jeton requis.');
@@ -4060,6 +4181,15 @@ async function startServer() {
     reconcileXrayUsage();
   }, 5000);
   xrayReconcileTimer.unref();
+
+  // Daily automated backup & rolling 7-day retention
+  performAutoBackup();
+  const autoBackupTimer = setInterval(performAutoBackup, 24 * 3600 * 1000);
+  autoBackupTimer.unref();
+
+  // Active Dropbear SSH device limit enforcer daemon (every 30s)
+  const sshLimitTimer = setInterval(enforceSshDeviceLimits, 30 * 1000);
+  sshLimitTimer.unref();
 
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`[ABESSVPN MASTER SERVER] Running on port ${PORT}`);
