@@ -116,6 +116,16 @@ interface ClientToken {
   deviceIds?: string[];
   encryptedLink: string;
   directLink?: string;
+  protocolType?: string;
+  sshConfig?: {
+    sshConfigType: string;
+    remarks: string;
+    sshHost: string;
+    sshPort: number;
+    sshUsername: string;
+    sshPassword: string;
+    payload: string;
+  };
   createdAt: string;
 }
 
@@ -307,6 +317,13 @@ export default function App() {
   const [newTokenDeviceLimit, setNewTokenDeviceLimit] = useState<number>(2);
   const [newTokenAllowedDeviceId, setNewTokenAllowedDeviceId] = useState<string>('');
   const [newTokenConfigurationId, setNewTokenConfigurationId] = useState<string>('');
+  const [newTokenProtocol, setNewTokenProtocol] = useState<'vless' | 'ssh'>('vless');
+  const [newSshUsername, setNewSshUsername] = useState<string>('');
+  const [newSshPassword, setNewSshPassword] = useState<string>('#12345');
+  const [newSshPort, setNewSshPort] = useState<number>(80);
+  const [newSshPayload, setNewSshPayload] = useState<string>(
+    'GET / HTTP/1.1[crlf]FoxNews.com;www.epicgames.com;us.shop.battle.net;unity3d.com;www.icloud.com;www.bing.com;www.samsung.com;store.nintendo.com.br;www.garena.com;n41-06-05.opera-mini.net[crlf]Host: m.batch.com[crlf][crlf]X / HTTP/1.1[crlf]FoxNews.com;www.epicgames.com;us.shop.battle.net;unity3d.com;www.icloud.com;www.bing.com;www.samsung.com;store.nintendo.com.br;www.garena.com;n41-06-05.opera-mini.net[crlf]Host: [host][crlf][crlf]GET /loic HTTP/1.1[crlf]Host: dbl5i9lrmmeui.cloudfront.net[crlf]Backend: crashlyticsreports-pa.googleapis.com[crlf]Upgrade: websocket[crlf]Connection: Upgrade[crlf]User-agent:[ua][crlf][crlf]'
+  );
   const [tokenCreating, setTokenCreating] = useState<boolean>(false);
   const [tokenCreationError, setTokenCreationError] = useState<string | null>(null);
 
@@ -680,7 +697,13 @@ export default function App() {
           deviceLimit: Number(newTokenDeviceLimit),
           allowedDeviceId: newTokenAllowedDeviceId.trim() || undefined,
           customerNote: newTokenCustomerNote.trim() || undefined,
-          configurationId: newTokenConfigurationId
+          configurationId: newTokenProtocol === 'ssh' ? undefined : newTokenConfigurationId,
+          protocolType: newTokenProtocol,
+          sshUsername: newTokenProtocol === 'ssh' ? (newSshUsername.trim() || undefined) : undefined,
+          sshPassword: newTokenProtocol === 'ssh' ? (newSshPassword.trim() || undefined) : undefined,
+          sshPort: newTokenProtocol === 'ssh' ? Number(newSshPort) : undefined,
+          payload: newTokenProtocol === 'ssh' ? newSshPayload : undefined,
+          remarks: newTokenProtocol === 'ssh' ? newTokenPlan : undefined,
         })
       });
 
@@ -1907,6 +1930,29 @@ export default function App() {
                               >
                                 {copiedKey === `dir_${token.id}` ? <Check className="w-3 h-3 text-cyan-400" /> : <Share2 className="w-3 h-3 text-cyan-400" />}
                                 <span>{copiedKey === `dir_${token.id}` ? 'Copié !' : 'Lien V2Ray'}</span>
+                              </button>
+                            )}
+
+                            {(token.protocolType === 'ssh' || token.sshConfig) && (
+                              <button
+                                onClick={async () => {
+                                  try {
+                                    const res = await fetch(`/api/v1/ssh/config/${token.token}`);
+                                    if (res.ok) {
+                                      const cfg = await res.json();
+                                      copyToClipboard(JSON.stringify(cfg, null, 2), `ssh_${token.id}`);
+                                    } else {
+                                      copyToClipboard(token.directLink || '', `ssh_${token.id}`);
+                                    }
+                                  } catch {
+                                    copyToClipboard(token.directLink || '', `ssh_${token.id}`);
+                                  }
+                                }}
+                                className="px-2 py-1 bg-amber-950/60 hover:bg-amber-900/60 border border-amber-800 text-amber-300 rounded text-[11px] flex items-center gap-1 font-bold"
+                                title="Copier la configuration JSON SSH-Payload (Peddygist / HTTP Injector)"
+                              >
+                                {copiedKey === `ssh_${token.id}` ? <Check className="w-3 h-3 text-amber-400" /> : <Terminal className="w-3 h-3 text-amber-400" />}
+                                <span>{copiedKey === `ssh_${token.id}` ? 'Copié !' : 'JSON SSH'}</span>
                               </button>
                             )}
 
@@ -3237,23 +3283,112 @@ export default function App() {
               </div>
 
               <div>
-                <label className="block text-slate-300 mb-1 font-bold">Configuration VPN associée</label>
-                <select
-                  value={newTokenConfigurationId}
-                  onChange={(e) => setNewTokenConfigurationId(e.target.value)}
-                  className="w-full bg-[#03060e] border border-cyan-900 rounded-xl px-3 py-2 text-cyan-200"
-                  required
-                  disabled={availableConfigs.length === 0}
-                >
-                  <option value="">Choisir une configuration…</option>
-                  {availableConfigs.map((config) => (
-                    <option key={config.id} value={config.id}>{config.name} — {config.protocol.toUpperCase()} / {config.transport.toUpperCase()} · {config.serverPort}</option>
-                  ))}
-                </select>
-                {availableConfigs.length === 0 && (
-                  <p className="mt-1 text-amber-300">Aucune configuration disponible. L’administrateur principal doit d’abord créer un profil dans Infrastructure.</p>
-                )}
+                <label className="block text-slate-300 mb-1 font-bold">Protocole Réseau</label>
+                <div className="grid grid-cols-2 gap-2 mb-2">
+                  <button
+                    type="button"
+                    onClick={() => setNewTokenProtocol('vless')}
+                    className={`py-2 px-3 rounded-xl border text-center font-bold text-xs transition ${
+                      newTokenProtocol === 'vless'
+                        ? 'bg-emerald-950/60 border-emerald-500 text-emerald-300 shadow'
+                        : 'bg-[#03060e] border-slate-800 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    VLESS / Xray
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setNewTokenProtocol('ssh');
+                      if (!newSshUsername) {
+                        setNewSshUsername('client_' + Math.random().toString(36).substring(2, 7));
+                      }
+                    }}
+                    className={`py-2 px-3 rounded-xl border text-center font-bold text-xs transition ${
+                      newTokenProtocol === 'ssh'
+                        ? 'bg-amber-950/60 border-amber-500 text-amber-300 shadow'
+                        : 'bg-[#03060e] border-slate-800 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    SSH-Payload (Dropbear)
+                  </button>
+                </div>
               </div>
+
+              {newTokenProtocol === 'vless' ? (
+                <div>
+                  <label className="block text-slate-300 mb-1 font-bold">Configuration VPN associée</label>
+                  <select
+                    value={newTokenConfigurationId}
+                    onChange={(e) => setNewTokenConfigurationId(e.target.value)}
+                    className="w-full bg-[#03060e] border border-cyan-900 rounded-xl px-3 py-2 text-cyan-200"
+                    required
+                    disabled={availableConfigs.length === 0}
+                  >
+                    <option value="">Choisir une configuration…</option>
+                    {availableConfigs.map((config) => (
+                      <option key={config.id} value={config.id}>{config.name} — {config.protocol.toUpperCase()} / {config.transport.toUpperCase()} · {config.serverPort}</option>
+                    ))}
+                  </select>
+                  {availableConfigs.length === 0 && (
+                    <p className="mt-1 text-amber-300">Aucune configuration disponible. L’administrateur principal doit d’abord créer un profil dans Infrastructure.</p>
+                  )}
+                </div>
+              ) : (
+                <div className="p-3 bg-amber-950/20 border border-amber-800/60 rounded-2xl space-y-2.5">
+                  <div className="text-[11px] font-bold text-amber-300 flex items-center gap-1.5">
+                    <Terminal className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Paramètres du Compte SSH Dropbear &amp; Injection</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-slate-400 mb-1 text-[10px]">Identifiant SSH</label>
+                      <input
+                        type="text"
+                        value={newSshUsername}
+                        onChange={(e) => setNewSshUsername(e.target.value.trim().toLowerCase())}
+                        className="w-full bg-[#03060e] border border-amber-900/60 rounded-xl px-2.5 py-1.5 text-amber-200 font-mono text-[11px]"
+                        placeholder="Ex: dany"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-slate-400 mb-1 text-[10px]">Mot de Passe SSH</label>
+                      <input
+                        type="text"
+                        value={newSshPassword}
+                        onChange={(e) => setNewSshPassword(e.target.value)}
+                        className="w-full bg-[#03060e] border border-amber-900/60 rounded-xl px-2.5 py-1.5 text-amber-200 font-mono text-[11px]"
+                        placeholder="Ex: #12345"
+                        required
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-slate-400 mb-1 text-[10px]">Port WebSocket Dropbear</label>
+                    <input
+                      type="number"
+                      value={newSshPort}
+                      onChange={(e) => setNewSshPort(Number(e.target.value))}
+                      className="w-full bg-[#03060e] border border-amber-900/60 rounded-xl px-2.5 py-1.5 text-amber-300 font-mono text-[11px]"
+                      placeholder="80 ou 8880"
+                      min="1"
+                      max="65535"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-slate-400 mb-1 text-[10px]">Payload HTTP Injection (Orange CM / Cloudfront)</label>
+                    <textarea
+                      value={newSshPayload}
+                      onChange={(e) => setNewSshPayload(e.target.value)}
+                      rows={3}
+                      className="w-full bg-[#03060e] border border-amber-900/60 rounded-xl px-2.5 py-1.5 text-amber-300 font-mono text-[10px]"
+                      required
+                    />
+                  </div>
+                </div>
+              )}
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -3319,7 +3454,7 @@ export default function App() {
                 </button>
                 <button
                   type="submit"
-                  disabled={tokenCreating || !newTokenConfigurationId || availableConfigs.length === 0}
+                  disabled={tokenCreating || (newTokenProtocol === 'vless' && (!newTokenConfigurationId || availableConfigs.length === 0)) || (newTokenProtocol === 'ssh' && (!newSshUsername || !newSshPassword))}
                   className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-black font-black rounded-xl shadow disabled:opacity-50"
                 >
                   {tokenCreating ? 'Création...' : 'Valider & Déduire'}
