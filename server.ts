@@ -8,7 +8,7 @@ import net from 'net';
 import tls from 'tls';
 import os from 'os';
 import { fileURLToPath } from 'url';
-import { exec } from 'child_process';
+import { exec, execSync, spawn } from 'child_process';
 import { promisify } from 'util';
 import QRCode from 'qrcode';
 import { startTelegramBot } from './telegram-bot.js';
@@ -149,6 +149,16 @@ export interface ClientToken {
   encryptedLink: string;
   directLink?: string;
   createdAt: string;
+  protocolType?: 'vless' | 'ssh';
+  sshConfig?: {
+    sshConfigType: string;
+    remarks: string;
+    sshHost: string;
+    sshPort: number;
+    sshUsername: string;
+    sshPassword: string;
+    payload: string;
+  };
 }
 
 export interface MasterServerConfig {
@@ -1046,6 +1056,81 @@ export function generateXrayClientJson(token: ClientToken, profile?: ProtocolCon
         { type: 'field', inboundTag: ['socks-in', 'http-in'], outboundTag: 'proxy' }
       ]
     }
+  };
+}
+
+export const DEFAULT_SSH_PAYLOAD = "GET / HTTP/1.1[crlf]FoxNews.com;www.epicgames.com;us.shop.battle.net;unity3d.com;www.icloud.com;www.bing.com;www.samsung.com;store.nintendo.com.br;www.garena.com;n41-06-05.opera-mini.net[crlf]Host: m.batch.com[crlf][crlf]X / HTTP/1.1[crlf]FoxNews.com;www.epicgames.com;us.shop.battle.net;unity3d.com;www.icloud.com;www.bing.com;www.samsung.com;store.nintendo.com.br;www.garena.com;n41-06-05.opera-mini.net[crlf]Host: [host][crlf][crlf]GET /loic HTTP/1.1[crlf]Host: dbl5i9lrmmeui.cloudfront.net[crlf]Backend: crashlyticsreports-pa.googleapis.com[crlf]Upgrade: websocket[crlf]Connection: Upgrade[crlf]User-agent:[ua][crlf][crlf]";
+
+export function createLinuxSshAccount(username: string, password: string, days = 30): boolean {
+  try {
+    const cleanUser = String(username || '').trim().toLowerCase();
+    if (!/^[a-zA-Z0-9_-]{3,32}$/.test(cleanUser)) return false;
+    const expiryDate = new Date(Date.now() + Math.max(1, days) * 86400000).toISOString().split('T')[0];
+    const check = execSync(`id ${cleanUser} 2>/dev/null || true`, { encoding: 'utf8' });
+    if (!check.includes('uid=')) {
+      execSync(`sudo useradd -e ${expiryDate} -s /bin/false -M ${cleanUser}`, { encoding: 'utf8' });
+    } else {
+      execSync(`sudo chage -E ${expiryDate} ${cleanUser}`, { encoding: 'utf8' });
+    }
+    const proc = spawn('sudo', ['chpasswd'], { stdio: ['pipe', 'ignore', 'ignore'] });
+    proc.stdin.write(`${cleanUser}:${password}\n`);
+    proc.stdin.end();
+    try {
+      fs.appendFileSync('/etc/ssh/vpn_users.db', `${cleanUser}:${password}:${expiryDate}\n`);
+    } catch {}
+    return true;
+  } catch (e) {
+    console.error('Error creating Linux SSH account:', e);
+    return false;
+  }
+}
+
+export function deleteLinuxSshAccount(username: string): boolean {
+  try {
+    const cleanUser = String(username || '').trim().toLowerCase();
+    if (!/^[a-zA-Z0-9_-]{3,32}$/.test(cleanUser)) return false;
+    execSync(`sudo userdel -f ${cleanUser} 2>/dev/null || true`, { encoding: 'utf8' });
+    try {
+      if (fs.existsSync('/etc/ssh/vpn_users.db')) {
+        const lines = fs.readFileSync('/etc/ssh/vpn_users.db', 'utf8').split('\n');
+        fs.writeFileSync('/etc/ssh/vpn_users.db', lines.filter(l => !l.startsWith(`${cleanUser}:`)).join('\n'));
+      }
+    } catch {}
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function generateSshConfigJson(token: ClientToken): Record<string, unknown> {
+  const master = loadMasterConfig();
+  const host = master.serverHost || process.env.VPN_DOMAIN || 'server.nexustunnel.me';
+  const ssh = token.sshConfig || {
+    sshConfigType: 'SSH-Payload',
+    remarks: token.plan || '𖤍 ORANGE🍊〆DANNY 𖤍',
+    sshHost: host,
+    sshPort: 80,
+    sshUsername: 'dany',
+    sshPassword: '#12345',
+    payload: DEFAULT_SSH_PAYLOAD
+  };
+  return {
+    configs: [
+      {
+        name: ssh.remarks || token.plan || '𖤍 ORANGE🍊〆DANNY 𖤍',
+        address: `${ssh.sshHost || host}:${ssh.sshPort || 80}`,
+        type: 'SSH',
+        sshConfig: {
+          sshConfigType: ssh.sshConfigType || 'SSH-Payload',
+          remarks: ssh.remarks || token.plan || '𖤍 ORANGE🍊〆DANNY 𖤍',
+          sshHost: ssh.sshHost || host,
+          sshPort: Number(ssh.sshPort) || 80,
+          sshUsername: ssh.sshUsername || 'dany',
+          sshPassword: ssh.sshPassword || '#12345',
+          payload: ssh.payload || DEFAULT_SSH_PAYLOAD
+        }
+      }
+    ]
   };
 }
 
@@ -1967,23 +2052,26 @@ async function startServer() {
       });
       return;
     }
+    const isSsh = String(req.body?.protocolType || req.body?.protocol || req.body?.type || '').toLowerCase() === 'ssh';
     const configs = loadProtocolConfigs();
     const selected = typeof configurationId === 'string' ? configs.find(config => config.id === configurationId) : undefined;
-    const profile = selected || (configs.length === 1 && !configurationId ? configs[0] : undefined);
-    if (!profile) {
-      res.status(409).json({
-        error: configs.length === 0
-          ? 'Aucune configuration VPN n’est disponible. Le Super Administrateur doit en créer une dans Infrastructure.'
-          : 'Sélectionnez la configuration VPN à associer à ce token.'
-      });
-      return;
-    }
-    const profileSniError = tlsSniValidationError(profile.transport, profile.sniHost);
-    if (!isValidPublicHost(profile.serverHost) || profileSniError) {
-      res.status(409).json({
-        error: profileSniError || 'Cette configuration ne dispose pas d’une adresse de destination valide.'
-      });
-      return;
+    const profile = isSsh ? null : (selected || (configs.length === 1 && !configurationId ? configs[0] : undefined));
+    if (!isSsh) {
+      if (!profile) {
+        res.status(409).json({
+          error: configs.length === 0
+            ? 'Aucune configuration VPN n’est disponible. Le Super Administrateur doit en créer une dans Infrastructure.'
+            : 'Sélectionnez la configuration VPN à associer à ce token.'
+        });
+        return;
+      }
+      const profileSniError = tlsSniValidationError(profile.transport, profile.sniHost);
+      if (!isValidPublicHost(profile.serverHost) || profileSniError) {
+        res.status(409).json({
+          error: profileSniError || 'Cette configuration ne dispose pas d’une adresse de destination valide.'
+        });
+        return;
+      }
     }
     const finalToken = String(token || 'ABESS-' + crypto.randomBytes(5).toString('hex').toUpperCase()).trim().toUpperCase();
     if (!/^[A-Z0-9][A-Z0-9_-]{3,63}$/.test(finalToken)) {
@@ -2011,30 +2099,70 @@ async function startServer() {
     const customerNote = req.body?.customerNote?.toString()?.trim() || undefined;
     const customerContact = req.body?.customerContact?.toString()?.trim() || undefined;
 
-    const encryptedPayload = {
-      vpnName: 'AbessVpn', token: finalToken, bandwidthGb: requestedGb,
-      expiresAt: calculatedExpiresAt, allowedDeviceId: allowedDeviceId || undefined,
-      configurationId: profile.id, configurationName: profile.name,
-      serverHost: profile.serverHost, host: profile.host || profile.serverHost,
-      serverPort: xrayPublicPort(profile.protocol, profile.transport, profile.serverPort),
-      path: xrayProfilePath(profile.protocol as XrayProtocol, profile.transport as XrayTransport, profile.path),
-      sniHost: profile.sniHost, uuid: clientUuid, protocol: profile.protocol, transport: profile.transport,
-      security: profile.transport === 'tcp' ? 'none' : 'tls'
-    };
-    const encryptedLink = encryptConfig(encryptedPayload, masterSecret);
+    const defaultHost = process.env.VPN_DOMAIN || 'server.nexustunnel.me';
+    let encryptedLink = '';
+    let directLink = '';
+    let sshConfigData: ClientToken['sshConfig'] | undefined = undefined;
+
+    if (isSsh) {
+      const sshUsername = String(req.body?.sshUsername || ('usr_' + finalToken.toLowerCase().replace(/[^a-z0-9]/g, '').slice(-8))).trim().toLowerCase();
+      const sshPassword = String(req.body?.sshPassword || ('#' + crypto.randomBytes(3).toString('hex'))).trim();
+      const sshHost = String(req.body?.sshHost || defaultHost).trim();
+      const sshPort = Number(req.body?.sshPort) || 80;
+      const payload = String(req.body?.payload || DEFAULT_SSH_PAYLOAD).trim();
+      const remarks = String(req.body?.remarks || plan || '𖤍 ORANGE🍊〆DANNY 𖤍').trim();
+
+      createLinuxSshAccount(sshUsername, sshPassword, daysRemaining);
+
+      sshConfigData = {
+        sshConfigType: 'SSH-Payload',
+        remarks,
+        sshHost,
+        sshPort,
+        sshUsername,
+        sshPassword,
+        payload
+      };
+
+      const dummyToken: any = { plan: remarks, sshConfig: sshConfigData };
+      const configsJson = generateSshConfigJson(dummyToken);
+      directLink = JSON.stringify(configsJson, null, 2);
+      encryptedLink = encryptConfig({
+        vpnName: 'AbessVpn', token: finalToken, protocol: 'ssh',
+        sshHost, sshPort, sshUsername, sshPassword, payload, remarks
+      }, masterSecret);
+    } else {
+      const encryptedPayload = {
+        vpnName: 'AbessVpn', token: finalToken, bandwidthGb: requestedGb,
+        expiresAt: calculatedExpiresAt, allowedDeviceId: allowedDeviceId || undefined,
+        configurationId: profile!.id, configurationName: profile!.name,
+        serverHost: profile!.serverHost, host: profile!.host || profile!.serverHost,
+        serverPort: xrayPublicPort(profile!.protocol, profile!.transport, profile!.serverPort),
+        path: xrayProfilePath(profile!.protocol as XrayProtocol, profile!.transport as XrayTransport, profile!.path),
+        sniHost: profile!.sniHost, uuid: clientUuid, protocol: profile!.protocol, transport: profile!.transport,
+        security: profile!.transport === 'tcp' ? 'none' : 'tls'
+      };
+      encryptedLink = encryptConfig(encryptedPayload, masterSecret);
+      directLink = buildDirectProtocolUrl({ token: finalToken, clientUuid } as any, profile!);
+    }
+
     const tokens = loadTokens();
     const newToken: ClientToken = {
       id: 'tok_' + crypto.randomUUID().slice(0, 8), token: finalToken, clientUuid,
       resellerId: user.id, resellerName: user.name,
-      plan: String(plan || `${requestedGb} GO CYBER VIP`).trim().slice(0, 80),
+      plan: String(plan || (isSsh ? '𖤍 ORANGE🍊〆DANNY 𖤍' : `${requestedGb} GO CYBER VIP`)).trim().slice(0, 80),
       bandwidthGb: requestedGb, bandwidthUsedGb: 0, expiresAt: calculatedExpiresAt, days: daysRemaining,
       deviceLimit: clientLimit, deviceIds: [], allowedDeviceId: allowedDeviceId || undefined,
       customerNote, customerContact,
       connectionCount: 0, lastSeenAt: null, lastSeenIp: null,
-      status: 'active', configurationId: profile.id, configurationName: profile.name,
-      configurationSnapshot: publicProtocolConfig(profile),
+      status: 'active',
+      configurationId: profile?.id,
+      configurationName: profile?.name || (isSsh ? 'SSH-Payload (Dropbear/WebSocket)' : undefined),
+      configurationSnapshot: profile ? publicProtocolConfig(profile) : undefined,
+      protocolType: isSsh ? 'ssh' : 'vless',
+      sshConfig: sshConfigData,
       encryptedLink,
-      directLink: buildDirectProtocolUrl({ token: finalToken, clientUuid } as any, profile),
+      directLink,
       createdAt: new Date().toISOString()
     };
     tokens.unshift(newToken);
@@ -2795,11 +2923,12 @@ async function startServer() {
     }
 
     const now = Date.now();
-    const profile = protocolConfigForToken(found, loadProtocolConfigs());
+    const isSsh = found.protocolType === 'ssh' || !!found.sshConfig;
+    const profile = isSsh ? null : protocolConfigForToken(found, loadProtocolConfigs());
     const profileSniError = profile
       ? tlsSniValidationError(profile.transport, profile.sniHost)
       : null;
-    if (!profile || !isValidPublicHost(profile.serverHost) || profileSniError) {
+    if (!isSsh && (!profile || !isValidPublicHost(profile.serverHost) || profileSniError)) {
       res.status(503).json({
         valid: false,
         error: profileSniError || 'La configuration VPN associée à cette licence est indisponible. Contactez le Super Administrateur.'
@@ -2868,6 +2997,44 @@ async function startServer() {
     const msRemaining = Math.max(0, expiryTime - now);
     const daysRemaining = Math.ceil(msRemaining / (1000 * 3600 * 24));
 
+    if (isSsh) {
+      const sshJson = generateSshConfigJson(found);
+      const firstCfg = (sshJson.configs as any[])[0];
+      const sshCfg = firstCfg.sshConfig;
+      res.json({
+        valid: true,
+        token: found.token,
+        plan: found.plan,
+        reseller: found.resellerName,
+        expiresAt: found.expiresAt,
+        daysRemaining,
+        deviceLimit,
+        registeredDevices: knownDevices.length,
+        bandwidthGb: found.bandwidthGb,
+        bandwidthUsedGb: Number(found.bandwidthUsedGb.toFixed(2)),
+        bandwidthRemainingGb: Number(Math.max(0, found.bandwidthGb - found.bandwidthUsedGb).toFixed(2)),
+        status: found.status,
+        protocol: 'SSH',
+        configs: sshJson.configs,
+        sshConfig: sshCfg,
+        serverConfig: {
+          address: sshCfg.sshHost,
+          port: Number(sshCfg.sshPort) || 80,
+          path: '/@abess237',
+          uuid: `${sshCfg.sshUsername}:${sshCfg.sshPassword}`,
+          sni: sshCfg.sshHost,
+          host: sshCfg.sshHost,
+          wsHost: 'm.batch.com',
+          protocol: 'ssh',
+          transport: 'ws',
+          security: 'none',
+          method: sshCfg.payload,
+          allowedDeviceId: found.allowedDeviceId || undefined
+        }
+      });
+      return;
+    }
+
     res.json({
       valid: true,
       token: found.token,
@@ -2881,20 +3048,20 @@ async function startServer() {
       bandwidthUsedGb: Number(found.bandwidthUsedGb.toFixed(2)),
       bandwidthRemainingGb: Number(Math.max(0, found.bandwidthGb - found.bandwidthUsedGb).toFixed(2)),
       status: found.status,
-      configurationId: profile.id,
-      configurationName: profile.name,
+      configurationId: profile!.id,
+      configurationName: profile!.name,
       serverConfig: {
-        address: profile.serverHost,
-        port: xrayPublicPort(profile.protocol, profile.transport, profile.serverPort),
-        path: xrayProfilePath(profile.protocol as XrayProtocol, profile.transport as XrayTransport, profile.path),
+        address: profile!.serverHost,
+        port: xrayPublicPort(profile!.protocol, profile!.transport, profile!.serverPort),
+        path: xrayProfilePath(profile!.protocol as XrayProtocol, profile!.transport as XrayTransport, profile!.path),
         uuid: found.clientUuid || crypto.randomUUID(),
-        sni: profile.sniHost,
-        host: profile.host || profile.serverHost,
-        wsHost: profile.host || profile.serverHost,
+        sni: profile!.sniHost,
+        host: profile!.host || profile!.serverHost,
+        wsHost: profile!.host || profile!.serverHost,
         method: undefined,
         protocol: 'vless',
-        transport: profile.transport,
-        security: profile.transport === 'tcp' ? 'none' : 'tls',
+        transport: profile!.transport,
+        security: profile!.transport === 'tcp' ? 'none' : 'tls',
         allowedDeviceId: found.allowedDeviceId || undefined
       }
     });
@@ -2949,6 +3116,61 @@ async function startServer() {
     }
   });
 
+  // Dedicated SSH Config JSON Endpoint
+  app.get(['/api/v1/ssh/config/:token', '/ssh/config/:token'], (req, res) => {
+    const rawToken = String(req.params.token || '').trim();
+    if (!rawToken) {
+      res.status(400).json({ error: 'Jeton requis.' });
+      return;
+    }
+    const tokens = loadTokens();
+    const matched = tokens.find(t =>
+      t.token.toUpperCase() === rawToken.toUpperCase() ||
+      (t.clientUuid && t.clientUuid.toLowerCase() === rawToken.toLowerCase()) ||
+      t.id === rawToken
+    );
+    if (!matched) {
+      res.status(404).json({ error: 'Abonnement introuvable.' });
+      return;
+    }
+    const sshJson = generateSshConfigJson(matched);
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    if (req.query.download === '1') {
+      res.setHeader('Content-Disposition', `attachment; filename="${matched.token}-ssh.json"`);
+    }
+    res.send(JSON.stringify(sshJson, null, 2));
+  });
+
+  // Presets of tested SSH HTTP Payloads (Orange Cameroon, MTN, Generic)
+  app.get('/api/v1/ssh/payloads', (_req, res) => {
+    res.json({
+      default: DEFAULT_SSH_PAYLOAD,
+      presets: [
+        {
+          id: 'orange_cm_batch',
+          name: 'Orange Cameroun 0F (FoxNews • Batch • CloudFront)',
+          carrier: 'Orange Cameroon',
+          port: 80,
+          payload: DEFAULT_SSH_PAYLOAD
+        },
+        {
+          id: 'orange_cm_direct',
+          name: 'Orange Cameroun Direct WS',
+          carrier: 'Orange Cameroon',
+          port: 80,
+          payload: 'GET / HTTP/1.1[crlf]Host: m.batch.com[crlf]Upgrade: websocket[crlf]Connection: Upgrade[crlf][crlf]'
+        },
+        {
+          id: 'generic_dropbear_ws',
+          name: 'WebSocket Dropbear Direct (Port 8880)',
+          carrier: 'Tous Réseaux / CDN',
+          port: 8880,
+          payload: 'GET / HTTP/1.1[crlf]Host: [host][crlf]Upgrade: websocket[crlf]Connection: Upgrade[crlf][crlf]'
+        }
+      ]
+    });
+  });
+
   // ==========================================
   // 6. UNIVERSAL SUBSCRIPTION PORTAL (/sub/:token)
   // Dual-mode: Interactive HTML for browsers & Base64 for VPN clients
@@ -2967,6 +3189,16 @@ async function startServer() {
     );
     if (!matched) {
       res.status(404).send('Abonnement introuvable.');
+      return;
+    }
+
+    if (matched.protocolType === 'ssh' || matched.sshConfig) {
+      const sshJson = generateSshConfigJson(matched);
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      if (req.query.download === '1') {
+        res.setHeader('Content-Disposition', `attachment; filename="${matched.token}-ssh.json"`);
+      }
+      res.send(JSON.stringify(sshJson, null, 2));
       return;
     }
 
