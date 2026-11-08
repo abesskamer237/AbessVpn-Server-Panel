@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express from 'express';
 import http from 'http';
 import path from 'path';
@@ -1289,7 +1290,7 @@ function syncXrayConfig(tokens: ClientToken[] = loadTokens()): boolean {
   });
 
   const config = {
-    log: { loglevel: 'warning', access: 'none', error: '/dev/stderr' },
+    log: { loglevel: 'warning' },
     api: { tag: 'api', services: ['HandlerService', 'StatsService', 'LoggerService'] },
     stats: {},
     policy: {

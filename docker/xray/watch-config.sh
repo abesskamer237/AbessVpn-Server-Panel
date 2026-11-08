@@ -1,10 +1,11 @@
 #!/bin/sh
 set -eu
 
-CONFIG=/shared/xray-config.json
-READY=/shared/xray-ready
-STATS=/shared/xray-stats.json
-PID_FILE=/shared/xray.pid
+SHARED_DIR="${SHARED_DIR:-/shared}"
+CONFIG="${XRAY_CONFIG_PATH:-$SHARED_DIR/xray-config.json}"
+READY="${XRAY_STATUS_FILE:-$SHARED_DIR/xray-ready}"
+STATS="${XRAY_STATS_FILE:-$SHARED_DIR/xray-stats.json}"
+PID_FILE="${XRAY_PID_FILE:-$SHARED_DIR/xray.pid}"
 LAST_CHECKSUM=
 CHILD_PID=
 GENERATION=
@@ -24,7 +25,7 @@ shutdown() {
 }
 trap shutdown INT TERM
 
-mkdir -p /shared
+mkdir -p "$SHARED_DIR" "$(dirname "$CONFIG")"
 
 while :; do
   if [ ! -s "$CONFIG" ]; then
