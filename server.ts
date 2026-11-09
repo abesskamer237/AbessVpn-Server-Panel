@@ -3104,7 +3104,8 @@ async function startServer() {
     };
     saveMasterConfig(updated);
     syncXrayConfig();
-    res.json({ success: true, config: updated });
+    const { secretPassphrase: _secretPassphrase, ...safeConfig } = updated;
+    res.json({ success: true, config: safeConfig });
   });
 
   // ==========================================
