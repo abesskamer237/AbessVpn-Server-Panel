@@ -4192,7 +4192,9 @@ async function startServer() {
         res.status(400).json({ ok: false, error: 'La cible doit résoudre exclusivement vers des adresses IPv4 publiques.' });
         return;
       }
-      const result = await probeEndpoint(`${match[1]}:${port}`, sni || match[1]);
+      // Connect to the exact address that was validated above. Passing the
+      // hostname again would trigger a second DNS lookup and permit rebinding.
+      const result = await probeEndpoint(`${addresses[0].address}:${port}`, sni || match[1]);
       res.json(result);
     } catch {
       res.status(400).json({ ok: false, error: 'Impossible de résoudre une cible publique valide.' });
