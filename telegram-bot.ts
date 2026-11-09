@@ -95,38 +95,18 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
   let botUsername = 'AbessVpnBot';
   const notifiedQuotas = new Set<string>();
 
-  // Load and save admin IDs
+  // Only IDs explicitly supplied through TELEGRAM_ADMIN_IDS are trusted.
+  // Legacy telegram-admins.json entries are ignored because they may have been
+  // enrolled with the retired shared-password /login command.
   function loadAdmins(): Set<number> {
     const set = new Set<number>();
     if (Array.isArray(ctx.adminIds)) {
       for (const idStr of ctx.adminIds) {
         const num = Number(idStr.trim());
-        if (Number.isFinite(num) && num > 0) set.add(num);
-      }
-    }
-    if (fs.existsSync(adminsFile)) {
-      try {
-        const list = JSON.parse(fs.readFileSync(adminsFile, 'utf8'));
-        if (Array.isArray(list)) {
-          for (const item of list) {
-            const num = Number(item);
-            if (Number.isFinite(num) && num > 0) set.add(num);
-          }
-        }
-      } catch {
-        // Ignore file read error
+        if (Number.isSafeInteger(num) && num > 0) set.add(num);
       }
     }
     return set;
-  }
-
-  function saveAdmins(admins: Set<number>) {
-    try {
-      const arr = Array.from(admins);
-      fs.writeFileSync(adminsFile, JSON.stringify(arr, null, 2), 'utf8');
-    } catch (err) {
-      console.error('[TelegramBot] Impossible de sauvegarder telegram-admins.json:', err);
-    }
   }
 
   const authorizedAdmins = loadAdmins();
@@ -799,7 +779,6 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
       `• \`/update\` : Mettre à jour le serveur automatiquement (Git Pull + Build)\n` +
       `• \`/version\` : Afficher la version mobile et la politique de mise à jour\n` +
       `• \`/setversion [version] [obligatoire: 1/0] [url]\` : Publier une mise à jour d'application\n` +
-      `• \`/login [mot_de_passe]\` : Vous authentifier comme Super Admin\n` +
       `────────────────────────\n` +
       `_Toutes les opérations sont protégées par chiffrement et contrôle d'accès strict._`;
   }
@@ -1382,58 +1361,21 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
 
     if (!userId) return;
 
-    // Login command for new admin authentication
-    if (text.startsWith('/login')) {
-      const passwordAttempt = text.replace('/login', '').trim();
-      const users = ctx.loadUsers();
-      const initialPass = process.env.ADMIN_INITIAL_PASSWORD;
-
-      let isMatch = false;
-      if (initialPass && passwordAttempt === initialPass) {
-        isMatch = true;
-      } else {
-        const superAdmin = users.find(u => u.role === 'SUPER_ADMIN');
-        if (superAdmin) {
-          const storedHash = superAdmin.passwordHash || '';
-          if (storedHash.startsWith('scrypt$')) {
-            const parts = storedHash.split('$');
-            if (parts.length === 3) {
-              try {
-                const salt = Buffer.from(parts[1], 'hex');
-                const expected = Buffer.from(parts[2], 'hex');
-                const actual = crypto.scryptSync(passwordAttempt, salt, expected.length);
-                if (crypto.timingSafeEqual(actual, expected)) isMatch = true;
-              } catch {}
-            }
-          } else {
-            const sha = crypto.createHash('sha256').update(passwordAttempt).digest('hex');
-            if (storedHash === sha || storedHash === passwordAttempt) {
-              isMatch = true;
-            }
-          }
-        }
-      }
-
-      if (isMatch) {
-        authorizedAdmins.add(userId);
-        saveAdmins(authorizedAdmins);
-        await sendMessage(
-          chatId,
-          `✅ *AUTHENTIFICATION RÉUSSIE !*\n\nVotre compte Telegram a été enregistré comme *Super Administrateur*.\nVous avez désormais le plein contrôle sur le serveur Abess VPN.`,
-          { reply_markup: getMainMenuKeyboard() }
-        );
-        return;
-      } else {
-        await sendMessage(chatId, '❌ Mot de passe administrateur incorrect.');
-        return;
-      }
+    // Shared-password Telegram enrollment is retired. Configure the allowlist
+    // through TELEGRAM_ADMIN_IDS in the server environment instead.
+    if (text === '/login' || text.startsWith('/login ')) {
+      await sendMessage(
+        chatId,
+        '⛔ La connexion Telegram par mot de passe partagé est désactivée. Demandez à l’administrateur du serveur d’ajouter votre identifiant Telegram à TELEGRAM_ADMIN_IDS.'
+      );
+      return;
     }
 
     // Guard for all other actions
     if (!isAdmin(userId)) {
       await sendMessage(
         chatId,
-        `⛔ *ACCÈS RESTREINT — ABESS VPN MASTER*\n\nCe bot est réservé aux administrateurs du serveur Abess VPN.\n\nPour vous authentifier, envoyez :\n\`/login <votre_mot_de_passe_admin>\``
+        `⛔ *ACCÈS RESTREINT — ABESS VPN MASTER*\n\nCe bot est réservé aux identifiants présents dans TELEGRAM_ADMIN_IDS. Demandez au propriétaire du serveur de configurer cette variable dans l’environnement du backend.`
       );
       return;
     }
