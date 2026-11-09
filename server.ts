@@ -5,6 +5,7 @@ import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import net from 'net';
+import { lookup as dnsLookup } from 'node:dns/promises';
 import tls from 'tls';
 import os from 'os';
 import { fileURLToPath } from 'url';
@@ -1926,6 +1927,15 @@ async function startServer() {
     next();
   };
 
+  const requireSuperAdmin = (req: express.Request, res: express.Response): boolean => {
+    const user = (req as any).user as AppUser | undefined;
+    if (user?.role !== 'SUPER_ADMIN') {
+      res.status(403).json({ error: 'Accès réservé au Super Administrateur.' });
+      return false;
+    }
+    return true;
+  };
+
   // ==========================================
   // 1. AUTHENTICATION & LOGIN (Admin & Reseller)
   // ==========================================
@@ -2774,10 +2784,11 @@ async function startServer() {
       return;
     }
 
+    const { secretPassphrase: _secretPassphrase, ...safeMasterConfig } = loadMasterConfig();
     const backupData = {
       timestamp: new Date().toISOString(),
       version: '2.5.0-commercial',
-      masterConfig: loadMasterConfig(),
+      masterConfig: safeMasterConfig,
       protocolConfigs: loadProtocolConfigs(),
       users: loadUsers().map(u => ({ ...u, passwordHash: u.passwordHash })),
       tokens: loadTokens(),
@@ -2931,7 +2942,8 @@ async function startServer() {
       res.status(403).json({ error: 'ACCÈS REFUSÉ : Les informations d\'infrastructure (Host, SNI, IP) sont confidentielles et réservées au Super Administrateur.' });
       return;
     }
-    res.json(loadMasterConfig());
+    const { secretPassphrase: _secretPassphrase, ...safeConfig } = loadMasterConfig();
+    res.json(safeConfig);
   });
 
   // Named protocol configurations: only the Super Administrator can create, edit or delete them.
@@ -4005,16 +4017,22 @@ async function startServer() {
     return `ABESS-${p1}-${p2}`;
   }
 
-  app.get(['/api/admin/requests', '/api/v1/admin/requests'], authenticate, (_req, res) => {
+  app.get(['/api/admin/requests', '/api/v1/admin/requests'], authenticate, (req, res) => {
+    if (!requireSuperAdmin(req, res)) return;
     res.json(loadRequests());
   });
 
   app.post(['/api/admin/requests/:id/approve', '/api/v1/admin/requests/:id/approve'], authenticate, (req, res) => {
     const user: AppUser = (req as any).user;
+    if (!requireSuperAdmin(req, res)) return;
     const requests = loadRequests();
     const reqItem = requests.find(r => r.id === req.params.id);
     if (!reqItem) {
       res.status(404).json({ error: 'Demande introuvable.' });
+      return;
+    }
+    if (reqItem.status !== 'PENDING') {
+      res.status(409).json({ error: 'Cette demande a déjà été traitée.' });
       return;
     }
     const plans = loadPlans();
@@ -4081,6 +4099,7 @@ async function startServer() {
 
   app.post(['/api/admin/requests/:id/reject', '/api/v1/admin/requests/:id/reject'], authenticate, (req, res) => {
     const user: AppUser = (req as any).user;
+    if (!requireSuperAdmin(req, res)) return;
     const requests = loadRequests();
     const reqItem = requests.find(r => r.id === req.params.id);
     if (!reqItem) {
@@ -4103,6 +4122,7 @@ async function startServer() {
   });
 
   app.delete(['/api/admin/requests/:id', '/api/v1/admin/requests/:id'], authenticate, (req, res) => {
+    if (!requireSuperAdmin(req, res)) return;
     const requests = loadRequests();
     const updated = requests.filter(r => r.id !== req.params.id);
     saveRequests(updated);
@@ -4112,214 +4132,89 @@ async function startServer() {
   // ==========================================
   // 10. VPN TELEMETRY & HEARTBEAT ENGINE
   // ==========================================
-  app.post(['/api/vpn/heartbeat', '/api/traffic/heartbeat', '/api/v1/vpn/heartbeat'], (req, res) => {
-    const { token: reqToken, uuid: reqUuid, device_id: deviceId, bytes_up = 0, bytes_down = 0, bytes_delta = 0, client_ip, device_model, os_version } = req.body || {};
-    const tokens = loadTokens();
-    const cleanTok = String(reqToken || '').trim().toUpperCase();
-    const cleanUuid = String(reqUuid || '').trim().toLowerCase();
-    const cleanDev = String(deviceId || '').trim();
-
-    let matched = tokens.find(t =>
-      (cleanTok && t.token.toUpperCase() === cleanTok) ||
-      (cleanUuid && (t.clientUuid || '').toLowerCase() === cleanUuid) ||
-      (cleanDev && Array.isArray(t.deviceIds) && t.deviceIds.includes(cleanDev))
-    );
-
-    if (!matched) {
-      res.json({
-        status: 'revoked',
-        should_disconnect: true,
-        disconnect_reason: 'Identifiants ou token non reconnus.'
-      });
-      return;
-    }
-
-    // Auto-activation on first use
-    if (matched.on_hold) {
-      matched.on_hold = false;
-      matched.firstConnectedAt = new Date().toISOString();
-      matched.expiresAt = new Date(Date.now() + matched.days * 86400000).toISOString();
-    }
-
-    // Device binding
-    if (cleanDev) {
-      if (!Array.isArray(matched.deviceIds)) matched.deviceIds = [];
-      if (!matched.deviceIds.includes(cleanDev)) {
-        if (matched.deviceIds.length >= matched.deviceLimit) {
-          res.json({
-            status: 'device_limit_reached',
-            should_disconnect: true,
-            disconnect_reason: `Limite d'appareils atteinte (${matched.deviceLimit}).`
-          });
-          return;
-        }
-        matched.deviceIds.push(cleanDev);
-      }
-    }
-
-    // Traffic delta accounting
-    let deltaBytes = Number(bytes_delta) || 0;
-    if (deltaBytes === 0 && (bytes_up > 0 || bytes_down > 0)) {
-      deltaBytes = Number(bytes_up) + Number(bytes_down);
-    }
-    if (deltaBytes > 0) {
-      const deltaGb = deltaBytes / (1024 ** 3);
-      matched.bandwidthUsedGb = Math.min(matched.bandwidthGb, matched.bandwidthUsedGb + deltaGb);
-    }
-
-    matched.lastSeenAt = new Date().toISOString();
-    if (client_ip) matched.lastSeenIp = String(client_ip);
-    matched.connectionCount = (matched.connectionCount || 0) + 1;
-
-    const isExpired = Number.isFinite(new Date(matched.expiresAt).getTime()) && new Date(matched.expiresAt).getTime() <= Date.now();
-    const isQuotaExceeded = matched.bandwidthUsedGb >= matched.bandwidthGb;
-
-    if (isExpired) matched.status = 'expired';
-    else if (isQuotaExceeded) matched.status = 'quota_exceeded';
-
-    saveTokens(tokens);
-
-    if (matched.status !== 'active') {
-      res.json({
-        status: matched.status,
-        should_disconnect: true,
-        disconnect_reason: matched.status === 'expired' ? 'Forfait arrivé à expiration.' : 'Quota de données épuisé.'
-      });
-      return;
-    }
-
-    const master = loadMasterConfig();
-    res.json({
-      status: 'ok',
-      should_disconnect: false,
-      user: {
-        token: matched.token,
-        uuid: matched.clientUuid || matched.token,
-        plan: matched.plan,
-        bandwidthGb: matched.bandwidthGb,
-        bandwidthUsedGb: Number(matched.bandwidthUsedGb.toFixed(3)),
-        expiresAt: matched.expiresAt
-      },
-      config: {
-        host: master.serverHost || 'panel.pagnol.xyz',
-        target_server: `${master.serverHost || 'panel.pagnol.xyz'}:${master.serverPort || 443}`,
-        sni: master.sniHost || master.serverHost,
-        path: master.path || '/@abess237'
-      }
+  app.post(['/api/vpn/heartbeat', '/api/traffic/heartbeat', '/api/v1/vpn/heartbeat'], (_req, res) => {
+    res.status(410).json({
+      ok: false,
+      error: 'Cette ancienne API de heartbeat est désactivée. Les quotas sont désormais comptabilisés exclusivement par Xray-core.'
     });
   });
 
-  app.post(['/api/token/verify', '/api/v1/token/verify'], (req, res) => {
-    const rawCode = String(req.body?.token || req.body?.code || '').trim().toUpperCase();
-    const deviceId = req.body?.deviceId ? String(req.body.deviceId).trim() : undefined;
-    if (!rawCode) {
-      res.status(400).json({ error: 'Code ou token requis.' });
-      return;
-    }
-    const tokens = loadTokens();
-    const found = tokens.find(t => t.token.toUpperCase() === rawCode || (t.clientUuid && t.clientUuid.toUpperCase() === rawCode));
-    if (!found) {
-      res.status(404).json({ error: 'Code voucher ou token introuvable.' });
-      return;
-    }
-    if (deviceId) {
-      if (!Array.isArray(found.deviceIds)) found.deviceIds = [];
-      if (!found.deviceIds.includes(deviceId) && found.deviceIds.length < found.deviceLimit) {
-        found.deviceIds.push(deviceId);
-        saveTokens(tokens);
-      }
-    }
-    const variants = generateUserVlessVariants(found);
-    res.json({
-      status: found.status,
-      token: found.token,
-      uuid: found.clientUuid,
-      plan: found.plan,
-      bandwidthGb: found.bandwidthGb,
-      bandwidthUsedGb: found.bandwidthUsedGb,
-      expiresAt: found.expiresAt,
-      variants,
-      subUrl: `/sub/${found.token}`
+  app.post(['/api/token/verify', '/api/v1/token/verify'], (_req, res) => {
+    res.status(410).json({
+      ok: false,
+      error: 'Cette ancienne API de validation est désactivée. Utilisez /api/v1/auth/token.'
     });
   });
 
-  app.post(['/api/users/quick-trial', '/api/v1/users/quick-trial'], (req, res) => {
-    const tokens = loadTokens();
-    const tokenStr = generateTokenCode();
-    const uuid = crypto.randomUUID();
-    const days = 1;
-    const bandwidthGb = 2.0;
-    const expiresAt = new Date(Date.now() + days * 24 * 3600 * 1000).toISOString();
-
-    const masterConfig = loadMasterConfig();
-    const protocolConfigs = loadProtocolConfigs();
-    const profile = protocolConfigs[0];
-
-    const trialToken: ClientToken = {
-      id: 'tok_' + crypto.randomUUID(),
-      token: tokenStr,
-      clientUuid: uuid,
-      resellerId: 'trial_system',
-      resellerName: 'Essai Automatique',
-      plan: 'Essai Gratuit 24h',
-      bandwidthGb,
-      bandwidthUsedGb: 0,
-      expiresAt,
-      days,
-      deviceLimit: 1,
-      deviceIds: req.body?.deviceId ? [String(req.body.deviceId).trim()] : [],
-      connectionCount: 0,
-      lastSeenAt: null,
-      lastSeenIp: null,
-      status: 'active',
-      configurationId: profile?.id,
-      configurationName: profile?.name,
-      configurationSnapshot: profile,
-      customerNote: req.body?.name || 'Essai Client',
-      encryptedLink: '',
-      createdAt: new Date().toISOString()
-    };
-    trialToken.encryptedLink = encryptConfig({ token: tokenStr, v: 2 }, masterConfig.secretPassphrase);
-    trialToken.directLink = profile ? buildDirectProtocolUrl(trialToken, profile) : undefined;
-
-    tokens.push(trialToken);
-    saveTokens(tokens);
-
-    res.json({
-      ok: true,
-      token: trialToken.token,
-      uuid: trialToken.clientUuid,
-      expiresAt: trialToken.expiresAt,
-      bandwidthGb: trialToken.bandwidthGb,
-      subUrl: `/sub/${trialToken.token}`,
-      variants: generateUserVlessVariants(trialToken)
+  app.post(['/api/users/quick-trial', '/api/v1/users/quick-trial'], (_req, res) => {
+    res.status(410).json({
+      ok: false,
+      error: 'Les essais gratuits via cette ancienne route sont désactivés. Le dispositif anti-fraude doit être activé avant toute émission.'
     });
   });
 
   // ==========================================
   // 11. NETWORK PROBE & SYSTEM DIAGNOSTICS & AUDIT LOGS
   // ==========================================
-  app.post(['/api/probe', '/api/v1/probe'], async (req, res) => {
-    const target = String(req.body?.target_server || req.body?.target || '192.179.18.100:443').trim();
-    const sni = String(req.body?.sni || 'crashlyticsreports-pa.googleapis.com').trim();
-    const result = await probeEndpoint(target, sni);
-    res.json(result);
+  app.post(['/api/probe', '/api/v1/probe'], authenticate, async (req, res) => {
+    if (!requireSuperAdmin(req, res)) return;
+    const target = String(req.body?.target_server || req.body?.target || '').trim();
+    const sni = String(req.body?.sni || '').trim();
+    const match = /^([A-Za-z0-9.-]+)(?::([0-9]{1,5}))?$/.exec(target);
+    if (!match || !isValidPublicHost(match[1]) || (sni && !isValidPublicHost(sni))) {
+      res.status(400).json({ ok: false, error: 'La cible et le SNI doivent être des noms DNS publics valides.' });
+      return;
+    }
+    const port = match[2] ? Number(match[2]) : 443;
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      res.status(400).json({ ok: false, error: 'Port réseau invalide.' });
+      return;
+    }
+    try {
+      const addresses = await dnsLookup(match[1], { all: true, verbatim: true });
+      const isPublicIpv4 = (address: string): boolean => {
+        const parts = address.split('.').map(Number);
+        if (parts.length !== 4 || parts.some(part => !Number.isInteger(part) || part < 0 || part > 255)) return false;
+        const [a, b, c] = parts;
+        return !(
+          a === 0 || a === 10 || a === 127 || a >= 224 ||
+          (a === 169 && b === 254) ||
+          (a === 172 && b >= 16 && b <= 31) ||
+          (a === 192 && b === 168) ||
+          (a === 100 && b >= 64 && b <= 127) ||
+          (a === 192 && b === 0 && (c === 0 || c === 2)) ||
+          (a === 198 && (b === 18 || b === 19 || (b === 51 && c === 100))) ||
+          (a === 203 && b === 0 && c === 113)
+        );
+      };
+      if (!addresses.length || addresses.some(item => item.family !== 4 || !isPublicIpv4(item.address))) {
+        res.status(400).json({ ok: false, error: 'La cible doit résoudre exclusivement vers des adresses IPv4 publiques.' });
+        return;
+      }
+      const result = await probeEndpoint(`${match[1]}:${port}`, sni || match[1]);
+      res.json(result);
+    } catch {
+      res.status(400).json({ ok: false, error: 'Impossible de résoudre une cible publique valide.' });
+    }
   });
 
   app.get(['/api/system/diagnostics', '/api/v1/system/diagnostics'], authenticate, (_req, res) => {
     res.json(getSystemDiagnostics());
   });
 
-  app.get(['/api/system/audit-logs', '/api/v1/admin/audit-logs'], authenticate, (_req, res) => {
+  app.get(['/api/system/audit-logs', '/api/v1/admin/audit-logs'], authenticate, (req, res) => {
+    if (!requireSuperAdmin(req, res)) return;
     res.json(loadAuditLogs());
   });
 
-  app.get(['/api/system/backup', '/api/v1/admin/system/backup'], authenticate, (_req, res) => {
+  app.get(['/api/system/backup', '/api/v1/admin/system/backup'], authenticate, (req, res) => {
+    if (!requireSuperAdmin(req, res)) return;
+    const { secretPassphrase: _secretPassphrase, ...safeConfig } = loadMasterConfig();
     res.setHeader('Content-Disposition', `attachment; filename="abessvpn-full-backup-${Date.now()}.json"`);
     res.json({
       users: loadUsers(),
       tokens: loadTokens(),
-      config: loadMasterConfig(),
+      config: safeConfig,
       protocolConfigs: loadProtocolConfigs(),
       transactions: loadTransactions(),
       plans: loadPlans(),
@@ -4362,6 +4257,10 @@ async function startServer() {
     const token = tokens.find(t => t.id === req.params.id);
     if (!token) {
       res.status(404).json({ error: 'Token introuvable.' });
+      return;
+    }
+    if (!canManageToken((req as any).user as AppUser, token.resellerId, loadUsers())) {
+      res.status(403).json({ error: 'Vous ne pouvez consulter que vos propres licences ou celles de vos sous-revendeurs.' });
       return;
     }
     const protocolConfigs = loadProtocolConfigs();
