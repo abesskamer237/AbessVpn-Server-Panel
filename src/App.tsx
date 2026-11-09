@@ -80,6 +80,8 @@ interface UserSession {
   credits: number;
   totalTokensCreated: number;
   totalBandwidthAllocatedGb: number;
+  parentId?: string;
+  parentName?: string;
 }
 
 interface Reseller {
@@ -93,6 +95,9 @@ interface Reseller {
   status: 'active' | 'suspended';
   createdAt: string;
   lastLoginAt: string | null;
+  parentId?: string;
+  parentName?: string;
+  subResellersCount?: number;
 }
 
 interface ClientToken {
@@ -470,6 +475,14 @@ export default function App() {
     try {
       const headers = { 'Authorization': `Bearer ${authToken}` };
 
+      // Sync Current User profile & real-time credits
+      const meRes = await fetch('/api/v1/auth/me', { headers });
+      if (meRes.ok) {
+        const meData = await meRes.json();
+        setCurrentUser(meData);
+        localStorage.setItem('abess_admin_user', JSON.stringify(meData));
+      }
+
       // Stats
       const statsRes = await fetch('/api/v1/admin/stats', { headers });
       if (statsRes.ok) setStats(await statsRes.json());
@@ -478,11 +491,11 @@ export default function App() {
       const tokensRes = await fetch('/api/v1/admin/tokens', { headers });
       if (tokensRes.ok) setTokens(await tokensRes.json());
 
-      // Resellers (Only for Super Admin)
-      if (currentUser?.role === 'SUPER_ADMIN') {
-        const resellersRes = await fetch('/api/v1/admin/resellers', { headers });
-        if (resellersRes.ok) setResellers(await resellersRes.json());
+      // Resellers & Sub-Resellers (Available for Super Admin & Resellers)
+      const resellersRes = await fetch('/api/v1/admin/resellers', { headers });
+      if (resellersRes.ok) setResellers(await resellersRes.json());
 
+      if (currentUser?.role === 'SUPER_ADMIN') {
         const appVerRes = await fetch('/api/v1/admin/app-version', { headers });
         if (appVerRes.ok) setAppVersionConfig(await appVerRes.json());
 
@@ -605,10 +618,15 @@ export default function App() {
     addLog(`[LOGOUT] Déconnexion effectuée.`);
   };
 
-  // Create Reseller (Super Admin)
+  // Create Reseller (Super Admin or Reseller creating Sub-Reseller)
   const handleCreateReseller = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newResellerEmail || !newResellerPassword || !newResellerName) return;
+
+    if (currentUser?.role === 'RESELLER' && Number(newResellerCredits) > currentUser.credits) {
+      alert(`Solde insuffisant ! Vous disposez de ${currentUser.credits} Go.`);
+      return;
+    }
 
     try {
       const res = await fetch('/api/v1/admin/resellers', {
@@ -621,7 +639,7 @@ export default function App() {
           name: newResellerName,
           email: newResellerEmail,
           password: newResellerPassword,
-          initialCredits: Number(newResellerCredits) || 100
+          initialCredits: Number(newResellerCredits) || 0
         })
       });
 
@@ -630,11 +648,12 @@ export default function App() {
         setNewResellerName('');
         setNewResellerEmail('');
         setNewResellerPassword('');
+        setNewResellerCredits(currentUser?.role === 'SUPER_ADMIN' ? 100 : Math.min(50, currentUser?.credits || 0));
         refreshData();
-        addLog(`[RESELLER CREATE] Compte revendeur créé pour ${newResellerEmail} (+${newResellerCredits} Go)`);
+        addLog(`[RESELLER CREATE] Compte ${currentUser?.role === 'SUPER_ADMIN' ? 'revendeur' : 'sous-revendeur'} créé pour ${newResellerEmail} (+${newResellerCredits} Go)`);
       } else {
         const data = await res.json();
-        alert(data.error || 'Erreur lors de la création du revendeur');
+        alert(data.error || 'Erreur lors de la création du compte');
       }
     } catch (err) {
       console.error(err);
@@ -643,6 +662,11 @@ export default function App() {
 
   // Credit Reseller
   const handleCreditReseller = async (resellerId: string, amount: number) => {
+    if (currentUser?.role === 'RESELLER' && amount > currentUser.credits) {
+      alert(`Solde insuffisant ! Votre solde est de ${currentUser.credits} Go.`);
+      return;
+    }
+
     try {
       const res = await fetch(`/api/v1/admin/resellers/${resellerId}/credit`, {
         method: 'PUT',
@@ -656,7 +680,10 @@ export default function App() {
       if (res.ok) {
         setCreditingReseller(null);
         refreshData();
-        addLog(`[RESELLER RECHARGE] Revendeur rechargé de +${amount} Go de crédits.`);
+        addLog(`[RESELLER RECHARGE] Revendeur rechargé de ${amount > 0 ? '+' : ''}${amount} Go de crédits.`);
+      } else {
+        const data = await res.json();
+        alert(data.error || 'Erreur lors du rechargement');
       }
     } catch (err) {
       console.error(err);
@@ -1543,9 +1570,13 @@ export default function App() {
           <nav className="flex space-x-1 sm:space-x-2 border-t border-emerald-900/40 overflow-x-auto py-1 scrollbar-none text-xs">
             {[
               { id: 'overview', label: '📊 Tableau de Bord', icon: Activity },
+              {
+                id: 'resellers',
+                label: currentUser.role === 'SUPER_ADMIN' ? '👥 Gestion des Revendeurs' : '👥 Mes Sous-Revendeurs',
+                icon: Users
+              },
               ...(currentUser.role === 'SUPER_ADMIN'
                 ? [
-                    { id: 'resellers', label: '👥 Gestion des Revendeurs', icon: Users },
                     { id: 'infrastructure', label: '🔒 Infrastructure Maître', icon: Database },
                   ]
                 : []),
@@ -1645,14 +1676,24 @@ export default function App() {
               </div>
             ) : (
               // Reseller Dashboard Stats
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs font-mono">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-xs font-mono">
                 <div className="p-5 rounded-2xl bg-cyan-950/30 border border-cyan-500/50 space-y-2">
                   <span className="text-[10px] text-cyan-400 font-bold uppercase tracking-wider block">
                     Votre Solde de Crédits Disponible
                   </span>
                   <div className="text-3xl font-black text-white">{currentUser.credits} Go</div>
                   <p className="text-slate-300 text-[11px]">
-                    Vous pouvez générer jusqu'à {currentUser.credits} Go de forfaits clients.
+                    Quota disponible pour clients ou sous-revendeurs.
+                  </p>
+                </div>
+
+                <div className="p-5 rounded-2xl bg-[#060c18] border border-purple-900/60 space-y-2">
+                  <span className="text-[10px] text-purple-400 font-bold uppercase tracking-wider block">
+                    Mes Sous-Revendeurs
+                  </span>
+                  <div className="text-3xl font-black text-purple-300 font-mono">{resellers.length}</div>
+                  <p className="text-slate-400 text-[11px]">
+                    {resellers.filter(r => r.status === 'active').length} comptes actifs dans votre réseau
                   </p>
                 </div>
 
@@ -1662,7 +1703,7 @@ export default function App() {
                   </span>
                   <div className="text-3xl font-black text-emerald-300 font-mono">{tokens.length}</div>
                   <p className="text-slate-400 text-[11px]">
-                    {tokens.filter(t => t.status === 'active').length} tokens actuellement actifs
+                    {tokens.filter(t => t.status === 'active').length} licences actuellement actives
                   </p>
                 </div>
 
@@ -1700,44 +1741,59 @@ export default function App() {
                   <span className="text-slate-400 text-[11px]">Définir quota en Go et date d'expiration</span>
                 </button>
 
-                {currentUser.role === 'SUPER_ADMIN' && (
+                <button
+                  onClick={() => setResellerModalOpen(true)}
+                  className="p-4 rounded-xl bg-black/60 border border-emerald-900/60 hover:border-cyan-500 text-left transition group"
+                >
+                  <Users className="w-5 h-5 text-cyan-400 mb-2 group-hover:scale-110 transition" />
+                  <strong className="text-white block mb-0.5">
+                    {currentUser.role === 'SUPER_ADMIN' ? 'Nouveau Revendeur' : 'Nouveau Sous-Revendeur'}
+                  </strong>
+                  <span className="text-slate-400 text-[11px]">
+                    {currentUser.role === 'SUPER_ADMIN' ? 'Créer un compte distributeur et le créditer' : 'Créer un sous-revendeur et lui déléguer des Gigas'}
+                  </span>
+                </button>
+
+                {currentUser.role === 'SUPER_ADMIN' ? (
                   <button
-                    onClick={() => setResellerModalOpen(true)}
-                    className="p-4 rounded-xl bg-black/60 border border-emerald-900/60 hover:border-cyan-500 text-left transition group"
+                    onClick={() => setActiveTab('infrastructure')}
+                    className="p-4 rounded-xl bg-black/60 border border-emerald-900/60 hover:border-indigo-500 text-left transition group"
                   >
-                    <Users className="w-5 h-5 text-cyan-400 mb-2 group-hover:scale-110 transition" />
-                    <strong className="text-white block mb-0.5">Nouveau Revendeur</strong>
-                    <span className="text-slate-400 text-[11px]">Créer un compte distributeur et le créditer</span>
+                    <Database className="w-5 h-5 text-indigo-400 mb-2 group-hover:scale-110 transition" />
+                    <strong className="text-white block mb-0.5">Configurer Infrastructure</strong>
+                    <span className="text-slate-400 text-[11px]">Gérer serveurs Xray, ports et protocoles</span>
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => setActiveTab('tokens')}
+                    className="p-4 rounded-xl bg-black/60 border border-emerald-900/60 hover:border-indigo-500 text-left transition group"
+                  >
+                    <Key className="w-5 h-5 text-indigo-400 mb-2 group-hover:scale-110 transition" />
+                    <strong className="text-white block mb-0.5">Gérer mes Licences</strong>
+                    <span className="text-slate-400 text-[11px]">Consulter, exporter ou réinitialiser les appareils</span>
                   </button>
                 )}
-
-                <button
-                  onClick={() => setActiveTab('logs')}
-                  className="p-4 rounded-xl bg-black/60 border border-emerald-900/60 hover:border-indigo-500 text-left transition group"
-                >
-                  <Terminal className="w-5 h-5 text-indigo-400 mb-2 group-hover:scale-110 transition" />
-                  <strong className="text-white block mb-0.5">Journal Serveur Live</strong>
-                  <span className="text-slate-400 text-[11px]">Surveiller les connexions WebSocket et les requêtes</span>
-                </button>
               </div>
             </div>
           </div>
         )}
 
         {/* ========================================================================= */}
-        {/* TAB 2: RESELLERS MANAGEMENT (SUPER ADMIN ONLY) */}
+        {/* TAB 2: RESELLERS & SUB-RESELLERS MANAGEMENT */}
         {/* ========================================================================= */}
-        {activeTab === 'resellers' && currentUser.role === 'SUPER_ADMIN' && (
+        {activeTab === 'resellers' && (currentUser.role === 'SUPER_ADMIN' || currentUser.role === 'RESELLER') && (
           <div className="space-y-6 animate-fade-in font-mono text-xs">
             <div className="p-6 rounded-2xl bg-[#060c18] border border-emerald-900/80 shadow-xl space-y-4">
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-3 border-b border-emerald-950">
                 <div>
                   <h2 className="text-base font-bold text-white flex items-center gap-2">
                     <Users className="w-5 h-5 text-emerald-400" />
-                    Gestion des Revendeurs Agréés
+                    {currentUser.role === 'SUPER_ADMIN' ? 'Gestion des Revendeurs Agréés' : 'Gestion de mes Sous-Revendeurs'}
                   </h2>
                   <p className="text-slate-400 text-xs mt-0.5">
-                    Créez des accès revendeurs et rechargez leur solde de crédits (Gigas). Les revendeurs ne voient JAMAIS les hôtes, SNI ou IPs maîtres.
+                    {currentUser.role === 'SUPER_ADMIN'
+                      ? 'Créez des accès revendeurs et rechargez leur solde de crédits (Gigas). Les revendeurs ne voient JAMAIS les hôtes, SNI ou IPs maîtres.'
+                      : `Créez des accès pour vos sous-revendeurs et dotez-les en crédits depuis votre solde disponible (${currentUser.credits} Go). Ils bénéficient de toutes les fonctionnalités pour gérer leurs clients et sous-revendeurs.`}
                   </p>
                 </div>
 
@@ -1746,7 +1802,7 @@ export default function App() {
                   className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-black font-black rounded-xl text-xs flex items-center gap-1.5 transition shrink-0"
                 >
                   <Plus className="w-4 h-4" />
-                  <span>Nouveau Revendeur</span>
+                  <span>{currentUser.role === 'SUPER_ADMIN' ? 'Nouveau Revendeur' : 'Nouveau Sous-Revendeur'}</span>
                 </button>
               </div>
 
@@ -1757,7 +1813,11 @@ export default function App() {
                     <tr className="border-b border-emerald-950 text-slate-500 text-[10px] uppercase">
                       <th className="py-2.5 px-3">Revendeur</th>
                       <th className="py-2.5 px-3">Email de Connexion</th>
+                      {currentUser.role === 'SUPER_ADMIN' && (
+                        <th className="py-2.5 px-3">Créé Par</th>
+                      )}
                       <th className="py-2.5 px-3">Solde Crédits (Go)</th>
+                      <th className="py-2.5 px-3">Sous-Revendeurs</th>
                       <th className="py-2.5 px-3">Tokens Générés</th>
                       <th className="py-2.5 px-3">Statut</th>
                       <th className="py-2.5 px-3 text-right">Actions</th>
@@ -1768,7 +1828,15 @@ export default function App() {
                       <tr key={r.id} className="hover:bg-emerald-950/20 transition">
                         <td className="py-3 px-3 font-bold text-white">{r.name}</td>
                         <td className="py-3 px-3 text-slate-300">{r.email}</td>
+                        {currentUser.role === 'SUPER_ADMIN' && (
+                          <td className="py-3 px-3">
+                            <span className="text-[10px] px-2 py-0.5 rounded bg-cyan-950/50 border border-cyan-800 text-cyan-300">
+                              {r.parentName || 'Super Admin'}
+                            </span>
+                          </td>
+                        )}
                         <td className="py-3 px-3 font-bold text-cyan-300 text-sm">{r.credits} Go</td>
+                        <td className="py-3 px-3 font-bold text-purple-400">{r.subResellersCount || 0}</td>
                         <td className="py-3 px-3 text-emerald-400">{r.totalTokensCreated || 0} clients</td>
                         <td className="py-3 px-3">
                           <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
@@ -1784,7 +1852,7 @@ export default function App() {
                             <button
                               onClick={() => {
                                 setCreditingReseller(r);
-                                setCreditAmount(100);
+                                setCreditAmount(currentUser.role === 'SUPER_ADMIN' ? 100 : Math.min(50, currentUser.credits));
                               }}
                               className="px-2.5 py-1 bg-cyan-950 hover:bg-cyan-900 border border-cyan-800 text-cyan-300 rounded text-[11px] font-bold"
                               title="Recharger le compte en Gigas"
@@ -1813,6 +1881,22 @@ export default function App() {
                     ))}
                   </tbody>
                 </table>
+
+                {resellers.length === 0 && (
+                  <div className="text-center py-12 text-slate-500">
+                    <Users className="w-10 h-10 mx-auto mb-2 opacity-30 text-emerald-400" />
+                    <p className="font-bold text-slate-300">
+                      {currentUser.role === 'SUPER_ADMIN'
+                        ? 'Aucun revendeur enregistré.'
+                        : 'Vous n’avez aucun sous-revendeur pour le moment.'}
+                    </p>
+                    <p className="text-[11px] mt-1 text-slate-500">
+                      {currentUser.role === 'SUPER_ADMIN'
+                        ? 'Créez un premier revendeur avec le bouton ci-dessus.'
+                        : 'Cliquez sur « Nouveau Sous-Revendeur » pour déléguer des Gigas et étendre votre réseau.'}
+                    </p>
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -1911,7 +1995,7 @@ export default function App() {
                       <th className="py-2.5 px-3">Token Client</th>
                       <th className="py-2.5 px-3">Plan Commercial</th>
                       <th className="py-2.5 px-3">Configuration</th>
-                      {currentUser.role === 'SUPER_ADMIN' && <th className="py-2.5 px-3">Revendeur</th>}
+                      {(currentUser.role === 'SUPER_ADMIN' || resellers.length > 0) && <th className="py-2.5 px-3">Revendeur / Émetteur</th>}
                       <th className="py-2.5 px-3">Quota Go</th>
                       <th className="py-2.5 px-3">Consommé</th>
                       <th className="py-2.5 px-3">Expiration</th>
@@ -1957,8 +2041,8 @@ export default function App() {
                           <span className="text-cyan-200 font-semibold">{token.configurationName || 'Configuration historique'}</span>
                           {token.allowedDeviceId && <div className="mt-1 text-[10px] text-amber-300 break-all">ID lié : {token.allowedDeviceId}</div>}
                         </td>
-                        {currentUser.role === 'SUPER_ADMIN' && (
-                          <td className="py-3 px-3 text-cyan-400">{token.resellerName}</td>
+                        {(currentUser.role === 'SUPER_ADMIN' || resellers.length > 0) && (
+                          <td className="py-3 px-3 text-cyan-400 font-semibold">{token.resellerName}</td>
                         )}
                         <td className="py-3 px-3 font-bold text-white text-sm">{token.bandwidthGb} Go</td>
                         <td className="py-3 px-3 text-slate-400">{token.bandwidthUsedGb.toFixed(2)} Go</td>
@@ -2483,13 +2567,19 @@ export default function App() {
                                   ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40'
                                   : tx.type === 'RESET_DEVICES'
                                     ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
-                                    : 'bg-slate-800 text-slate-300'
+                                    : tx.type === 'SUB_RESELLER_CREATE'
+                                      ? 'bg-purple-500/20 text-purple-300 border border-purple-500/40'
+                                      : tx.type === 'CREDIT_TRANSFER'
+                                        ? 'bg-blue-500/20 text-blue-300 border border-blue-500/40'
+                                        : tx.type === 'RESELLER_DELETE_REFUND'
+                                          ? 'bg-pink-500/20 text-pink-300 border border-pink-500/40'
+                                          : 'bg-slate-800 text-slate-300'
                             }`}>
                               {tx.type}
                             </span>
                           </td>
                           <td className="py-3 px-3 font-bold text-white">
-                            {tx.amountGb > 0 ? `${tx.amountGb} Go` : '-'}
+                            {tx.amountGb !== 0 ? `${tx.amountGb > 0 ? '+' : ''}${tx.amountGb} Go` : '-'}
                           </td>
                           <td className="py-3 px-3 text-slate-300 font-mono">
                             {tx.balanceBefore} Go → <span className="text-emerald-400 font-bold">{tx.balanceAfter} Go</span>
@@ -3229,7 +3319,7 @@ export default function App() {
       </main>
 
       {/* ========================================================================= */}
-      {/* MODAL: CREATE RESELLER */}
+      {/* MODAL: CREATE RESELLER & SUB-RESELLER */}
       {/* ========================================================================= */}
       {resellerModalOpen && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
@@ -3237,26 +3327,28 @@ export default function App() {
             <div className="flex items-center justify-between pb-2 border-b border-emerald-950">
               <h3 className="text-base font-bold text-white flex items-center gap-2">
                 <Users className="w-4 h-4 text-emerald-400" />
-                Créer un Nouveau Compte Revendeur
+                {currentUser.role === 'SUPER_ADMIN' ? 'Créer un Nouveau Compte Revendeur' : 'Créer un Nouveau Sous-Revendeur'}
               </h3>
               <button onClick={() => setResellerModalOpen(false)} className="text-slate-500 hover:text-white">✕</button>
             </div>
 
             <form onSubmit={handleCreateReseller} className="space-y-3">
               <div>
-                <label className="block text-slate-300 mb-1">Nom / Entreprise du Revendeur</label>
+                <label className="block text-slate-300 mb-1">
+                  {currentUser.role === 'SUPER_ADMIN' ? 'Nom / Entreprise du Revendeur' : 'Nom du Sous-Revendeur'}
+                </label>
                 <input
                   type="text"
                   value={newResellerName}
                   onChange={(e) => setNewResellerName(e.target.value)}
-                  placeholder="ex: Distributeur Douala Pro"
+                  placeholder={currentUser.role === 'SUPER_ADMIN' ? "ex: Distributeur Douala Pro" : "ex: Sous-Distributeur Yaoundé"}
                   className="w-full bg-[#03060e] border border-emerald-950 rounded-xl px-3 py-2 text-slate-100"
                   required
                 />
               </div>
 
               <div>
-                <label className="block text-slate-300 mb-1">Email du Revendeur (Identifiant)</label>
+                <label className="block text-slate-300 mb-1">Email de Connexion (Identifiant)</label>
                 <input
                   type="email"
                   value={newResellerEmail}
@@ -3280,14 +3372,27 @@ export default function App() {
               </div>
 
               <div>
-                <label className="block text-slate-300 mb-1">Solde Initial Crédité (en Gigas - Go)</label>
+                <div className="flex justify-between items-center mb-1">
+                  <label className="text-slate-300 font-bold">Solde Initial Crédité (en Go)</label>
+                  {currentUser.role === 'RESELLER' && (
+                    <span className="text-cyan-400 text-[10px]">
+                      Votre solde : <strong>{currentUser.credits} Go</strong>
+                    </span>
+                  )}
+                </div>
                 <input
                   type="number"
                   value={newResellerCredits}
                   onChange={(e) => setNewResellerCredits(Number(e.target.value))}
                   className="w-full bg-[#03060e] border border-emerald-950 rounded-xl px-3 py-2 text-cyan-300 font-bold"
                   min="0"
+                  max={currentUser.role === 'RESELLER' ? currentUser.credits : undefined}
                 />
+                {currentUser.role === 'RESELLER' && (
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    ℹ️ Ces Gigas seront déduits de votre solde et alloués au sous-revendeur.
+                  </p>
+                )}
               </div>
 
               <div className="pt-2 flex gap-2">
@@ -3302,7 +3407,7 @@ export default function App() {
                   type="submit"
                   className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-black font-black rounded-xl shadow"
                 >
-                  Créer Revendeur
+                  {currentUser.role === 'SUPER_ADMIN' ? 'Créer Revendeur' : 'Créer Sous-Revendeur'}
                 </button>
               </div>
             </form>
@@ -3319,35 +3424,49 @@ export default function App() {
             <div className="flex items-center justify-between pb-2 border-b border-emerald-950">
               <h3 className="text-base font-bold text-white flex items-center gap-2">
                 <CreditCard className="w-4 h-4 text-cyan-400" />
-                Recharger le Solde
+                {currentUser.role === 'SUPER_ADMIN' ? 'Recharger le Solde' : 'Transférer des Crédits'}
               </h3>
               <button onClick={() => setCreditingReseller(null)} className="text-slate-500 hover:text-white">✕</button>
             </div>
 
-            <p className="text-slate-300 text-xs">
-              Revendeur : <strong className="text-white">{creditingReseller.name}</strong> ({creditingReseller.email})<br />
-              Solde actuel : <strong className="text-cyan-300">{creditingReseller.credits} Go</strong>
-            </p>
+            <div className="text-slate-300 text-xs space-y-1">
+              <p>
+                Revendeur : <strong className="text-white">{creditingReseller.name}</strong> ({creditingReseller.email})
+              </p>
+              <p>
+                Solde actuel : <strong className="text-cyan-300">{creditingReseller.credits} Go</strong>
+              </p>
+              {currentUser.role === 'RESELLER' && (
+                <p className="text-amber-400">
+                  Votre solde disponible : <strong>{currentUser.credits} Go</strong>
+                </p>
+              )}
+            </div>
 
             <div>
-              <label className="block text-slate-300 mb-1 font-bold">Montant à Ajouter (Gigas - Go)</label>
+              <label className="block text-slate-300 mb-1 font-bold">
+                {currentUser.role === 'SUPER_ADMIN' ? 'Montant à Ajouter (Go)' : 'Crédits à Transférer (Go)'}
+              </label>
               <input
                 type="number"
                 value={creditAmount}
                 onChange={(e) => setCreditAmount(Number(e.target.value))}
                 className="w-full bg-[#03060e] border border-cyan-900 rounded-xl px-3 py-2 text-cyan-300 font-bold text-base"
                 min="1"
+                max={currentUser.role === 'RESELLER' ? currentUser.credits : undefined}
               />
               <div className="flex gap-1.5 mt-2">
-                {[50, 100, 250, 500].map((amt) => (
-                  <button
-                    key={amt}
-                    type="button"
-                    onClick={() => setCreditAmount(amt)}
-                    className="flex-1 py-1 bg-slate-900 border border-slate-800 text-slate-300 rounded hover:text-cyan-300"
-                  >
-                    +{amt}G
-                  </button>
+                {[20, 50, 100, 200]
+                  .filter(amt => currentUser.role === 'SUPER_ADMIN' || amt <= currentUser.credits)
+                  .map((amt) => (
+                    <button
+                      key={amt}
+                      type="button"
+                      onClick={() => setCreditAmount(amt)}
+                      className="flex-1 py-1 bg-slate-900 border border-slate-800 text-slate-300 rounded hover:text-cyan-300"
+                    >
+                      +{amt}G
+                    </button>
                 ))}
               </div>
             </div>
@@ -3365,7 +3484,7 @@ export default function App() {
                 onClick={() => handleCreditReseller(creditingReseller.id, creditAmount)}
                 className="flex-1 py-2.5 bg-cyan-600 hover:bg-cyan-500 text-black font-black rounded-xl shadow"
               >
-                Confirmer Recharge
+                {currentUser.role === 'SUPER_ADMIN' ? 'Confirmer Recharge' : 'Transférer Crédits'}
               </button>
             </div>
           </div>

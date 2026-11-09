@@ -71,7 +71,7 @@ export interface TransactionLog {
   id: string;
   resellerId: string;
   resellerName: string;
-  type: 'CREDIT_ADD' | 'TOKEN_CREATE' | 'BATCH_CREATE' | 'TOKEN_REVOKE' | 'RESET_DEVICES' | 'SERVER_UPDATE' | 'APP_VERSION_UPDATE' | 'ANNOUNCEMENT_PUBLISH';
+  type: 'CREDIT_ADD' | 'TOKEN_CREATE' | 'BATCH_CREATE' | 'TOKEN_REVOKE' | 'RESET_DEVICES' | 'SERVER_UPDATE' | 'APP_VERSION_UPDATE' | 'ANNOUNCEMENT_PUBLISH' | 'SUB_RESELLER_CREATE' | 'CREDIT_TRANSFER' | 'RESELLER_DELETE_REFUND';
   amountGb: number;
   balanceBefore: number;
   balanceAfter: number;
@@ -114,6 +114,8 @@ export interface AppUser {
   status: 'active' | 'suspended';
   createdAt: string;
   lastLoginAt: string | null;
+  parentId?: string;
+  parentName?: string;
 }
 
 export interface ClientToken {
@@ -1954,8 +1956,20 @@ async function startServer() {
       return;
     }
     if (user.status !== 'active') {
-      res.status(403).json({ error: 'Ce compte a été suspendu par l\'administrateur principal.' });
+      res.status(403).json({ error: 'Ce compte a été suspendu par l\'administrateur.' });
       return;
+    }
+
+    // Verify if any parent reseller in the hierarchy is suspended
+    let currentParentId = user.parentId;
+    while (currentParentId) {
+      const parentUser = users.find(u => u.id === currentParentId);
+      if (!parentUser) break;
+      if (parentUser.status !== 'active') {
+        res.status(403).json({ error: `La branche revendeur parente (${parentUser.name}) est actuellement suspendue.` });
+        return;
+      }
+      currentParentId = parentUser.parentId;
     }
 
     recordLoginAttempt(clientIp, true);
@@ -1980,7 +1994,8 @@ async function startServer() {
       user: {
         id: user.id, email: user.email, name: user.name, role: user.role,
         credits: user.credits, totalTokensCreated: user.totalTokensCreated,
-        totalBandwidthAllocatedGb: user.totalBandwidthAllocatedGb
+        totalBandwidthAllocatedGb: user.totalBandwidthAllocatedGb,
+        parentId: user.parentId, parentName: user.parentName
       }
     });
   });
@@ -1994,45 +2009,113 @@ async function startServer() {
       role: user.role,
       credits: user.credits,
       totalTokensCreated: user.totalTokensCreated,
-      totalBandwidthAllocatedGb: user.totalBandwidthAllocatedGb
+      totalBandwidthAllocatedGb: user.totalBandwidthAllocatedGb,
+      parentId: user.parentId,
+      parentName: user.parentName
     });
   });
 
+  // Helper: recursive list of all sub-reseller IDs
+  function getSubResellerIdsRecursive(parentId: string, allUsers: AppUser[]): string[] {
+    const directChildren = allUsers.filter(u => u.role === 'RESELLER' && u.parentId === parentId);
+    let ids: string[] = directChildren.map(c => c.id);
+    for (const child of directChildren) {
+      ids = ids.concat(getSubResellerIdsRecursive(child.id, allUsers));
+    }
+    return ids;
+  }
+
+  function canManageToken(user: AppUser, targetResellerId: string, allUsers: AppUser[]): boolean {
+    if (user.role === 'SUPER_ADMIN') return true;
+    if (targetResellerId === user.id) return true;
+    const descendantIds = new Set(getSubResellerIdsRecursive(user.id, allUsers));
+    return descendantIds.has(targetResellerId);
+  }
+
   // ==========================================
-  // 2. RESELLER MANAGEMENT (SUPER ADMIN ONLY)
+  // 2. RESELLER & SUB-RESELLER MANAGEMENT
+  // (Super Admins manage all; Resellers manage their own sub-resellers)
   // ==========================================
   app.get('/api/v1/admin/resellers', authenticate, (req, res) => {
     const user: AppUser = (req as any).user;
-    if (user.role !== 'SUPER_ADMIN') {
-      res.status(403).json({ error: 'Accès réservé au Super Administrateur.' });
+    if (user.role !== 'SUPER_ADMIN' && user.role !== 'RESELLER') {
+      res.status(403).json({ error: 'Accès non autorisé.' });
       return;
     }
 
     const users = loadUsers();
-    const resellers = users
-      .filter(u => u.role === 'RESELLER')
-      .map(({ passwordHash, ...rest }) => rest);
-
-    res.json(resellers);
+    if (user.role === 'SUPER_ADMIN') {
+      const resellers = users
+        .filter(u => u.role === 'RESELLER')
+        .map(({ passwordHash, ...rest }) => ({
+          ...rest,
+          subResellersCount: users.filter(sub => sub.role === 'RESELLER' && sub.parentId === rest.id).length
+        }));
+      res.json(resellers);
+    } else {
+      // Resellers see their own sub-resellers
+      const resellers = users
+        .filter(u => u.role === 'RESELLER' && u.parentId === user.id)
+        .map(({ passwordHash, ...rest }) => ({
+          ...rest,
+          subResellersCount: users.filter(sub => sub.role === 'RESELLER' && sub.parentId === rest.id).length
+        }));
+      res.json(resellers);
+    }
   });
 
   app.post('/api/v1/admin/resellers', authenticate, (req, res) => {
     const user: AppUser = (req as any).user;
-    if (user.role !== 'SUPER_ADMIN') {
-      res.status(403).json({ error: 'Accès réservé au Super Administrateur.' });
+    if (user.role !== 'SUPER_ADMIN' && user.role !== 'RESELLER') {
+      res.status(403).json({ error: 'Accès non autorisé.' });
       return;
     }
 
     const { email, password, name, initialCredits } = req.body;
     if (!email || !password || !name) {
-      res.status(400).json({ error: 'Email, mot de passe et nom requis pour le revendeur' });
+      res.status(400).json({ error: 'Email, mot de passe et nom requis pour le revendeur.' });
       return;
     }
+
+    const requestedCredits = Math.max(0, Number(initialCredits) || 0);
 
     const users = loadUsers();
     if (users.some(u => u.email.toLowerCase() === email.toLowerCase().trim())) {
       res.status(400).json({ error: 'Un compte avec cet email existe déjà.' });
       return;
+    }
+
+    const dbUser = users.find(u => u.id === user.id);
+    if (!dbUser) {
+      res.status(401).json({ error: 'Utilisateur introuvable.' });
+      return;
+    }
+
+    if (user.role === 'RESELLER') {
+      if (dbUser.status !== 'active') {
+        res.status(403).json({ error: 'Votre compte est suspendu. Impossible de créer un sous-revendeur.' });
+        return;
+      }
+      if (requestedCredits > dbUser.credits) {
+        res.status(400).json({
+          error: `Solde insuffisant ! Votre solde actuel est de ${dbUser.credits} Go. Impossible d'allouer ${requestedCredits} Go.`
+        });
+        return;
+      }
+
+      // Deduct credits from parent reseller
+      const prevCredits = dbUser.credits;
+      dbUser.credits = Math.max(0, dbUser.credits - requestedCredits);
+
+      logTransaction({
+        resellerId: dbUser.id,
+        resellerName: dbUser.name,
+        type: 'SUB_RESELLER_CREATE',
+        amountGb: requestedCredits,
+        balanceBefore: prevCredits,
+        balanceAfter: dbUser.credits,
+        note: `Création du sous-revendeur ${name.trim()} (${requestedCredits} Go transférés)`
+      });
     }
 
     const newReseller: AppUser = {
@@ -2041,42 +2124,164 @@ async function startServer() {
       passwordHash: hashPassword(password),
       name: name.trim(),
       role: 'RESELLER',
-      credits: Number(initialCredits) || 100, // Solde initial
+      credits: requestedCredits,
       totalTokensCreated: 0,
       totalBandwidthAllocatedGb: 0,
       status: 'active',
       createdAt: new Date().toISOString(),
-      lastLoginAt: null
+      lastLoginAt: null,
+      parentId: user.id,
+      parentName: user.name
     };
 
     users.push(newReseller);
     saveUsers(users);
 
+    if (requestedCredits > 0) {
+      logTransaction({
+        resellerId: newReseller.id,
+        resellerName: newReseller.name,
+        type: 'CREDIT_ADD',
+        amountGb: requestedCredits,
+        balanceBefore: 0,
+        balanceAfter: requestedCredits,
+        note: `Solde d'ouverture alloué par ${user.name}`
+      });
+    }
+
     const { passwordHash, ...safeReseller } = newReseller;
-    res.status(201).json(safeReseller);
+    res.status(201).json({
+      ...safeReseller,
+      subResellersCount: 0
+    });
   });
 
   // Credit / Recharge Reseller
   app.put('/api/v1/admin/resellers/:id/credit', authenticate, (req, res) => {
     const user: AppUser = (req as any).user;
-    if (user.role !== 'SUPER_ADMIN') {
-      res.status(403).json({ error: 'Accès réservé au Super Administrateur.' });
+    if (user.role !== 'SUPER_ADMIN' && user.role !== 'RESELLER') {
+      res.status(403).json({ error: 'Accès non autorisé.' });
       return;
     }
 
-    const { amount } = req.body;
-    if (typeof amount !== 'number') {
-      res.status(400).json({ error: 'Montant de crédit numérique requis' });
+    const amount = Number(req.body?.amount);
+    if (!Number.isFinite(amount) || amount === 0) {
+      res.status(400).json({ error: 'Montant de crédit numérique non nul requis.' });
       return;
     }
 
     const users = loadUsers();
     const reseller = users.find(u => u.id === req.params.id && u.role === 'RESELLER');
     if (!reseller) {
-      res.status(404).json({ error: 'Revendeur introuvable' });
+      res.status(404).json({ error: 'Revendeur introuvable.' });
       return;
     }
 
+    const dbUser = users.find(u => u.id === user.id);
+    if (!dbUser) {
+      res.status(401).json({ error: 'Utilisateur introuvable.' });
+      return;
+    }
+
+    if (user.role === 'RESELLER') {
+      if (reseller.parentId !== user.id) {
+        res.status(403).json({ error: 'Vous ne pouvez créditer que vos propres sous-revendeurs.' });
+        return;
+      }
+
+      if (amount > 0) {
+        if (dbUser.credits < amount) {
+          res.status(400).json({
+            error: `Solde insuffisant ! Votre solde est de ${dbUser.credits} Go. Requis : ${amount} Go.`
+          });
+          return;
+        }
+
+        const parentPrev = dbUser.credits;
+        dbUser.credits = Math.max(0, dbUser.credits - amount);
+
+        const childPrev = reseller.credits;
+        reseller.credits += amount;
+
+        saveUsers(users);
+
+        logTransaction({
+          resellerId: dbUser.id,
+          resellerName: dbUser.name,
+          type: 'CREDIT_TRANSFER',
+          amountGb: amount,
+          balanceBefore: parentPrev,
+          balanceAfter: dbUser.credits,
+          note: `Transfert de ${amount} Go vers le sous-revendeur ${reseller.name}`
+        });
+
+        logTransaction({
+          resellerId: reseller.id,
+          resellerName: reseller.name,
+          type: 'CREDIT_ADD',
+          amountGb: amount,
+          balanceBefore: childPrev,
+          balanceAfter: reseller.credits,
+          note: req.body?.note || `Recharge de ${amount} Go reçue de ${dbUser.name}`
+        });
+
+        res.json({
+          success: true,
+          resellerId: reseller.id,
+          name: reseller.name,
+          newCredits: reseller.credits,
+          parentCredits: dbUser.credits
+        });
+        return;
+      } else {
+        const reclaim = Math.abs(amount);
+        if (reseller.credits < reclaim) {
+          res.status(400).json({
+            error: `Le sous-revendeur ne dispose que de ${reseller.credits} Go. Impossible de récupérer ${reclaim} Go.`
+          });
+          return;
+        }
+
+        const childPrev = reseller.credits;
+        reseller.credits -= reclaim;
+
+        const parentPrev = dbUser.credits;
+        dbUser.credits += reclaim;
+
+        saveUsers(users);
+
+        logTransaction({
+          resellerId: dbUser.id,
+          resellerName: dbUser.name,
+          type: 'CREDIT_ADD',
+          amountGb: reclaim,
+          balanceBefore: parentPrev,
+          balanceAfter: dbUser.credits,
+          note: `Récupération de ${reclaim} Go du sous-revendeur ${reseller.name}`
+        });
+
+        logTransaction({
+          resellerId: reseller.id,
+          resellerName: reseller.name,
+          type: 'CREDIT_TRANSFER',
+          amountGb: -reclaim,
+          balanceBefore: childPrev,
+          balanceAfter: reseller.credits,
+          note: `Déduction de ${reclaim} Go par le revendeur parent ${dbUser.name}`
+        });
+
+        res.json({
+          success: true,
+          resellerId: reseller.id,
+          name: reseller.name,
+          newCredits: reseller.credits,
+          parentCredits: dbUser.credits
+        });
+        return;
+      }
+    }
+
+    // SUPER_ADMIN
     const prev = reseller.credits;
     reseller.credits = Math.max(0, reseller.credits + amount);
     saveUsers(users);
@@ -2102,8 +2307,8 @@ async function startServer() {
   // Toggle Reseller Status (Active / Suspended)
   app.put('/api/v1/admin/resellers/:id/status', authenticate, (req, res) => {
     const user: AppUser = (req as any).user;
-    if (user.role !== 'SUPER_ADMIN') {
-      res.status(403).json({ error: 'Accès réservé au Super Administrateur.' });
+    if (user.role !== 'SUPER_ADMIN' && user.role !== 'RESELLER') {
+      res.status(403).json({ error: 'Accès non autorisé.' });
       return;
     }
 
@@ -2111,7 +2316,12 @@ async function startServer() {
     const users = loadUsers();
     const reseller = users.find(u => u.id === req.params.id && u.role === 'RESELLER');
     if (!reseller) {
-      res.status(404).json({ error: 'Revendeur introuvable' });
+      res.status(404).json({ error: 'Revendeur introuvable.' });
+      return;
+    }
+
+    if (user.role === 'RESELLER' && reseller.parentId !== user.id) {
+      res.status(403).json({ error: 'Vous ne pouvez modifier le statut que de vos propres sous-revendeurs.' });
       return;
     }
 
@@ -2124,20 +2334,52 @@ async function startServer() {
   // Delete Reseller
   app.delete('/api/v1/admin/resellers/:id', authenticate, (req, res) => {
     const user: AppUser = (req as any).user;
-    if (user.role !== 'SUPER_ADMIN') {
-      res.status(403).json({ error: 'Accès réservé au Super Administrateur.' });
+    if (user.role !== 'SUPER_ADMIN' && user.role !== 'RESELLER') {
+      res.status(403).json({ error: 'Accès non autorisé.' });
       return;
     }
 
     const users = loadUsers();
-    const filtered = users.filter(u => u.id !== req.params.id || u.role !== 'RESELLER');
+    const target = users.find(u => u.id === req.params.id && u.role === 'RESELLER');
+    if (!target) {
+      res.status(404).json({ error: 'Revendeur introuvable.' });
+      return;
+    }
+
+    if (user.role === 'RESELLER') {
+      if (target.parentId !== user.id) {
+        res.status(403).json({ error: 'Vous ne pouvez supprimer que vos propres sous-revendeurs.' });
+        return;
+      }
+
+      const dbUser = users.find(u => u.id === user.id);
+      if (dbUser && target.credits > 0) {
+        const refund = target.credits;
+        const prev = dbUser.credits;
+        dbUser.credits += refund;
+
+        logTransaction({
+          resellerId: dbUser.id,
+          resellerName: dbUser.name,
+          type: 'RESELLER_DELETE_REFUND',
+          amountGb: refund,
+          balanceBefore: prev,
+          balanceAfter: dbUser.credits,
+          note: `Remboursement de ${refund} Go suite à la suppression du sous-revendeur ${target.name}`
+        });
+      }
+    }
+
+    const descendantIds = new Set([target.id, ...getSubResellerIdsRecursive(target.id, users)]);
+    const filtered = users.filter(u => !descendantIds.has(u.id));
     saveUsers(filtered);
-    res.json({ success: true });
+
+    res.json({ success: true, deletedCount: descendantIds.size });
   });
 
   // ==========================================
   // 3. TOKENS CREATION & MANAGEMENT
-  // (Resellers see ONLY their tokens, NEVER server config!)
+  // (Resellers see their tokens and sub-resellers' tokens)
   // ==========================================
   app.get('/api/v1/admin/tokens', authenticate, (req, res) => {
     const user: AppUser = (req as any).user;
@@ -2147,8 +2389,10 @@ async function startServer() {
       // Super Admin sees all tokens with full reseller visibility
       res.json(tokens.map(safeClientToken));
     } else {
-      // Reseller sees ONLY his own tokens
-      const myTokens = tokens.filter(t => t.resellerId === user.id);
+      // Reseller sees his own tokens AND tokens created by his sub-resellers
+      const users = loadUsers();
+      const scopeIds = new Set([user.id, ...getSubResellerIdsRecursive(user.id, users)]);
+      const myTokens = tokens.filter(t => scopeIds.has(t.resellerId));
       res.json(myTokens.map(safeClientToken));
     }
   });
@@ -2483,8 +2727,9 @@ async function startServer() {
       res.status(404).json({ error: 'Token introuvable.' });
       return;
     }
-    if (user.role !== 'SUPER_ADMIN' && target.resellerId !== user.id) {
-      res.status(403).json({ error: 'Vous ne pouvez réinitialiser que vos propres licences.' });
+    const allUsers = loadUsers();
+    if (!canManageToken(user, target.resellerId, allUsers)) {
+      res.status(403).json({ error: 'Vous ne pouvez réinitialiser que vos propres licences ou celles de vos sous-revendeurs.' });
       return;
     }
 
@@ -2633,8 +2878,9 @@ async function startServer() {
       res.status(404).json({ error: 'Token introuvable.' });
       return;
     }
-    if (user.role !== 'SUPER_ADMIN' && target.resellerId !== user.id) {
-      res.status(403).json({ error: 'Vous ne pouvez modifier que vos propres licences.' });
+    const allUsers = loadUsers();
+    if (!canManageToken(user, target.resellerId, allUsers)) {
+      res.status(403).json({ error: 'Vous ne pouvez modifier que vos propres licences ou celles de vos sous-revendeurs.' });
       return;
     }
     if (requestedStatus === 'active') {
@@ -2664,8 +2910,9 @@ async function startServer() {
       return;
     }
 
-    if (user.role !== 'SUPER_ADMIN' && targetToken.resellerId !== user.id) {
-      res.status(403).json({ error: 'Vous ne pouvez révoquer que vos propres tokens clients.' });
+    const allUsers = loadUsers();
+    if (!canManageToken(user, targetToken.resellerId, allUsers)) {
+      res.status(403).json({ error: 'Vous ne pouvez révoquer que vos propres tokens clients ou ceux de vos sous-revendeurs.' });
       return;
     }
 
@@ -2874,13 +3121,17 @@ async function startServer() {
         totalBytesTransferred
       });
     } else {
-      const myTokens = tokens.filter(t => t.resellerId === user.id);
+      const users = loadUsers();
+      const mySubResellers = users.filter(u => u.role === 'RESELLER' && u.parentId === user.id);
+      const scopeIds = new Set([user.id, ...getSubResellerIdsRecursive(user.id, users)]);
+      const myTokens = tokens.filter(t => scopeIds.has(t.resellerId));
       const myBandwidthAllocated = myTokens.reduce((sum, t) => sum + t.bandwidthGb, 0);
       const myBandwidthConsumed = myTokens.reduce((sum, t) => sum + t.bandwidthUsedGb, 0);
 
       res.json({
         role: 'RESELLER',
         creditsRemaining: user.credits,
+        totalResellers: mySubResellers.length,
         totalTokens: myTokens.length,
         activeTokens: myTokens.filter(t => t.status === 'active').length,
         totalBandwidthAllocated: myBandwidthAllocated,
