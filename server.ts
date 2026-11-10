@@ -61,7 +61,7 @@ function writeJsonAtomically(filePath: string, value: unknown): boolean {
       // Rewrite an unreadable or incomplete file atomically.
     }
   }
-  const tempPath = `${filePath}.${process.pid}.${Math.random().toString(36).substring(2, 7)}.tmp`;
+  const tempPath = `${filePath}.${process.pid}.${crypto.randomBytes(8).toString('hex')}.tmp`;
   fs.writeFileSync(tempPath, contents, { encoding: 'utf8', mode: 0o640 });
   fs.renameSync(tempPath, filePath);
   return true;
@@ -688,7 +688,7 @@ function loadUsers(): AppUser[] {
   };
 
   const initial = [superAdmin];
-  fs.writeFileSync(usersFile, JSON.stringify(initial, null, 2), 'utf8');
+  writeJsonAtomically(usersFile, initial);
   return initial;
 }
 function saveUsers(users: AppUser[]) {
@@ -711,7 +711,7 @@ function loadTokens(): ClientToken[] {
           changed = true;
         }
       }
-      if (changed) fs.writeFileSync(tokensFile, JSON.stringify(loaded, null, 2), 'utf8');
+      if (changed) writeJsonAtomically(tokensFile, loaded);
       return loaded;
     } catch {
       throw new Error('Le fichier data/tokens.json est illisible. Restaurez une sauvegarde avant de redémarrer.');
@@ -719,7 +719,7 @@ function loadTokens(): ClientToken[] {
   }
 
   const initial: ClientToken[] = [];
-  fs.writeFileSync(tokensFile, JSON.stringify(initial, null, 2), 'utf8');
+  writeJsonAtomically(tokensFile, initial);
   return initial;
 }
 
