@@ -517,7 +517,84 @@ jobs:
             });
           });
           assert.ok(String(websocketResponse).includes('HTTP/1.1 503 Service Unavailable'));
-          console.log('API, licensing, encrypted import and Xray config tests passed.');
+
+          // Public subscription URLs accept only the bearer token, not internal IDs or UUIDs.
+          const subscriptionByToken = await fetch(`${base}/sub/${licenceA.token}?raw=1`);
+          assert.equal(subscriptionByToken.status, 200);
+          const subscriptionById = await fetch(`${base}/sub/${licenceA.id}?raw=1`);
+          assert.equal(subscriptionById.status, 404, 'internal token IDs must not act as subscription credentials');
+          const subscriptionByUuid = await fetch(`${base}/sub/${licenceA.clientUuid}?raw=1`);
+          assert.equal(subscriptionByUuid.status, 404, 'Xray UUIDs must not act as subscription credentials');
+          const sshConfigById = await fetch(`${base}/api/v1/ssh/config/${licenceA.id}`);
+          assert.equal(sshConfigById.status, 404, 'internal token IDs must not expose SSH configurations');
+
+          // Membership status responses must not disclose customer contact/payment data.
+          const membershipCreate = await fetch(`${base}/api/v1/membership/request`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              firstName: 'CI',
+              lastName: 'Customer',
+              contactDetail: '+237600000000',
+              deviceId: 'CI-REQUEST-DEVICE-123456',
+              planId: 'plan_10gb',
+              paymentMethod: 'ORANGE_MONEY',
+              paymentRef: 'CI-PRIVATE-PAYMENT-REFERENCE',
+            }),
+          });
+          assert.equal(membershipCreate.status, 200);
+          const membershipCreated = await membershipCreate.json();
+          const membershipStatus = await fetch(`${base}/api/v1/membership/status?request_id=${encodeURIComponent(membershipCreated.request.id)}`);
+          assert.equal(membershipStatus.status, 200);
+          const membershipStatusJson = await membershipStatus.json();
+          assert.equal(membershipStatusJson.status, 'pending');
+          assert.ok(!('fullName' in membershipStatusJson.request));
+          assert.ok(!('contactDetail' in membershipStatusJson.request));
+          assert.ok(!('paymentRef' in membershipStatusJson.request));
+          assert.ok(!('ipAddress' in membershipStatusJson.request));
+          const emptyMembershipLookup = await fetch(`${base}/api/v1/membership/status`);
+          assert.equal(emptyMembershipLookup.status, 400, 'membership status must require a request ID or device ID');
+
+          // SSH profiles are retained for legacy visibility, but cannot issue a false/unsupported licence.
+          const sshProfileResponse = await fetch(`${base}/api/v1/admin/protocol-configs`, {
+            method: 'POST',
+            headers: adminHeaders,
+            body: JSON.stringify({
+              name: 'CI legacy SSH profile',
+              serverHost: 'ssh-profile.example.test',
+              serverPort: 22,
+              protocol: 'ssh',
+              transport: 'ws',
+              payload: 'GET / HTTP/1.1[crlf]Host: example.test[crlf][crlf]',
+            }),
+          });
+          assert.equal(sshProfileResponse.status, 201);
+          const sshProfile = (await sshProfileResponse.json()).config;
+          const sshLicence = await fetch(`${base}/api/v1/admin/tokens`, {
+            method: 'POST',
+            headers: adminHeaders,
+            body: JSON.stringify({
+              plan: 'CI unsupported SSH',
+              bandwidthGb: 1,
+              days: 1,
+              deviceLimit: 1,
+              configurationId: sshProfile.id,
+            }),
+          });
+          assert.equal(sshLicence.status, 503, 'the panel must not issue SSH licences without a real host provisioner');
+          const sshBatch = await fetch(`${base}/api/v1/admin/tokens/batch`, {
+            method: 'POST',
+            headers: adminHeaders,
+            body: JSON.stringify({
+              count: 2,
+              bandwidthGb: 1,
+              days: 1,
+              configurationId: sshProfile.id,
+            }),
+          });
+          assert.equal(sshBatch.status, 503, 'the panel must not generate unsupported SSH batches');
+
+          console.log('API, licensing, privacy, security and Xray config tests passed.');
           NODE
 
       - name: Validate first-run and active-licence configurations with official Xray-core
