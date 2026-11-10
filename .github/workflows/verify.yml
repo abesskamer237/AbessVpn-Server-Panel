@@ -278,6 +278,36 @@ jobs:
           });
           assert.equal(adminAppVersion.status, 200, 'Super Admin must retain access to app version configuration');
 
+          async function assertCorruptStoreFailsClosed(filename, endpoint, headers) {
+            const storePath = `${dataDir}/${filename}`;
+            const existed = fs.existsSync(storePath);
+            const previous = existed ? fs.readFileSync(storePath) : null;
+            fs.writeFileSync(storePath, '{invalid-json');
+            try {
+              const response = await fetch(`${base}${endpoint}`, { headers });
+              assert.equal(response.status, 500, `${filename} corruption must not be treated as an empty store`);
+            } finally {
+              if (existed) fs.writeFileSync(storePath, previous);
+              else fs.rmSync(storePath, { force: true });
+            }
+          }
+
+          await assertCorruptStoreFailsClosed(
+            'transactions.json',
+            '/api/v1/admin/transactions',
+            { Authorization: `Bearer ${login.token}` },
+          );
+          await assertCorruptStoreFailsClosed(
+            'plans.json',
+            '/api/plans',
+            { Authorization: `Bearer ${login.token}` },
+          );
+          await assertCorruptStoreFailsClosed(
+            'audit-logs.json',
+            '/api/system/audit-logs',
+            { Authorization: `Bearer ${login.token}` },
+          );
+
           const adminBackup = await fetch(`${base}/api/v1/admin/backup`, {
             headers: { Authorization: `Bearer ${login.token}` },
           });
@@ -639,6 +669,11 @@ jobs:
           });
           assert.equal(membershipCreate.status, 200);
           const membershipCreated = await membershipCreate.json();
+          await assertCorruptStoreFailsClosed(
+            'requests.json',
+            '/api/v1/admin/requests',
+            { Authorization: `Bearer ${login.token}` },
+          );
           const membershipStatus = await fetch(`${base}/api/v1/membership/status?request_id=${encodeURIComponent(membershipCreated.request.id)}`);
           assert.equal(membershipStatus.status, 200);
           const membershipStatusJson = await membershipStatus.json();
