@@ -97,6 +97,17 @@ jobs:
           assert.equal(ping.ok, true);
           assert.equal(ping.dataPlane, 'not-ready', 'the control plane must not claim Xray is ready without its sidecar');
 
+          const allowedOrigin = `https://${process.env.VPN_DOMAIN}`;
+          const allowedCors = await fetch(`${base}/api/v1/ping`, {
+            headers: { Origin: allowedOrigin },
+          });
+          assert.equal(allowedCors.status, 200);
+          assert.equal(allowedCors.headers.get('access-control-allow-origin'), allowedOrigin);
+          const deniedCors = await fetch(`${base}/api/v1/ping`, {
+            headers: { Origin: 'https://untrusted-site.example' },
+          });
+          assert.equal(deniedCors.status, 403, 'browser origins outside the allowlist must be rejected');
+
           // Keep the first-run config too: a brand-new installation has no issued licences yet.
           fs.copyFileSync(`${dataDir}/xray-config.json`, `${dataDir}/xray-config-empty.json`);
           fs.chmodSync(`${dataDir}/xray-config-empty.json`, 0o644);
