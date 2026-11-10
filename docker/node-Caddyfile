@@ -1,0 +1,14 @@
+{
+  email {$ACME_EMAIL}
+}
+{$VPN_DOMAIN} {
+  @ws path /@abess237
+  reverse_proxy @ws xray:10000
+  @grpc path /@abess237/vless/grpc*
+  reverse_proxy @grpc h2c://xray:10001
+  @upgrade path /@abess237/vless/httpupgrade
+  reverse_proxy @upgrade xray:10002
+  @xhttp path /@abess237/vless/xhttp*
+  reverse_proxy @xhttp xray:10003
+  respond "ABESS VPN node" 200
+}

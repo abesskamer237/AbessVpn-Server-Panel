@@ -28,6 +28,17 @@ trap shutdown INT TERM
 mkdir -p "$SHARED_DIR" "$(dirname "$CONFIG")"
 
 while :; do
+  # Stop forwarding if the authority disappears; never keep stale licences
+  # active indefinitely after an API/database/agent failure.
+  HEARTBEAT="$SHARED_DIR/xray-control-heartbeat"
+  HEARTBEAT_TIME="$(stat -c %Y "$HEARTBEAT" 2>/dev/null || printf '0')"
+  NOW="$(date +%s)"
+  if [ "$((NOW - HEARTBEAT_TIME))" -gt 60 ]; then
+    stop_child
+    LAST_CHECKSUM=
+    sleep 2
+    continue
+  fi
   if [ ! -s "$CONFIG" ]; then
     sleep 1
     continue

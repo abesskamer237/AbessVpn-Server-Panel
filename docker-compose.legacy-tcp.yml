@@ -1,0 +1,9 @@
+# TEMPORARY migration compatibility only: VLESS/TCP carries plaintext.
+# Remove this overlay after clients have imported a TLS profile.
+services:
+  api:
+    environment:
+      ALLOW_INSECURE_TCP: "true"
+  xray:
+    ports:
+      - "10050:10050/tcp"

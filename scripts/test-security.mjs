@@ -9,7 +9,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 // Run against an isolated server and disposable database; never touch production.
 const dataDir = await mkdtemp(path.join(tmpdir(), 'abess-security-'));
 const password = randomBytes(24).toString('hex');
-const env = { ...process.env, NODE_ENV: 'production', PORT: '3198', DATA_DIR: dataDir,
+const env = { ...process.env, ALLOW_JSON_STORAGE:'true', NODE_ENV: 'production', PORT: '3198', DATA_DIR: dataDir,
   ADMIN_EMAIL: 'audit@example.test', ADMIN_INITIAL_PASSWORD: password,
   MASTER_SECRET: randomBytes(32).toString('hex'), VPN_DOMAIN: 'vpn.example.test',
   TELEGRAM_BOT_TOKEN: '', TELEGRAM_ADMIN_IDS: '' };

@@ -1,0 +1,47 @@
+# Run on a separate VPS with its own public hostname and Caddy certificate.
+services:
+  agent:
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs: ["/tmp:rw,nosuid,noexec,size=16m"]
+    build: .
+    command: ["node", "scripts/node-agent.mjs"]
+    restart: unless-stopped
+    environment:
+      CONTROL_API_BASE_URL: ${CONTROL_API_BASE_URL:?HTTPS control-plane origin required}
+      VPN_NODE_ID: ${VPN_NODE_ID:?Register the node in the panel}
+      VPN_NODE_KEY: ${VPN_NODE_KEY:?Store the one-time node key securely}
+      SHARED_DIR: /shared
+      NODE_USE_ENV_PROXY: "1"
+    volumes:
+      - node_data:/shared
+  xray:
+    user: "1000:1000"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs: ["/tmp:rw,nosuid,noexec,size=16m"]
+    depends_on:
+      - agent
+    build: ./docker/xray
+    restart: unless-stopped
+    volumes:
+      - node_data:/shared
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      VPN_DOMAIN: ${VPN_DOMAIN:?Public hostname of this node}
+      ACME_EMAIL: ${ACME_EMAIL:?Certificate email required}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./docker/node-Caddyfile:/etc/caddy/Caddyfile:ro
+      - node_caddy_data:/data
+      - node_caddy_config:/config
+volumes:
+  node_data:
+  node_caddy_data:
+  node_caddy_config:

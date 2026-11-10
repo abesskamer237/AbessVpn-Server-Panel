@@ -1,0 +1,38 @@
+# Optional overlay: docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up -d
+services:
+  api:
+    environment:
+      METRICS_TOKEN_FILE: /run/secrets/metrics_token
+    secrets:
+      - metrics_token
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - 'sed "s/ABESS_DOMAIN/$$VPN_DOMAIN/g" /etc/prometheus/template.yml > /tmp/prometheus.yml; exec /bin/prometheus --config.file=/tmp/prometheus.yml --storage.tsdb.path=/prometheus'
+    environment:
+      VPN_DOMAIN: ${VPN_DOMAIN:?Domain required}
+    ports:
+      - "127.0.0.1:9090:9090"
+    secrets:
+      - metrics_token
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/template.yml:ro
+      - ./monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - abessvpn
+  blackbox:
+    image: prom/blackbox-exporter:v0.26.0
+    restart: unless-stopped
+    command: ["--config.file=/etc/blackbox.yml"]
+    volumes:
+      - ./monitoring/blackbox.yml:/etc/blackbox.yml:ro
+    networks:
+      - abessvpn
+volumes:
+  prometheus_data:
+secrets:
+  metrics_token:
+    file: ./.secrets/metrics-token

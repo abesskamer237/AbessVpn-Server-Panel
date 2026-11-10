@@ -1,5 +1,28 @@
 services:
+  database:
+    image: postgres:16-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: abess
+      POSTGRES_DB: abess
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Configure a persistent random PostgreSQL password}
+      POSTGRES_APP_PASSWORD: ${POSTGRES_APP_PASSWORD:?Configure a separate application database password}
+    volumes:
+      - abessvpn_postgres:/var/lib/postgresql/data
+      - ./docker/postgres/init-app.sh:/docker-entrypoint-initdb.d/10-app.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U abess -d abess"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - abessvpn
+
   api:
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs: ["/tmp:rw,nosuid,noexec,size=64m"]
     build:
       context: .
       dockerfile: Dockerfile
@@ -12,6 +35,13 @@ services:
       DATA_DIR: /app/data
       VPN_PORT: "443"
       VLESS_WS_PATH: /@abess237
+      DATABASE_URL: postgresql://abess_app:${POSTGRES_APP_PASSWORD}@database:5432/abess
+      POSTGRES_PASSWORD: ""
+      POSTGRES_APP_PASSWORD: ""
+      NODE_USE_ENV_PROXY: "1"
+    depends_on:
+      database:
+        condition: service_healthy
     volumes:
       - abessvpn_data:/app/data
     expose:
@@ -30,6 +60,11 @@ services:
       - abessvpn
 
   xray:
+    user: "1000:1000"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs: ["/tmp:rw,nosuid,noexec,size=16m"]
     build:
       context: ./docker/xray
       dockerfile: Dockerfile
@@ -41,9 +76,6 @@ services:
       - abessvpn_data:/shared
     expose:
       - "10000"
-    ports:
-      # VLESS Native Direct TCP (Low Latency / High Speed)
-      - "10050:10050/tcp"
     healthcheck:
       test: ["CMD-SHELL", "test -s /shared/xray-ready && test -s /shared/xray-config.json && test -s /shared/xray.pid && kill -0 $(cat /shared/xray.pid)"]
       interval: 5s
@@ -74,6 +106,7 @@ services:
       - abessvpn
 
 volumes:
+  abessvpn_postgres:
   abessvpn_data:
   caddy_data:
   caddy_config:

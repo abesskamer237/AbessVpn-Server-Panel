@@ -259,6 +259,7 @@ if (process.argv.includes('--self-test')) {
   selfTest();
 } else {
   try {
+    if(process.env.DATABASE_URL)throw new Error('Ce script ne traite que les anciens fichiers JSON. Ne tournez pas MASTER_SECRET pour PostgreSQL avec ce script ; conservez la clé stable et suivez docs/OPERATIONS.md.');
     const dataDir = process.env.DATA_DIR || path.resolve(process.cwd(), 'data');
     const result = rotateMasterSecret({
       dataDir,

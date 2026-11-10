@@ -29,7 +29,7 @@ export default defineConfig({
     url: `${baseURL}/api/v1/ping`,
     reuseExistingServer: false,
     env: {
-      NODE_ENV: 'production', PORT: String(port), VPN_DOMAIN: 'vpn.example.test',
+      ALLOW_JSON_STORAGE:'true', NODE_ENV: 'production', COOKIE_SECURE:'false', PORT: String(port), VPN_DOMAIN: 'vpn.example.test',
       DATA_DIR: process.env.PANEL_TEST_DATA_DIR,
       ADMIN_EMAIL: process.env.PANEL_TEST_EMAIL,
       ADMIN_INITIAL_PASSWORD: process.env.PANEL_TEST_PASSWORD,

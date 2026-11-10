@@ -23,6 +23,8 @@ import type {
 } from './server.js';
 
 export interface TelegramBotContext {
+  encryptedBackup: () => Promise<unknown>;
+  runTransaction: <T>(work: () => Promise<T>) => Promise<T>;
   botToken?: string;
   adminIds?: string[];
   vpnDomain: string;
@@ -111,23 +113,8 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
 
   const authorizedAdmins = loadAdmins();
 
-  function buildSafeBackupSnapshot() {
-    const { secretPassphrase: _secretPassphrase, ...safeMasterConfig } = ctx.loadMasterConfig();
-    const tokens = ctx.loadTokens().map((token) => {
-      const { sshConfig, ...safeToken } = token;
-      if (!sshConfig) return safeToken;
-      const { sshPassword: _sshPassword, ...safeSshConfig } = sshConfig;
-      return { ...safeToken, sshConfig: safeSshConfig };
-    });
-    return {
-      timestamp: new Date().toISOString(),
-      version: 'abessvpn-master-v2',
-      users: ctx.loadUsers(),
-      tokens,
-      masterConfig: safeMasterConfig,
-      protocolConfigs: ctx.loadProtocolConfigs(),
-      transactions: ctx.loadTransactions()
-    };
+  async function buildSafeBackupSnapshot() {
+    return ctx.encryptedBackup();
   }
 
   function isAdmin(userId: number): boolean {
@@ -1161,7 +1148,7 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
           }
         });
       } else if (data === 'action_backup') {
-        const snapshot = buildSafeBackupSnapshot();
+        const snapshot = await buildSafeBackupSnapshot();
         const buffer = Buffer.from(JSON.stringify(snapshot, null, 2), 'utf8');
         const filename = `backup_abessvpn_${new Date().toISOString().split('T')[0]}_${Date.now()}.json`;
 
@@ -1169,7 +1156,7 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
           chatId,
           buffer,
           filename,
-          `💾 *SAUVEGARDE COMPLÈTE SYSTÈME ABESS VPN*\n\nInstantane généré le ${snapshot.timestamp}.\nConservez ce fichier en lieu sûr pour toute restauration future.`,
+          `💾 *SAUVEGARDE COMPLÈTE SYSTÈME ABESS VPN*\n\nInstantane généré le ${new Date().toISOString()}.\nConservez ce fichier en lieu sûr pour toute restauration future.`,
           { reply_markup: getMainMenuKeyboard() }
         );
       } else if (data === 'menu_help') {
@@ -1527,7 +1514,7 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
     }
 
     if (text === '/backup') {
-      const snapshot = buildSafeBackupSnapshot();
+      const snapshot = await buildSafeBackupSnapshot();
       const buffer = Buffer.from(JSON.stringify(snapshot, null, 2), 'utf8');
       const filename = `backup_abessvpn_${Date.now()}.json`;
 
@@ -1716,7 +1703,8 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
   }
 
   // Periodic proactive notifications for admins (Quota exceeded, Expirations)
-  const alertInterval = setInterval(async () => {
+  const alertInterval = setInterval(() => {
+    void ctx.runTransaction(async () => {
     if (!isRunning || authorizedAdmins.size === 0) return;
     try {
       const tokens = ctx.loadTokens();
@@ -1741,6 +1729,7 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
     } catch {
       // Silent error in background alert loop
     }
+    }).catch(() => console.error('[TelegramBot] Alert scan unavailable.'));
   }, 180000); // Check every 3 minutes
   alertInterval.unref();
 
@@ -1760,9 +1749,9 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
             offset = Math.max(offset, update.update_id + 1);
 
             if (update.callback_query) {
-              handleCallbackQuery(update.callback_query).catch(console.error);
+              await ctx.runTransaction(() => handleCallbackQuery(update.callback_query!)).catch(() => console.error('[TelegramBot] Operation failed.'));
             } else if (update.message) {
-              handleMessage(update.message).catch(console.error);
+              await ctx.runTransaction(() => handleMessage(update.message!)).catch(() => console.error('[TelegramBot] Operation failed.'));
             }
           }
         } else if (json.error_code === 409) {

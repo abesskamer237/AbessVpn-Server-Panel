@@ -1,5 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import QRCode from 'qrcode';
+import { RenewLicence, MigrateTls } from './components/RenewLicence';
+import { SecurityCenter } from './components/SecurityCenter';
+import { CommerceCenter } from './components/CommerceCenter';
+import { OperationsCenter } from './components/OperationsCenter';
 import { WorkspaceWelcome } from './components/WorkspaceWelcome';
 import {
   Shield,
@@ -301,10 +305,12 @@ export default function App() {
   const [loginPassword, setLoginPassword] = useState<string>('');
   const [loginLoading, setLoginLoading] = useState<boolean>(false);
   const [loginError, setLoginError] = useState<string | null>(null);
+  const [loginCode,setLoginCode]=useState('');
+  const [loginMfaRequired,setLoginMfaRequired]=useState(false);
   const [showPassword, setShowPassword] = useState<boolean>(false);
 
   // Active Tab
-  const [activeTab, setActiveTab] = useState<'overview' | 'resellers' | 'tokens' | 'plans' | 'requests' | 'diagnostics' | 'transactions' | 'infrastructure' | 'logs' | 'announcements'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'resellers' | 'tokens' | 'plans' | 'requests' | 'diagnostics' | 'transactions' | 'infrastructure' | 'logs' | 'announcements' | 'security' | 'commerce' | 'operations'>('overview');
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   // Announcements State
@@ -364,6 +370,9 @@ export default function App() {
   const [newTokenConfigurationId, setNewTokenConfigurationId] = useState<string>('');
   const [tokenCreating, setTokenCreating] = useState<boolean>(false);
   const [tokenCreationError, setTokenCreationError] = useState<string | null>(null);
+
+  const [tlsMigrationId,setTlsMigrationId]=useState<string|null>(null);
+  const [renewId,setRenewId]=useState<string|null>(null);
 
   // Display QR Code Modal
   const [qrModalToken, setQrModalToken] = useState<ClientToken | null>(null);
@@ -460,19 +469,15 @@ export default function App() {
     setTimeout(() => setCopiedKey(null), 2500);
   };
 
-  // Restore session from localStorage on initial render
+  // Session secrets stay in an HttpOnly cookie; no bearer is persisted in JS storage.
   useEffect(() => {
-    const savedToken = localStorage.getItem('abess_admin_token');
-    const savedUser = localStorage.getItem('abess_admin_user');
-    if (savedToken && savedUser) {
-      try {
-        setAuthToken(savedToken);
-        setCurrentUser(JSON.parse(savedUser));
-      } catch {
-        localStorage.removeItem('abess_admin_token');
-        localStorage.removeItem('abess_admin_user');
-      }
-    }
+    localStorage.removeItem('abess_admin_token');
+    localStorage.removeItem('abess_admin_user');
+    let active=true;
+    void fetch('/api/v1/auth/me').then(async response=>{
+      if(response.ok&&active){setCurrentUser(await response.json());setAuthToken('cookie-session');}
+    }).catch(()=>{});
+    return()=>{active=false;};
   }, []);
 
   // Fetch all dashboard data when user is logged in
@@ -498,7 +503,7 @@ export default function App() {
       if (meRes.ok) {
         const meData = await meRes.json();
         setCurrentUser(meData);
-        localStorage.setItem('abess_admin_user', JSON.stringify(meData));
+
       }
 
       // Stats
@@ -613,18 +618,18 @@ export default function App() {
       const res = await fetch('/api/v1/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: loginEmail, password: loginPassword })
+        body: JSON.stringify({ email: loginEmail, password: loginPassword,code:loginCode.trim() })
       });
 
       const data = await res.json();
       if (res.ok && data.success) {
-        setAuthToken(data.token);
+        setAuthToken('cookie-session');
         setCurrentUser(data.user);
-        localStorage.setItem('abess_admin_token', data.token);
-        localStorage.setItem('abess_admin_user', JSON.stringify(data.user));
+        setLoginPassword('');setLoginCode('');setLoginMfaRequired(false);
         addLog(`[LOGIN] Connexion réussie : ${data.user.email} (${data.user.role})`);
         setActiveTab('overview');
       } else {
+        if(data.mfaRequired)setLoginMfaRequired(true);
         setLoginError(data.error || 'Identifiants incorrects');
       }
     } catch (err: unknown) {
@@ -961,7 +966,7 @@ export default function App() {
     const link = document.createElement('a');
     link.href = '/api/v1/admin/backup';
     link.setAttribute('download', `abessvpn-backup-${new Date().toISOString().slice(0, 10)}.json`);
-    fetch('/api/v1/admin/backup', {
+    fetch('/api/v1/admin/operations/backup', {
       headers: { 'Authorization': `Bearer ${authToken}` }
     })
       .then(res => res.blob())
@@ -1462,6 +1467,7 @@ export default function App() {
               </div>
             </div>
 
+            {loginMfaRequired&&<label className="block text-slate-300 font-semibold">Code de double authentification ou de récupération<input className="w-full mt-2 bg-[#03060e] border border-slate-700 rounded-xl px-4 py-3" autoComplete="one-time-code" value={loginCode} onChange={e=>setLoginCode(e.target.value)} required /></label>}
             <button
               type="submit"
               disabled={loginLoading}
@@ -1484,6 +1490,8 @@ export default function App() {
   // ==========================================
   return (
     <div className="panel-app min-h-screen bg-[#03060e] text-emerald-400 font-sans flex flex-col selection:bg-emerald-500 selection:text-black">
+      {tlsMigrationId&&<MigrateTls id={tlsMigrationId} token={authToken} profiles={protocolConfigs} onClose={()=>setTlsMigrationId(null)} onSuccess={()=>void refreshData()}/>}
+      {renewId&&<RenewLicence id={renewId} token={authToken} onClose={()=>setRenewId(null)} onSuccess={()=>void refreshData()}/>}
       <a className="skip-link" href="#main-content">Aller au contenu</a>
       {/* Account bar */}
       <div className="border-b border-emerald-950 bg-black/90 px-4 py-2 text-xs flex flex-wrap items-center justify-between gap-3 text-emerald-400">
@@ -1621,6 +1629,9 @@ export default function App() {
                   ]
                 : []),
               { id: 'transactions', label: 'Registre & Crédits', icon: History },
+              { id: 'commerce', label: 'Paiements', icon: CreditCard },
+              { id: 'security', label: 'Sécurité', icon: Shield },
+              ...(currentUser.role==='SUPER_ADMIN'?[{id:'operations',label:'Exploitation',icon:Server}]:[]),
               { id: 'logs', label: 'Journal & Télémétrie', icon: Terminal },
             ].map((tab) => {
               const Icon = tab.icon;
@@ -1647,6 +1658,9 @@ export default function App() {
 
       {/* Main Body */}
       <main id="main-content" className="max-w-7xl mx-auto px-4 sm:px-6 py-6 flex-1 w-full space-y-6">
+        {activeTab==='security'&&<SecurityCenter token={authToken} onLogout={handleLogout}/>}
+        {activeTab==='commerce'&&<CommerceCenter token={authToken}/>}
+        {activeTab==='operations'&&currentUser.role==='SUPER_ADMIN'&&<OperationsCenter token={authToken} onLogout={handleLogout}/>}
 
         {/* ========================================================================= */}
         {/* TAB 1: OVERVIEW METRICS */}
@@ -2147,6 +2161,8 @@ export default function App() {
                               <span>Variantes & Portail</span>
                             </button>
 
+                            {currentUser.role==='SUPER_ADMIN'&&<button className="secondary-action" onClick={()=>setTlsMigrationId(token.id)}>Profil TLS</button>}
+                            {token.status!=='revoked'&&<button className="secondary-action" onClick={()=>setRenewId(token.id)}>Renouveler</button>}
                             <button
                               onClick={() => handleResetDevices(token.id, token.token)}
                               className="p-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-700 rounded text-cyan-400 hover:text-cyan-300"
@@ -2265,7 +2281,7 @@ export default function App() {
                       className="w-full bg-[#03060e] border border-slate-800 rounded-lg px-3 py-3 text-slate-300"
                     />
                     <p className="mt-1 text-slate-500">
-                      {masterConfig.protocol === 'ssh' ? 'Port Dropbear WebSocket (80 direct ou 8880 proxy).' : 'Calculé selon le transport : HTTPS (443) ou TCP direct (10050).'}
+                      {masterConfig.protocol === 'ssh' ? 'Port Dropbear WebSocket (80 direct ou 8880 proxy).' : 'HTTPS (443). Le TCP sans TLS est réservé à une migration temporaire.'}
                     </p>
                   </div>
                   <div>
@@ -2315,7 +2331,7 @@ export default function App() {
                       className="w-full bg-[#03060e] border border-emerald-900 rounded-lg px-3 py-3 text-emerald-200 disabled:opacity-50"
                     >
                       <option value="ws">WebSocket sur TCP (Port 443 • Cloudflare / TLS)</option>
-                      <option value="tcp">TCP Direct (Port 10050 • Ultra Faible Latence)</option>
+                      <option value="tcp">TCP sans TLS (compatibilité temporaire)</option>
                       <option value="grpc">gRPC sur TCP (Port 443 • Haute Vitesse HTTP/2)</option>
                       <option value="httpupgrade">HTTPUpgrade sur TCP (Port 443)</option>
                       <option value="xhttp">XHTTP sur TCP (Port 443)</option>
@@ -2377,7 +2393,7 @@ export default function App() {
                     </>
                   )}
                   <div className="md:col-span-2 rounded-xl border border-slate-800 bg-black/20 p-3 text-slate-400">
-                    <span className={masterConfig.transport === 'tcp' ? 'text-amber-300' : 'text-emerald-300'}>{masterConfig.transport === 'tcp' ? 'Transport TCP direct ultra-faible latence sans couche TLS' : 'TLS sécurisé sur le point d’entrée HTTPS'}</span>
+                    <span className={masterConfig.transport === 'tcp' ? 'text-amber-300' : 'text-emerald-300'}>{masterConfig.transport === 'tcp' ? 'Attention : TCP sans TLS, désactivé par défaut' : 'TLS sécurisé sur le point d’entrée HTTPS'}</span>
                     <p className="mt-1">Les modifications du profil n’altèrent pas les paramètres déjà copiés dans les licences existantes : chaque token garde son instantané de configuration.</p>
                   </div>
                   <div className="md:col-span-2 flex flex-wrap justify-end gap-2 pt-2">

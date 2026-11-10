@@ -12,6 +12,10 @@ import { fileURLToPath } from 'url';
 import { exec, execSync, spawn } from 'child_process';
 import { promisify } from 'util';
 import QRCode from 'qrcode';
+import { Operations, registerOperations, encryptedBackup, uploadBackup } from './modules/operations.js';
+import { registerCommerce } from './modules/commerce.js';
+import { SecurityService, registerSecurityRoutes } from './modules/security.js';
+import { DocumentStore } from './modules/store.js';
 import { startTelegramBot } from './telegram-bot.js';
 
 const execAsync = promisify(exec);
@@ -51,8 +55,18 @@ const xrayStatusFile = process.env.XRAY_STATUS_FILE || path.resolve(dataDir, 'xr
 const xrayStatsFile = process.env.XRAY_STATS_FILE || path.resolve(dataDir, 'xray-stats.json');
 const xrayUsageStateFile = process.env.XRAY_USAGE_STATE_FILE || path.resolve(dataDir, 'xray-usage-state.json');
 
+const storage = new DocumentStore(dataDir, process.env.DATABASE_URL);
+const hasDocument = (file: string) => storage.exists(file);
+const readDocument = (file: string): any => storage.read(file);
+
 // Atomic File Persistence Helper
 function writeJsonAtomically(filePath: string, value: unknown): boolean {
+  if (storage.handles(filePath)) return storage.write(filePath, value);
+  if (storage.pool) { storage.afterCommit(() => writePhysicalJson(filePath, value)); return true; }
+  return writePhysicalJson(filePath, value);
+}
+
+function writePhysicalJson(filePath: string, value: unknown): boolean {
   const contents = JSON.stringify(value, null, 2) + '\n';
   if (fs.existsSync(filePath)) {
     try {
@@ -72,7 +86,7 @@ export interface TransactionLog {
   id: string;
   resellerId: string;
   resellerName: string;
-  type: 'CREDIT_ADD' | 'TOKEN_CREATE' | 'BATCH_CREATE' | 'TOKEN_REVOKE' | 'RESET_DEVICES' | 'SERVER_UPDATE' | 'APP_VERSION_UPDATE' | 'ANNOUNCEMENT_PUBLISH' | 'SUB_RESELLER_CREATE' | 'CREDIT_TRANSFER' | 'RESELLER_DELETE_REFUND';
+  type: 'CREDIT_ADD' | 'TOKEN_CREATE' | 'BATCH_CREATE' | 'TOKEN_REVOKE' | 'RESET_DEVICES' | 'SERVER_UPDATE' | 'APP_VERSION_UPDATE' | 'ANNOUNCEMENT_PUBLISH' | 'SUB_RESELLER_CREATE' | 'CREDIT_TRANSFER' | 'RESELLER_DELETE_REFUND' | 'TOKEN_RENEW';
   amountGb: number;
   balanceBefore: number;
   balanceAfter: number;
@@ -81,9 +95,9 @@ export interface TransactionLog {
 }
 
 function loadTransactions(): TransactionLog[] {
-  if (!fs.existsSync(transactionsFile)) return [];
+  if (!hasDocument(transactionsFile)) return [];
   try {
-    const parsed = JSON.parse(fs.readFileSync(transactionsFile, 'utf8'));
+    const parsed = readDocument(transactionsFile);
     if (!Array.isArray(parsed)) throw new Error('invalid transaction array');
     return parsed as TransactionLog[];
   } catch {
@@ -140,6 +154,7 @@ export interface ClientToken {
   lastSeenAt: string | null;
   lastSeenIp: string | null;
   status: 'active' | 'revoked' | 'expired' | 'quota_exceeded';
+  renewalIds?: string[];
   configurationId?: string;
   configurationName?: string;
   /** Immutable server-side profile snapshot keeps existing licences stable after profile edits. */
@@ -205,9 +220,9 @@ export interface AppVersionConfig {
 }
 
 export function loadAppVersionConfig(): AppVersionConfig {
-  if (fs.existsSync(appVersionFile)) {
+  if (hasDocument(appVersionFile)) {
     try {
-      const data = JSON.parse(fs.readFileSync(appVersionFile, 'utf8'));
+      const data = readDocument(appVersionFile);
       if (data && typeof data.latestVersion === 'string') {
         return {
           latestVersion: String(data.latestVersion || '2.1.0').trim(),
@@ -262,9 +277,9 @@ export interface Announcement {
 }
 
 export function loadAnnouncements(): Announcement[] {
-  if (fs.existsSync(announcementsFile)) {
+  if (hasDocument(announcementsFile)) {
     try {
-      const data = JSON.parse(fs.readFileSync(announcementsFile, 'utf8'));
+      const data = readDocument(announcementsFile);
       if (!Array.isArray(data)) throw new Error('invalid announcement array');
       return data;
     } catch {
@@ -369,9 +384,9 @@ export const DEFAULT_PLANS: PricingPlan[] = [
 ];
 
 export function loadPlans(): PricingPlan[] {
-  if (fs.existsSync(plansFile)) {
+  if (hasDocument(plansFile)) {
     try {
-      const parsed = JSON.parse(fs.readFileSync(plansFile, 'utf8'));
+      const parsed = readDocument(plansFile);
       if (!Array.isArray(parsed)) throw new Error('invalid plan array');
       return parsed;
     } catch {
@@ -387,9 +402,9 @@ export function savePlans(plans: PricingPlan[]): void {
 }
 
 export function loadRequests(): MembershipRequest[] {
-  if (!fs.existsSync(requestsFile)) return [];
+  if (!hasDocument(requestsFile)) return [];
   try {
-    const parsed = JSON.parse(fs.readFileSync(requestsFile, 'utf8'));
+    const parsed = readDocument(requestsFile);
     if (!Array.isArray(parsed)) throw new Error('invalid request array');
     return parsed;
   } catch {
@@ -402,9 +417,9 @@ export function saveRequests(reqs: MembershipRequest[]): void {
 }
 
 export function loadAuditLogs(): AuditLog[] {
-  if (!fs.existsSync(auditLogsFile)) return [];
+  if (!hasDocument(auditLogsFile)) return [];
   try {
-    const parsed = JSON.parse(fs.readFileSync(auditLogsFile, 'utf8'));
+    const parsed = readDocument(auditLogsFile);
     if (!Array.isArray(parsed)) throw new Error('invalid audit log array');
     return parsed;
   } catch {
@@ -413,6 +428,7 @@ export function loadAuditLogs(): AuditLog[] {
 }
 
 export function logAudit(entry: Omit<AuditLog, 'id' | 'timestamp'>): void {
+  storage.appendAudit(entry);
   const list = loadAuditLogs();
   list.unshift({
     id: `audit_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
@@ -488,6 +504,7 @@ export async function getServerUpdateStatus(): Promise<ServerUpdateStatus> {
 }
 
 export async function executeServerUpdate(): Promise<{ success: boolean; output: string; currentCommit: string }> {
+  if(isProduction)return {success:false,output:'Utilisez le workflow de déploiement vérifié avec sauvegarde et contrôle de santé.',currentCommit:'managed-deployment'};
   if (!fs.existsSync(path.resolve(__dirname, '.git'))) {
     return { success: false, output: 'Dépôt git absent', currentCommit: 'unknown' };
   }
@@ -586,9 +603,9 @@ function loadMasterConfig(): MasterServerConfig {
     contactTelegram: process.env.CONTACT_TELEGRAM || '@abess237'
   };
 
-  if (fs.existsSync(configFile)) {
+  if (hasDocument(configFile)) {
     try {
-      const stored = JSON.parse(fs.readFileSync(configFile, 'utf8')) as Partial<MasterServerConfig>;
+      const stored = readDocument(configFile) as Partial<MasterServerConfig>;
       const rawStoredHost = typeof stored.serverHost === 'string' ? stored.serverHost.trim() : '';
       const rawStoredHeaderHost = typeof stored.host === 'string' ? stored.host.trim() : '';
       const rawStoredSni = typeof stored.sniHost === 'string' ? stored.sniHost.trim() : '';
@@ -659,9 +676,9 @@ function verifyPassword(password: string, storedHash: string): boolean {
 }
 
 function loadUsers(): AppUser[] {
-  if (fs.existsSync(usersFile)) {
+  if (hasDocument(usersFile)) {
     try {
-      return JSON.parse(fs.readFileSync(usersFile, 'utf8')) as AppUser[];
+      return readDocument(usersFile) as AppUser[];
     } catch {
       throw new Error('Le fichier data/users.json est illisible. Restaurez une sauvegarde avant de redémarrer.');
     }
@@ -732,9 +749,9 @@ function validRestoredUsers(value: unknown): value is AppUser[] {
 
 // Tokens Storage
 function loadTokens(): ClientToken[] {
-  if (fs.existsSync(tokensFile)) {
+  if (hasDocument(tokensFile)) {
     try {
-      const loaded = JSON.parse(fs.readFileSync(tokensFile, 'utf8')) as ClientToken[];
+      const loaded = readDocument(tokensFile) as ClientToken[];
       let changed = false;
       for (const token of loaded) {
         if (!token.clientUuid || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(token.clientUuid)) {
@@ -854,9 +871,12 @@ function isTlsWebTransport(transport: string): boolean {
 function configuredTlsDomain(): string {
   return (process.env.VPN_DOMAIN || '').trim().toLowerCase();
 }
-function tlsSniValidationError(transport: string, sniHost: unknown): string | null {
+function tlsSniValidationError(transport: string, sniHost: unknown, serverHost?: string): string | null {
+  if(transport==='tcp'&&process.env.ALLOW_INSECURE_TCP!=='true')return 'VLESS TCP sans TLS est désactivé. Utilisez WS, gRPC, HTTPUpgrade ou XHTTP avec TLS.';
   if (!isTlsWebTransport(transport)) return null;
-  const configured = configuredTlsDomain();
+  const nodesFile=path.resolve(dataDir,'nodes.json');
+  const node=(hasDocument(nodesFile)?readDocument(nodesFile):[]).find((item:any)=>item.enabled&&item.host===serverHost?.toLowerCase());
+  const configured = node?.host || configuredTlsDomain();
   const supplied = typeof sniHost === 'string' ? sniHost.trim().toLowerCase() : '';
   if (!configured || !isValidPublicHost(configured)) {
     return 'Le domaine VPN_DOMAIN est absent ou invalide; le certificat TLS du serveur ne peut pas être vérifié.';
@@ -963,7 +983,7 @@ export function generateUserVlessVariants(token: ClientToken, profile?: Protocol
   const host = profile?.serverHost || master.serverHost || 'panel.pagnol.xyz';
   // Caddy terminates TLS with the certificate for VPN_DOMAIN. A TCP-only
   // profile has no SNI of its own, but its other supported variants still do.
-  const primarySni = configuredTlsDomain() || profile?.sniHost || master.sniHost || host;
+  const primarySni = profile?.sniHost || configuredTlsDomain() || master.sniHost || host;
   const wsHost = profile?.host || master.host || host;
   const uuid = token.clientUuid || token.token;
   const baseName = `AbessVpn - ${token.token}`;
@@ -971,7 +991,7 @@ export function generateUserVlessVariants(token: ClientToken, profile?: Protocol
 
   const tcpPort = xrayPublicPort('vless', 'tcp', 10050);
   const tcpTag = `${baseName} 🚀 Direct TCP (Ultra-Fast)`;
-  variants.push({
+  if(process.env.ALLOW_INSECURE_TCP==='true') variants.push({
     id: 'vless_tcp_direct',
     label: '🚀 VLESS Direct TCP (Port 10050 • Faible Latence)',
     badge: 'DIRECT TCP • MAX SPEED',
@@ -1395,9 +1415,9 @@ export function getSystemDiagnostics() {
 }
 
 function loadProtocolConfigs(): ProtocolConfig[] {
-  if (fs.existsSync(protocolConfigsFile)) {
+  if (hasDocument(protocolConfigsFile)) {
     try {
-      const parsed = JSON.parse(fs.readFileSync(protocolConfigsFile, 'utf8'));
+      const parsed = readDocument(protocolConfigsFile);
       if (!Array.isArray(parsed)) {
         throw new Error('Format de tableau invalide.');
       }
@@ -1454,7 +1474,7 @@ function normalizeProtocolConfig(input: any, existing?: ProtocolConfig): Protoco
   if (protocol === 'ssh') return null;
   if (!isXrayProtocol(protocol)) return null;
   if (!isXrayTransport(transport)) return null;
-  if (tlsSniValidationError(transport, sniHost)) return null;
+  if (tlsSniValidationError(transport, sniHost,serverHost)) return null;
   if (sniHost && !isValidPublicHost(sniHost)) return null;
   return {
     id: existing?.id || 'cfg_' + crypto.randomUUID(), name, serverHost, host,
@@ -1502,6 +1522,13 @@ function backupClientToken(token: ClientToken): BackupClientToken {
 }
 
 function syncXrayConfig(tokens: ClientToken[] = loadTokens()): boolean {
+  const nodesPath=path.resolve(dataDir,'nodes.json');
+  const remoteHosts=new Set<string>((hasDocument(nodesPath)?readDocument(nodesPath):[]).map((node:any)=>node.host));
+  writeJsonAtomically(path.resolve(path.dirname(xrayConfigFile),'xray-control-heartbeat'),{at:Date.now()});
+  return writeJsonAtomically(xrayConfigFile,generateXrayConfig(tokens.filter(token=>!remoteHosts.has(protocolConfigForToken(token)?.serverHost || ''))));
+}
+
+function generateXrayConfig(tokens: ClientToken[]): Record<string,unknown> {
   const masterConfig = loadMasterConfig();
   const now = Date.now();
   const activeTokens = tokens.filter(token =>
@@ -1521,7 +1548,7 @@ function syncXrayConfig(tokens: ClientToken[] = loadTokens()): boolean {
   const inbounds: Array<Record<string, unknown>> = [];
 
   // 1. Direct Native TCP Inbound (Port 10050)
-  inbounds.push({
+  if(process.env.ALLOW_INSECURE_TCP==='true') inbounds.push({
     tag: 'vless-tcp-direct-in',
     listen: '0.0.0.0',
     port: 10050,
@@ -1592,13 +1619,13 @@ function syncXrayConfig(tokens: ClientToken[] = loadTokens()): boolean {
       domainStrategy: 'IPIfNonMatch',
       rules: [
         { type: 'field', inboundTag: ['api'], outboundTag: 'api' },
-        { type: 'field', ip: ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '127.0.0.0/8', '169.254.169.254/32'], outboundTag: 'block' },
+        { type: 'field', ip: ['0.0.0.0/8','10.0.0.0/8','100.64.0.0/10','127.0.0.0/8','169.254.0.0/16','172.16.0.0/12','192.168.0.0/16','198.18.0.0/15','224.0.0.0/4','240.0.0.0/4','::/128','::1/128','fc00::/7','fe80::/10','ff00::/8'], outboundTag: 'block' },
         { type: 'field', port: '25', outboundTag: 'block' },
         { type: 'field', protocol: ['bittorrent'], outboundTag: 'block' }
       ]
     }
   };
-  return writeJsonAtomically(xrayConfigFile, config);
+  return config;
 }
 interface XrayUsageState {
   generation: string;
@@ -1607,7 +1634,7 @@ interface XrayUsageState {
 
 function readXrayUsageState(): XrayUsageState {
   try {
-    const state = JSON.parse(fs.readFileSync(xrayUsageStateFile, 'utf8')) as XrayUsageState;
+    const state = readDocument(xrayUsageStateFile) as XrayUsageState;
     if (typeof state.generation === 'string' && state.lastCounters && typeof state.lastCounters === 'object') return state;
   } catch {
     // First run or invalid state; start a clean baseline.
@@ -1628,6 +1655,12 @@ function isXrayReady(): boolean {
   } catch {
     return false;
   }
+}
+
+function isTokenDataPlaneReady(token: ClientToken): boolean {
+  const nodeFile=path.resolve(dataDir,'nodes.json');
+  const node=(hasDocument(nodeFile)?readDocument(nodeFile):[]).find((item:any)=>item.host===protocolConfigForToken(token)?.serverHost);
+  return node?node.enabled===true&&node.ready===true&&Date.now()-Date.parse(node.lastSeenAt||'')<=60000:isXrayReady();
 }
 
 function reconcileXrayUsage(): boolean {
@@ -1721,7 +1754,14 @@ export interface SessionData {
   email: string;
   createdAt: number;
 }
-const activeSessions = new Map<string, SessionData>();
+const securityFile = path.resolve(dataDir, 'security.json');
+const security = new SecurityService(
+  () => hasDocument(securityFile) ? readDocument(securityFile) : { mfa: {}, sessions: {} },
+  state => { writeJsonAtomically(securityFile, state); },
+  () => process.env.MASTER_SECRET!
+);
+const activeSessions = security.sessions;
+const operations = new Operations(dataDir,isXrayReady,()=>Boolean(storage.pool));
 
 // Anti-Brute-Force Rate Limiting for Authentication
 const loginAttempts = new Map<string, { count: number; blockedUntil: number }>();
@@ -1797,6 +1837,7 @@ function publicApiRateLimiter(req: express.Request, res: express.Response, next:
 
 // Periodic TTL session and rate limiter cleanup
 setInterval(() => {
+  void storage.transaction(() => {
   const now = Date.now();
   for (const [token, session] of activeSessions.entries()) {
     if (now - session.createdAt > 24 * 3600 * 1000) {
@@ -1813,7 +1854,8 @@ setInterval(() => {
       publicRateLimits.delete(ip);
     }
   }
-}, 60 * 60 * 1000);
+  }).catch(() => console.error('[SECURITY] Session cleanup postponed.'));
+}, 60 * 60 * 1000).unref();
 
 function escapeHtmlText(value: unknown): string {
   return String(value ?? '').replace(/[&<>"']/g, (character) => {
@@ -1853,16 +1895,28 @@ async function startServer() {
     throw new Error('MASTER_SECRET doit contenir au moins 32 caractères aléatoires.');
   }
 
-  loadUsers();
-  const startupTokens = loadTokens();
-  syncXrayConfig(startupTokens);
+  if(isProduction&&!process.env.DATABASE_URL&&process.env.ALLOW_JSON_STORAGE!=='true')throw new Error('PostgreSQL est requis en production. ALLOW_JSON_STORAGE=true est réservé aux tests isolés.');
+  await storage.initialize();
+  await storage.transaction(() => {
+    loadUsers();
+    syncXrayConfig(loadTokens());
+  });
 
   const app = express();
   // The API is reachable only through the private Docker network in production.
   // Trust private Caddy proxy hops so req.ip resolves the visitor address without
   // trusting X-Forwarded-For from arbitrary public peers.
   app.set('trust proxy', 'uniquelocal');
-  app.use(express.json());
+  app.disable('x-powered-by');
+  app.use((req,res,next)=>{
+    res.on('finish',()=>{if(res.statusCode>=500)operations.recordError();});
+    res.set({'X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','X-Frame-Options':'DENY','Permissions-Policy':'camera=(), microphone=(), geolocation=()'});
+    if(req.path.startsWith('/api/'))res.set('Cache-Control','no-store');
+    next();
+  });
+  app.use(express.urlencoded({extended:false,limit:'64kb'}));
+  app.use(express.json({ limit: '2mb' }));
+  app.use(storage.middleware());
 
   // Same-origin panel access plus explicit local development or configured origins.
   const allowedOrigins = new Set<string>([
@@ -1944,7 +1998,7 @@ async function startServer() {
   });
 
   // Real HTTP throughput probes. Limit payload size to protect the management API.
-  app.get('/api/v1/speedtest/download', (req, res) => {
+  app.get('/api/v1/speedtest/download', publicApiRateLimiter, (req, res) => {
     const requested = Number(req.query.bytes ?? 1024 * 1024);
     const byteCount = Number.isFinite(requested)
       ? Math.max(16 * 1024, Math.min(5 * 1024 * 1024, Math.floor(requested)))
@@ -1957,6 +2011,7 @@ async function startServer() {
 
   app.post(
     '/api/v1/speedtest/upload',
+    publicApiRateLimiter,
     express.raw({ type: 'application/octet-stream', limit: '5mb' }),
     (req, res) => {
       const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
@@ -2004,7 +2059,7 @@ async function startServer() {
       saveTokens(tokens);
     }
 
-    if (!isXrayReady()) {
+    if (!isTokenDataPlaneReady(found)) {
       res.status(503).json({
         ok: false,
         error: 'Le moteur Xray-core n’est pas prêt.',
@@ -2030,6 +2085,16 @@ async function startServer() {
     });
   });
 
+  app.post('/api/v1/client/availability',publicApiRateLimiter,(req,res)=>{
+    const token=loadTokens().find(item=>item.token.toUpperCase()===String(req.body?.token||'').toUpperCase());
+    const device=String(req.body?.deviceId||'');
+    if(!token||!device||!token.deviceIds?.includes(device)||(token.allowedDeviceId&&token.allowedDeviceId!==device))return res.sendStatus(401);
+    const active=token.status==='active'&&Date.parse(token.expiresAt)>Date.now()&&token.bandwidthUsedGb<token.bandwidthGb;
+    if(!active)return res.status(403).json({ok:false,error:'Licence inactive, expirée ou quota épuisé.'});
+    const ready=isTokenDataPlaneReady(token);
+    res.status(ready?200:503).json({ok:ready,dataPlane:ready?'ready':'not-ready'});
+  });
+
   // Licence creation stays inside the authenticated admin/reseller panel.
   // Never create paid tokens through an unauthenticated public mobile endpoint.
   app.post('/api/v1/client/create-token', (_req, res) => {
@@ -2051,13 +2116,13 @@ async function startServer() {
 
   // Authentication Middleware
   const authenticate = (req: express.Request, res: express.Response, next: express.NextFunction) => {
-    const authHeader = req.headers['authorization'];
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      res.status(401).json({ error: 'Session non authentifiée. Veuillez vous connecter.' });
-      return;
+    const headerToken=req.headers.authorization?.startsWith('Bearer sess_')?req.headers.authorization.slice(7):undefined;
+    const cookieToken=req.headers.cookie?.split(';').map(value=>value.trim()).find(value=>value.startsWith('abess_session='))?.slice('abess_session='.length);
+    const token=headerToken||cookieToken||'';
+    if(!/^sess_[a-f0-9]{64}$/.test(token)) {
+      res.status(401).json({error:'Session non authentifiée. Veuillez vous connecter.'});return;
     }
-
-    const token = authHeader.split(' ')[1];
+    (req as any).sessionToken=token;
     const session = activeSessions.get(token);
     if (!session) {
       res.status(401).json({ error: 'Session expirée ou invalide.' });
@@ -2098,6 +2163,9 @@ async function startServer() {
       parentId = parent.parentId;
     }
 
+    if (process.env.REQUIRE_ADMIN_MFA === 'true' && user.role === 'SUPER_ADMIN' && !security.enabled(user.id) && !req.path.startsWith('/api/v1/auth/')) {
+      res.status(403).json({error:'Activez la double authentification dans Sécurité.',mfaRequired:true});return;
+    }
     (req as any).user = user;
     next();
   };
@@ -2165,6 +2233,11 @@ async function startServer() {
       currentParentId = parentUser.parentId;
     }
 
+    if (security.enabled(user.id) && !security.verify(user.id, req.body?.code)) {
+      if (req.body?.code) recordLoginAttempt(clientIp, false);
+      res.status(401).json({ error: 'Code de double authentification requis ou invalide.', mfaRequired: true });
+      return;
+    }
     recordLoginAttempt(clientIp, true);
 
     // Upgrade credentials created by older releases after the first successful login.
@@ -2175,12 +2248,18 @@ async function startServer() {
     saveUsers(users);
 
     const sessionToken = 'sess_' + crypto.randomBytes(32).toString('hex');
+    const existingSessions=activeSessions.entries().filter(([,session])=>session.userId===user.id).sort((a,b)=>a[1].createdAt-b[1].createdAt);
+    for(const [id] of existingSessions.slice(0,Math.max(0,existingSessions.length-9)))activeSessions.delete(id);
     activeSessions.set(sessionToken, {
       userId: user.id,
       role: user.role,
       email: user.email,
-      createdAt: Date.now()
+      createdAt: Date.now(),
+      ip: req.ip,
+      agent: String(req.headers['user-agent'] || '').slice(0,200)
     });
+    res.cookie('abess_session',sessionToken,{httpOnly:true,secure:isProduction&&process.env.COOKIE_SECURE!=='false',sameSite:'strict',path:'/api',maxAge:86400000});
+    res.set('Cache-Control','no-store');
     res.json({
       success: true,
       token: sessionToken,
@@ -2194,7 +2273,8 @@ async function startServer() {
   });
 
   app.post('/api/v1/auth/logout', authenticate, (req, res) => {
-    activeSessions.delete(req.headers.authorization!.slice('Bearer '.length));
+    activeSessions.delete((req as any).sessionToken);
+    res.clearCookie('abess_session',{httpOnly:true,secure:isProduction&&process.env.COOKIE_SECURE!=='false',sameSite:'strict',path:'/api'});
     res.sendStatus(204);
   });
 
@@ -2211,6 +2291,43 @@ async function startServer() {
       parentId: user.parentId,
       parentName: user.parentName
     });
+  });
+
+  registerSecurityRoutes(app, {authenticate, security, users:loadUsers, saveUsers, verifyPassword, hashPassword, audit:logAudit, guard:ip=>checkLoginRateLimit(ip).allowed, failure:ip=>recordLoginAttempt(ip,false)});
+
+  const commerceFile=path.resolve(dataDir,'commerce.json');
+  registerCommerce(app,{authenticate,limiter:publicApiRateLimiter,read:()=>hasDocument(commerceFile)?readDocument(commerceFile):{orders:[]},write:v=>{writeJsonAtomically(commerceFile,v);},users:loadUsers,saveUsers,plans:loadPlans,audit:logAudit,durable:()=>Boolean(storage.pool)});
+
+  const nodesFile=path.resolve(dataDir,'nodes.json');
+  const fullSnapshot=async()=>({version:3,auditLogs:loadAuditLogs(),auditEvents:await storage.exportAudit(),masterKeyId:crypto.createHash('sha256').update(process.env.MASTER_SECRET!).digest('hex').slice(0,16),users:loadUsers(),tokens:loadTokens().map(backupClientToken),masterConfig:(()=>{const {secretPassphrase,...config}=loadMasterConfig();return config;})(),protocolConfigs:loadProtocolConfigs(),transactions:loadTransactions(),plans:loadPlans(),requests:loadRequests(),appVersion:loadAppVersionConfig(),announcements:loadAnnouncements(),security:{mfa:security.state().mfa,sessions:{}},commerce:hasDocument(commerceFile)?readDocument(commerceFile):{orders:[]},nodes:hasDocument(nodesFile)?readDocument(nodesFile):[]});
+  const restoreSnapshot=async(snapshot:any)=>{
+    if(!snapshot || snapshot.masterKeyId!==crypto.createHash('sha256').update(process.env.MASTER_SECRET!).digest('hex').slice(0,16) || !validRestoredUsers(snapshot.users)||!Array.isArray(snapshot.tokens)||!Array.isArray(snapshot.plans)||!Array.isArray(snapshot.protocolConfigs))throw new Error('Invalid snapshot');
+    // Keep a verified encrypted pre-restore snapshot; PostgreSQL commits all aggregates together.
+    writeJsonAtomically(path.resolve(backupsDir,`pre-restore-${Date.now()}.encrypted.json`),encryptedBackup(await fullSnapshot(),process.env.BACKUP_ENCRYPTION_KEY||process.env.MASTER_SECRET!));
+    saveMasterConfig(snapshot.masterConfig);saveProtocolConfigs(snapshot.protocolConfigs);saveUsers(snapshot.users);saveTokens(snapshot.tokens);savePlans(snapshot.plans);
+    if(Array.isArray(snapshot.requests))saveRequests(snapshot.requests);
+    if(Array.isArray(snapshot.transactions))writeJsonAtomically(transactionsFile,snapshot.transactions);
+    if(snapshot.appVersion)saveAppVersionConfig(snapshot.appVersion);
+    if(Array.isArray(snapshot.announcements))saveAnnouncements(snapshot.announcements);
+    if(snapshot.commerce)writeJsonAtomically(commerceFile,snapshot.commerce);
+    if(Array.isArray(snapshot.nodes))writeJsonAtomically(nodesFile,snapshot.nodes);
+    writeJsonAtomically(securityFile,{mfa:snapshot.security?.mfa||{},sessions:{}});
+    if(Array.isArray(snapshot.auditEvents))storage.importAudit(snapshot.auditEvents);
+  };
+  registerOperations(app,{authenticate,limiter:publicApiRateLimiter,ops:operations,snapshot:fullSnapshot,restore:restoreSnapshot,readNodes:()=>hasDocument(nodesFile)?readDocument(nodesFile):[],saveNodes:v=>{writeJsonAtomically(nodesFile,v);},audit:logAudit,
+    nodeConfig:node=>generateXrayConfig(loadTokens().filter(token=>protocolConfigForToken(token)?.serverHost===node.host)),
+    nodeUsage:(node,snapshot)=>{
+      if(typeof snapshot.generation!=='string'||snapshot.generation.length>100||!Array.isArray(snapshot.stat)||snapshot.stat.length>10000)throw new Error('Invalid stats');
+      const counters=new Map<string,number>();
+      for(const item of snapshot.stat){const value=Number(item.value);if(typeof item.name!=='string'||!Number.isSafeInteger(value)||value<0)throw new Error('Invalid counter');counters.set(item.name,value);}
+      const tokens=loadTokens();const previous=node.counters||{};const next:Record<string,number>={};
+      for(const token of tokens.filter(t=>protocolConfigForToken(t)?.serverHost===node.host)){
+        const prefix=`user>>>${xrayUserEmail(token)}>>>traffic>>>`;let delta=0;
+        for(const direction of ['uplink','downlink']){const key=prefix+direction;const value=counters.get(key)||0;delta+=node.generation!==snapshot.generation||value<(previous[key]||0)?value:value-(previous[key]||0);next[key]=value;}
+        if(token.status==='active'&&delta>0){token.bandwidthUsedGb=Math.min(token.bandwidthGb,token.bandwidthUsedGb+delta/(1024**3));if(token.bandwidthUsedGb>=token.bandwidthGb)token.status='quota_exceeded';}
+      }
+      node.generation=snapshot.generation;node.counters=next;saveTokens(tokens);
+    }
   });
 
   // Helper: recursive list of all sub-reseller IDs
@@ -2319,7 +2436,7 @@ async function startServer() {
     }
 
     const newReseller: AppUser = {
-      id: 'usr_reseller_' + Math.random().toString(36).substring(2, 9),
+      id: 'usr_reseller_' + crypto.randomUUID(),
       email: email.toLowerCase().trim(),
       passwordHash: hashPassword(password),
       name: name.trim(),
@@ -2735,7 +2852,7 @@ async function startServer() {
       return;
     }
     if (profile && profile.protocol !== 'ssh') {
-      const profileSniError = tlsSniValidationError(profile.transport, profile.sniHost);
+      const profileSniError = tlsSniValidationError(profile.transport, profile.sniHost,profile.serverHost);
       if (!isValidPublicHost(profile.serverHost) || profileSniError) {
         res.status(409).json({
           error: profileSniError || 'Cette configuration ne dispose pas d’une adresse de destination valide.'
@@ -2792,7 +2909,7 @@ async function startServer() {
 
     const tokens = loadTokens();
     const newToken: ClientToken = {
-      id: 'tok_' + crypto.randomUUID().slice(0, 8), token: finalToken, clientUuid,
+      id: 'tok_' + crypto.randomUUID(), token: finalToken, clientUuid,
       resellerId: user.id, resellerName: user.name,
       plan: String(plan || `${requestedGb} GO CYBER VIP`).trim().slice(0, 80),
       bandwidthGb: requestedGb, bandwidthUsedGb: 0, expiresAt: calculatedExpiresAt, days: daysRemaining,
@@ -2830,6 +2947,43 @@ async function startServer() {
       });
     }
     res.status(201).json(safeClientToken(newToken));
+  });
+
+  app.post('/api/v1/admin/tokens/:id/renew',authenticate,(req,res)=>{
+    const actor=(req as any).user as AppUser;
+    const idempotency=String(req.headers['idempotency-key']||'');
+    const quota=Number(req.body?.additionalGb);const days=Number(req.body?.days);
+    if(!/^[a-zA-Z0-9_-]{16,100}$/.test(idempotency)||!Number.isFinite(quota)||quota<1||quota>100000||!Number.isInteger(days)||days<1||days>365)return res.status(400).json({error:'Clé de requête, quota (1–100000 Go) et durée (1–365 jours) requis.'});
+    const users=loadUsers();const tokens=loadTokens();const target=tokens.find(t=>t.id===req.params.id);
+    if(!target)return res.sendStatus(404);
+    if(!canManageToken(actor,target.resellerId,users))return res.sendStatus(403);
+    const renewalId=crypto.createHash('sha256').update(actor.id+':'+idempotency).digest('hex');
+    if(target.renewalIds?.includes(renewalId))return res.json(safeClientToken(target));
+    if(target.status==='revoked'||target.protocolType==='ssh'||target.sshConfig)return res.status(409).json({error:'Réactivez la licence autorisée avant de la renouveler.'});
+    const account=users.find(u=>u.id===actor.id)!;
+    if(actor.role==='RESELLER'&&account.credits<quota)return res.status(409).json({error:'Solde insuffisant.'});
+    if(target.bandwidthGb+quota>1000000)return res.status(400).json({error:'Quota total trop élevé.'});
+    const balance=account.credits;if(actor.role==='RESELLER')account.credits-=quota;
+    account.totalBandwidthAllocatedGb+=quota;target.bandwidthGb+=quota;
+    target.expiresAt=new Date(Math.max(Date.now(),Date.parse(target.expiresAt)||0)+days*86400000).toISOString();
+    target.days=Math.ceil((Date.parse(target.expiresAt)-Date.now())/86400000);target.status='active';
+    target.renewalIds=[...(target.renewalIds||[]),renewalId];
+    target.encryptedLink=encryptConfig({v:3,token:target.token},process.env.MASTER_SECRET!);
+    saveUsers(users);saveTokens(tokens);
+    logTransaction({resellerId:actor.id,resellerName:actor.name,type:'TOKEN_RENEW',amountGb:quota,balanceBefore:balance,balanceAfter:account.credits,note:`Renouvellement de la licence ${target.id} : ${days} jours.`});
+    logAudit({actor:actor.id,role:actor.role,action:'TOKEN_RENEW',details:target.id});
+    res.json(safeClientToken(target));
+  });
+
+  app.post('/api/v1/admin/tokens/:id/migrate-tls',authenticate,(req,res)=>{
+    const actor=(req as any).user as AppUser;if(actor.role!=='SUPER_ADMIN')return res.sendStatus(403);
+    const tokens=loadTokens();const target=tokens.find(t=>t.id===req.params.id);const profile=loadProtocolConfigs().find(p=>p.id===req.body?.configurationId);
+    if(!target)return res.sendStatus(404);
+    if(!profile||!isTlsWebTransport(profile.transport)||tlsSniValidationError(profile.transport,profile.sniHost,profile.serverHost))return res.status(400).json({error:'Sélectionnez un profil TLS opérationnel.'});
+    target.configurationId=profile.id;target.configurationName=profile.name;target.configurationSnapshot=publicProtocolConfig(profile);
+    target.encryptedLink=encryptConfig({v:3,token:target.token},process.env.MASTER_SECRET!);target.directLink=buildDirectProtocolUrl(target,profile);
+    saveTokens(tokens);logAudit({actor:actor.id,role:actor.role,action:'TOKEN_TLS_MIGRATION',details:target.id});
+    res.json({token:safeClientToken(target),message:'Profil migré. Le client doit réimporter sa licence.'});
   });
 
   // Batch / Bulk Token Generation for commercial vouchers & scratch cards
@@ -2920,7 +3074,7 @@ async function startServer() {
       const directLink = buildDirectProtocolUrl({ token: finalToken, clientUuid } as any, profile);
 
       const newToken: ClientToken = {
-        id: 'tok_' + crypto.randomUUID().slice(0, 8),
+        id: 'tok_' + crypto.randomUUID(),
         token: finalToken,
         clientUuid,
         resellerId: user.id,
@@ -3098,24 +3252,16 @@ async function startServer() {
     });
   });
 
-  function performAutoBackup(): void {
+  async function performAutoBackup(): Promise<void> {
     try {
       const today = new Date().toISOString().slice(0, 10);
-      const backupFile = path.resolve(backupsDir, `abessvpn-auto-${today}.json`);
-      const backupData = {
-        timestamp: new Date().toISOString(),
-        type: 'AUTOMATIC_DAILY',
-        version: '2.5.0-commercial',
-        masterConfig: (() => {
-          const { secretPassphrase: _secretPassphrase, ...safeConfig } = loadMasterConfig();
-          return safeConfig;
-        })(),
-        protocolConfigs: loadProtocolConfigs(),
-        users: loadUsers().map(u => ({ ...u, passwordHash: u.passwordHash })),
-        tokens: loadTokens().map(backupClientToken),
-        transactions: loadTransactions()
-      };
-      writeJsonAtomically(backupFile, backupData);
+      const backupFile = path.resolve(backupsDir, `abessvpn-auto-${today}.encrypted.json`);
+      const backupData=encryptedBackup(await fullSnapshot(),process.env.BACKUP_ENCRYPTION_KEY||process.env.MASTER_SECRET!);
+      writeJsonAtomically(backupFile,backupData);
+      storage.afterCommit(()=>{
+        operations.lastBackup={at:new Date().toISOString(),offsite:false};
+        void uploadBackup(path.basename(backupFile),backupData).then(offsite=>{operations.lastBackup={at:new Date().toISOString(),offsite};}).catch(()=>{operations.lastBackup={at:new Date().toISOString(),offsite:false,error:'Upload failed'};});
+      });
 
       const files = fs.readdirSync(backupsDir);
       const autoFiles = files
@@ -3229,7 +3375,7 @@ async function startServer() {
     if (!isSsh) {
       const sniError = tlsSniValidationError(
         String(req.body?.transport ?? 'ws').toLowerCase(),
-        req.body?.sniHost
+        req.body?.sniHost,req.body?.serverHost
       );
       if (sniError) {
         res.status(400).json({ error: sniError });
@@ -3266,7 +3412,7 @@ async function startServer() {
     if (!isSsh) {
       const sniError = tlsSniValidationError(
         String(req.body?.transport ?? configs[index].transport).toLowerCase(),
-        req.body?.sniHost ?? configs[index].sniHost
+        req.body?.sniHost ?? configs[index].sniHost,req.body?.serverHost ?? configs[index].serverHost
       );
       if (sniError) {
         res.status(400).json({ error: sniError });
@@ -3333,7 +3479,7 @@ async function startServer() {
     const requestedHost = typeof req.body?.serverHost === 'string' ? req.body.serverHost.trim() : current.serverHost;
     const requestedHeaderHost = typeof req.body?.host === 'string' ? req.body.host.trim() : current.host;
     const requestedSni = typeof req.body?.sniHost === 'string' ? req.body.sniHost.trim() : current.sniHost;
-    const sniError = tlsSniValidationError(String(requestedTransport), requestedSni);
+    const sniError = tlsSniValidationError(String(requestedTransport), requestedSni,requestedHost);
     const invalidNonTlsSni = !isTlsWebTransport(String(requestedTransport)) &&
       requestedSni !== '' && !isValidPublicHost(requestedSni);
     if (
@@ -3664,7 +3810,7 @@ async function startServer() {
     const now = Date.now();
     const profile = protocolConfigForToken(found, loadProtocolConfigs());
     const profileSniError = profile
-      ? tlsSniValidationError(profile.transport, profile.sniHost)
+      ? tlsSniValidationError(profile.transport, profile.sniHost,profile.serverHost)
       : null;
     if (!profile || !isValidPublicHost(profile.serverHost) || profileSniError) {
       res.status(503).json({
@@ -4280,7 +4426,7 @@ async function startServer() {
       });
       return;
     }
-    const profileSniError = tlsSniValidationError(profile.transport, profile.sniHost);
+    const profileSniError = tlsSniValidationError(profile.transport, profile.sniHost,profile.serverHost);
     if (!isValidPublicHost(profile.serverHost) || profileSniError) {
       res.status(503).json({
         error: profileSniError || 'Le profil VLESS ne possède pas une destination publique valide.'
@@ -4487,7 +4633,7 @@ async function startServer() {
     }
     if (Array.isArray(payload.plans)) savePlans(payload.plans);
     if (Array.isArray(payload.requests)) saveRequests(payload.requests);
-    if (Array.isArray(payload.auditLogs)) writeJsonAtomically(auditLogsFile, payload.auditLogs);
+    // Audit history is append-only and is never overwritten by a restore.
     if (Array.isArray(payload.users)) saveUsers(payload.users);
     if (Array.isArray(payload.tokens)) saveTokens(payload.tokens);
     if (payload.config) saveMasterConfig(payload.config);
@@ -4554,6 +4700,18 @@ async function startServer() {
     socket.destroy();
   });
 
+  app.use((error:any,_req:express.Request,res:express.Response,next:express.NextFunction)=>{
+    if(res.headersSent)return next(error);
+    console.error('[API] Request failed:',error?.code||error?.name||'internal');
+    const status=Number.isInteger(error?.status)&&error.status>=400&&error.status<500?error.status:500;
+    res.status(status).json({error:status<500?'Requête invalide.':'Opération annulée ; erreur interne.'});
+  });
+
+  app.use('/api',(_req,res)=>res.status(404).json({error:'Endpoint inexistant.'}));
+
+  // The built React panel has no inline scripts. Legacy subscription templates
+  // are handled above and keep their existing individually escaped content.
+  if(isProduction)app.use((_req,res,next)=>{res.set('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'");next();});
   // Frontend static / dev middleware
   if (!isProduction) {
     const { createServer: createViteServer } = await import('vite');
@@ -4570,6 +4728,7 @@ async function startServer() {
   }
 
   const xrayReconcileTimer = setInterval(() => {
+    void storage.transaction(() => {
     const tokens = loadTokens();
     let expired = false;
     const now = Date.now();
@@ -4583,13 +4742,16 @@ async function startServer() {
     if (expired) saveTokens(tokens);
     else syncXrayConfig(tokens);
     reconcileXrayUsage();
+    }).catch(() => console.error('[DATABASE] Reconciliation postponed.'));
   }, 5000);
   xrayReconcileTimer.unref();
 
   // Daily automated backup & rolling 7-day retention
-  performAutoBackup();
-  const autoBackupTimer = setInterval(performAutoBackup, 24 * 3600 * 1000);
+  await storage.transaction(performAutoBackup);
+  const autoBackupTimer = setInterval(() => { void storage.transaction(performAutoBackup).catch(() => console.error('[BACKUP] Snapshot postponed.')); }, 24 * 3600 * 1000);
   autoBackupTimer.unref();
+  const operationsTimer=setInterval(()=>{void operations.notify().catch(()=>console.error('[MONITORING] Alert delivery unavailable.'));},60000);
+  operationsTimer.unref();
 
   // SSH provisioning is retired; do not run a background Dropbear account manager.
 
@@ -4604,7 +4766,9 @@ async function startServer() {
   // Start Integrated Telegram Management Bot (if configured in .env)
   const tgBotToken = process.env.TELEGRAM_BOT_TOKEN?.trim();
   const tgAdminIds = process.env.TELEGRAM_ADMIN_IDS?.split(',').map(s => s.trim()).filter(Boolean);
-  startTelegramBot({
+  const telegramBot=startTelegramBot({
+    encryptedBackup:async()=>encryptedBackup(await fullSnapshot(),process.env.BACKUP_ENCRYPTION_KEY||process.env.MASTER_SECRET!),
+    runTransaction: work => storage.transaction(work),
     botToken: tgBotToken,
     adminIds: tgAdminIds,
     vpnDomain,
@@ -4639,6 +4803,17 @@ async function startServer() {
     backupsDir,
     startTime
   });
+  let shuttingDown=false;
+  const shutdown=()=>{
+    if(shuttingDown)return;shuttingDown=true;
+    clearInterval(xrayReconcileTimer);clearInterval(autoBackupTimer);clearInterval(operationsTimer);
+    telegramBot?.stop();
+    server.closeIdleConnections();
+    server.close(()=>{void storage.pool?.end().finally(()=>process.exit(0));if(!storage.pool)process.exit(0);});
+    setTimeout(()=>process.exit(1),10000).unref();
+  };
+  process.once('SIGTERM',shutdown);process.once('SIGINT',shutdown);
+
 }
 
 startServer().catch(error => {

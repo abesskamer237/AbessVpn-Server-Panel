@@ -1,0 +1,45 @@
+groups:
+  - name: abessvpn
+    rules:
+      - alert: AbessApiUnavailable
+        expr: up{job="abess-api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Control plane unreachable
+      - alert: AbessXrayUnavailable
+        expr: abess_xray_ready == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Xray is not ready
+      - alert: AbessDiskLow
+        expr: abess_disk_free_bytes < 1073741824
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Less than 1 GiB of storage remains
+      - alert: AbessTlsExpiring
+        expr: probe_ssl_earliest_cert_expiry - time() < 1209600
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Public TLS certificate expires within 14 days
+      - alert: AbessPublicHttpsUnavailable
+        expr: probe_success{job="public-https"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Public HTTPS or certificate verification failed
+      - alert: AbessApiErrors
+        expr: increase(abess_api_error_total[5m]) > 5
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: Repeated API errors

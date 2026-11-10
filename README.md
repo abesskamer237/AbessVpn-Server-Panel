@@ -1,167 +1,80 @@
-# ABESS VPN — Control plane, administration and Xray-core
+# ABESS VPN — panneau, licences et Xray
 
-ABESS VPN combines a Node.js/Express control plane, a React administration panel, an official Xray-core data plane, and Caddy for public HTTPS. The Docker Compose deployment runs the API, Xray, and Caddy as separate services. Xray is not exposed directly to the public Internet; Caddy terminates TLS and proxies the configured WebSocket path to the internal VLESS inbound.
+Control plane Node/Express, panneau React et data plane officiel Xray-core, avec HTTPS Caddy. Le client Android Flutter est maintenu dans [AbessVpn-Cyber](https://github.com/abesskamer237/AbessVpn-Cyber).
 
-## Status and architecture
+## Fonctions
 
-- **Control plane:** authentication, reseller accounts, per-licence UUIDs, encrypted `abess://` links, expiry, device limits, and licence administration.
-- **Xray-core:** le control plane provisionne actuellement **VLESS uniquement**, avec WebSocket, gRPC, HTTPUpgrade, XHTTP et un profil direct TCP sur le port 10050. VMess, Trojan, Shadowsocks, WireGuard et mKCP ne sont pas provisionnés par cette version du serveur. Les mentions restantes dans certaines interfaces ou anciens profils ne constituent pas une prise en charge active.
-- **Quota enforcement:** the API reads Xray's real user counters and disables a licence in Xray when it expires or exhausts its quota. Client-submitted byte counts are not treated as authoritative.
-- **HTTPS:** Caddy obtient et renouvelle le certificat de `VPN_DOMAIN`. TLS termine sur TCP 443. Les profils VLESS WebSocket sont relayés vers le service Xray interne ; le profil VLESS direct TCP utilise le port 10050. Vérifiez les transports sur un véritable client Android avant de les commercialiser.
-- **No sample production credentials:** the first boot requires an administrator email/password in environment variables. The admin password is stored with scrypt hashing. The master encryption secret must remain stable or previously issued encrypted links can no longer be decrypted.
+- Administrateurs et hiérarchie de revendeurs, crédits, licences, renouvellements idempotents et quotas comptabilisés par Xray.
+- PostgreSQL transactionnel, migration initiale des fichiers JSON existants et historique d’audit chaîné.
+- Double authentification TOTP, codes de récupération à usage unique, sessions révocables, changement de mot de passe et cookie de panneau HttpOnly.
+- Règlements **manuels** MTN MoMo / Orange Money, déclaration de référence, vérification par un administrateur et factures après confirmation.
+- Sauvegardes AES-GCM, copie S3 optionnelle, supervision et alertes.
+- Agent de nœud distant avec isolation des licences, rapprochement des compteurs et arrêt du moteur après perte prolongée du contrôle.
 
-The health route `GET /api/v1/ping` only reports `dataPlane: "ready"` after the Xray sidecar has started and answered its local stats API. The watcher validates every generated configuration before replacing the active Xray process.
+Les transports commercialisés sont **VLESS avec TLS** : WebSocket, gRPC, HTTPUpgrade et XHTTP. VMess, Trojan, Shadowsocks, WireGuard, SSH et mKCP ne sont pas provisionnés. VLESS/TCP sans TLS est désactivé par défaut ; TCP/10050 n’est pas exposé par le Compose sécurisé.
 
-## Local development
+## Développement
 
-Requirements: Node.js 22+ and npm.
+Node.js 22.21+ et npm. Utiliser une base PostgreSQL jetable pour les tests de stockage.
 
-```bash
+```sh
 npm ci
 npm run lint
 npm run build
-npm run dev
+npm run build:server
+node scripts/test-security.mjs
+node --import tsx scripts/test-platform.mjs
+# TEST_DATABASE_URL doit désigner une base de test où créer/supprimer un schéma isolé.
+node --import tsx scripts/test-postgres.mjs
+npx playwright install chromium
+npm run test:panel
+# Docker : trafic VLESS réel dans un réseau de benchmark local isolé.
+python3 scripts/test-xray-traffic.py
 ```
 
-The local API listens on port 3000 by default. In non-production mode Vite serves the admin panel. To start with an isolated, disposable store you must still provide `VPN_DOMAIN`, `ADMIN_EMAIL`, `ADMIN_INITIAL_PASSWORD` (at least 16 characters), and `MASTER_SECRET` (at least 32 random characters). The production Docker deployment additionally requires DNS and public ports 80 and 443.
+Pour démarrer : renseigner `VPN_DOMAIN`, `ADMIN_EMAIL`, `ADMIN_INITIAL_PASSWORD` (16 caractères minimum), `MASTER_SECRET` (32 caractères aléatoires minimum), `DATABASE_URL` et un `DATA_DIR` isolé, puis `npm run dev`. Ne pas réutiliser les données ou secrets de production dans les tests. Le mode JSON est réservé au développement ; en production, PostgreSQL est requis.
 
-## Deploy to an Ubuntu VPS using GitHub Actions
+## Déploiement VPS
 
-The repository includes `.github/workflows/deploy-vps.yml`. It validates the code, panel, Docker images, and Compose configuration before deploying over SSH. Deployment can be started manually from Actions, and pushes to `main` now trigger the same workflow. The workflow deliberately stops before modifying services if Docker/Compose cannot be used or if an unrelated service is listening on ports 80/443. The API no longer pulls and applies updates in the background; a Super Admin must explicitly review the update status and invoke the manual update action.
+Ubuntu 22.04/24.04, Docker Engine et Compose, rsync, SSH et DNS public valide. Les ports TCP 80/443 doivent être disponibles pour Caddy ; le workflow refuse les conflits avec un service étranger. Ne pas supprimer les volumes existants.
 
-### 1. Prepare the VPS
+Configurer dans GitHub Actions :
 
-Use Ubuntu 24.04 or 22.04, install Docker Engine and the Docker Compose plugin using Docker's official Ubuntu instructions, and verify `docker info` and `docker compose version` work for your deployment user. Install `rsync` and `openssh-server` as well.
+| Paramètre | Emplacement | Usage |
+| --- | --- | --- |
+| `VPS_HOST`, `VPS_USER` | Secrets | Destination SSH |
+| `VPS_SSH_KEY` ou `VPS_PASSWORD`/`VPS_SSH_PASSWORD` | Secrets | Authentification SSH |
+| `VPS_KNOWN_HOSTS` | Secret requis | Clé d’hôte SSH vérifiée |
+| `VPN_DOMAIN`, `ADMIN_EMAIL`, `ACME_EMAIL` | Variables | Domaine public et administration |
+| `ADMIN_INITIAL_PASSWORD`, `MASTER_SECRET` | Secrets optionnels | Générés lors du premier déploiement si absents, puis préservés |
+| `ADMIN_NAME`, `VPS_PORT` | Variables optionnelles | Nom et port SSH |
 
-The deployment SSH user must have permission to run Docker without an interactive sudo prompt. Docker group access is effectively root-equivalent, so use a dedicated deployment account if possible. The workflow supports either a dedicated SSH key (`VPS_SSH_KEY`) or password authentication (`VPS_SSH_PASSWORD` or `VPS_PASSWORD`) stored as a GitHub Actions secret; a key is preferable, but is not mandatory. Never put the VPS password in the repository or in chat. Do not remove existing containers or Docker volumes as part of the setup.
+Le workflow `Deploy ABESS VPN to VPS` valide puis déploie sur `main`. Les identifiants initiaux générés sont conservés dans `~/abessvpn-server/INITIAL_ADMIN_CREDENTIALS.txt`, mode 600 ; les enregistrer dans un gestionnaire sécurisé puis retirer ce fichier. Le `.env` du VPS conserve les clés et mots de passe PostgreSQL stables. Les options S3, MFA et alertes saisies sur le VPS sont préservées lors des déploiements suivants.
 
-Ensure incoming TCP ports **80 and 443** are available for Caddy and allowed through the VPS/provider firewall. For the current VLESS direct-TCP profile, also allow **TCP 10050**. No UDP listener is provisioned by this release. Port 22 (or your custom SSH port) must be reachable from GitHub-hosted runners. If an existing Nginx, Caddy, x-ui, or other service already owns 80/443, this workflow intentionally aborts; move that service to another port or arrange an explicit reverse-proxy integration before deploying.
+Le domaine du control plane ne remplit pas automatiquement les profils commerciaux. Configurer explicitement l’hôte public et le SNI corrects dans Infrastructure avant émission. Le SNI doit correspondre au domaine Caddy du contrôleur ou à celui d’un nœud enregistré.
 
-### 2. Point your domain to the VPS
+Après déploiement, vérifier `/api/v1/ping`, les pages Sécurité/Exploitation et une connexion Android réelle. Un build réussi ou un ping prêt ne prouve pas, à lui seul, l’absence de fuite DNS/IPv6 ni un tunnel utilisable sur téléphone.
 
-Create an `A` record for a dedicated hostname such as `vpn.example.com` pointing to the public IPv4 address of the VPS. If you have an `AAAA` record, ensure it points to a working public IPv6 address or remove the incorrect record. For the initial certificate issuance, avoid a DNS proxy mode that prevents public access to the required ports. Caddy needs public reachability on 80 and 443.
+## Documentation opérationnelle
 
-### 3. Configure GitHub Actions secrets and variables
+- [Exploitation, migration, restauration et nœuds distants](docs/OPERATIONS.md)
+- [Procédure de règlement manuel](docs/MANUAL_PAYMENTS.md)
+- [Audit et limites de validation](AUDIT.md)
+- [Environnement cloud et certificats du proxy](docs/CLOUD_ENVIRONMENT.md)
 
-Important: `VPN_DOMAIN` is the public hostname used by Caddy and the API; it is **not** copied automatically into the VPN profile Host or SNI. After the first deployment, sign in to the Super Admin panel and configure the selected protocol's **public host** and **TLS SNI** in the infrastructure tab before issuing licences. With the current single-site Caddy configuration, the profile host must normally be the same hostname as `VPN_DOMAIN`, and DNS must point to this VPS; the SNI must be covered by the certificate Caddy serves. If you need a different public hostname, configure its DNS and add it to Caddy's site/certificate configuration too. The VPN profile Host and SNI start empty and are not populated from any demo or development address; set them explicitly in the infrastructure panel.
+La clé maître doit rester stable : une rotation nécessite une migration des liens, des secrets MFA et de l’audit PostgreSQL. Le script historique de rotation JSON ne doit pas être utilisé pour une installation PostgreSQL.
 
-Open **Settings → Secrets and variables → Actions** in this repository.
+## Endpoints principaux
 
-Create these **repository secrets**:
+- `GET /api/v1/ping` : disponibilité du control plane et heartbeat Xray local.
+- `POST /api/v1/auth/login`, `/logout`, `/password` : accès et sessions.
+- `/api/v1/auth/security`, `/mfa/setup`, `/mfa/enable`, `/mfa/disable`, `/sessions/:id` : sécurité du compte.
+- `POST /api/v1/auth/token`, `/auth/import-link` : licences mobiles ; la création commerciale demeure authentifiée dans le panneau.
+- `POST /api/v1/client/availability`, `/client/telemetry` : disponibilité du nœud affecté et quotas autoritaires.
+- `/api/v1/admin/tokens/:id/renew`, `/migrate-tls` : renouvellement et migration vers TLS.
+- `/api/v1/payments/instructions` : numéros et bénéficiaires du règlement manuel.
+- `/api/v1/commerce/orders`, `/orders/:id/submit`, `/confirm`, `/reject`, `/invoice` : demandes, vérification manuelle et factures. Aucune passerelle de paiement automatique.
+- `/api/v1/admin/operations`, `/operations/backup`, `/operations/restore`, `/metrics` : exploitation protégée.
+- `/api/v1/admin/nodes` et `/api/v1/nodes/:id/config`, `/heartbeat` : gestion des agents.
 
-| Secret | Value |
-| --- | --- |
-| `VPS_HOST` | VPS public IPv4 or SSH hostname |
-| `VPS_USER` | Dedicated SSH deployment username |
-| `VPS_SSH_KEY` | Optional; recommended private half of a dedicated SSH key |
-| `VPS_PASSWORD` or `VPS_SSH_PASSWORD` | Password for the SSH deployment user; either name is accepted |
-| `VPS_KNOWN_HOSTS` | Optional but recommended: verified SSH host-key line for the VPS (not an unchecked fingerprint) |
-| `ADMIN_INITIAL_PASSWORD` | Optional. If omitted, the workflow generates a strong password and places it in a protected credentials file on the VPS after first deployment. |
-| `MASTER_SECRET` | Optional. If omitted, the workflow generates a random 32-byte secret and stores it in the VPS `.env` file. |
-
-Create these **repository variables**:
-
-| Variable | Value |
-| --- | --- |
-| `VPN_DOMAIN` | Dedicated domain only, for example `vpn.example.com`; no scheme, port or path |
-| `ADMIN_EMAIL` | Initial administrator's email |
-| `ACME_EMAIL` | Email used for HTTPS certificate notifications; may match the admin email |
-| `ADMIN_NAME` | Optional administrator display name |
-| `VPS_PORT` | Optional SSH port; defaults to `22` |
-
-Do not paste secrets into chat, source code, workflow files, or commits. For password-based VPS access, save your existing SSH login password as the GitHub secret `VPS_PASSWORD` or `VPS_SSH_PASSWORD`; the workflow already supports this, so an SSH key is not mandatory (a dedicated Ed25519 key is safer). If `VPS_KNOWN_HOSTS` is absent, the workflow discovers the SSH host key using `ssh-keyscan`; for stronger first-connection protection, verify its fingerprint through the Contabo console/provider support and set `VPS_KNOWN_HOSTS`.
-
-The `ADMIN_INITIAL_PASSWORD` and `MASTER_SECRET` secrets are optional. If they are absent, the workflow generates them with cryptographically secure randomness. On a **first deployment**, the generated administrator email/password is saved in `~/abessvpn-server/INITIAL_ADMIN_CREDENTIALS.txt` on the VPS with owner-only permissions; after the successful deployment, connect to the VPS and read that file, then save the password in a password manager and delete the file. The generated master secret is saved in `~/abessvpn-server/.env` with mode `600`. The workflow preserves both values across later deployments, so existing accounts and encrypted `abess://` links continue to work. Back up `.env` separately and securely: application-data backups intentionally omit `MASTER_SECRET`, which must remain in the server environment. Do not rotate `MASTER_SECRET` after links have been issued without running a dedicated re-encryption migration. Changing `ADMIN_INITIAL_PASSWORD` later does not reset an administrator already stored in the persistent user database.
-
-#### Rotation contrôlée du MASTER_SECRET
-
-Le secret a pu être exposé par une ancienne route de sauvegarde désormais protégée. Après avoir créé une sauvegarde complète du volume Docker et du fichier `.env`, arrête le service API (ne laisse aucun processus écrire dans `data/tokens.json`), puis exécute depuis le dossier du dépôt :
-
-```bash
-node scripts/rotate-master-secret.mjs --self-test
-export DATA_DIR=/chemin/vers/abessvpn-server/data
-export MASTER_SECRET_OLD='ancienne-valeur'
-export MASTER_SECRET_NEW='nouvelle-valeur-aleatoire-de-32-caracteres-minimum'
-node scripts/rotate-master-secret.mjs
-```
-
-Le script re-chiffre les liens stockés (AES-GCM et anciens liens AES-CBC), retire les mots de passe SSH historiques, écrit une sauvegarde de pré-rotation chiffrée avec le nouveau secret et supprime le secret du fichier `config.json`. Ensuite, remplace `MASTER_SECRET` dans le `.env` par la nouvelle valeur et redémarre le service API.
-
-Les anciens QR codes/liens `abess://` déjà distribués à l'extérieur de la base restent chiffrés avec l'ancien secret : les clients concernés devront importer leur licence avec leur token ou recevoir un nouveau lien. Ne supprime pas l'ancienne sauvegarde chiffrée tant que la restauration n'a pas été testée.
-
-**Configure the Android build too:** in `abesskamer237/AbessVpn-Cyber`, add the repository variable `VPN_DOMAIN` with the same control-plane hostname (for example `panneau.pagnol.xyz`). The build compiles `ABESS_API_BASE_URL=https://VPN_DOMAIN`; if the variable is missing, the workflow stops instead of using obsolete demo hosts. Then run **Actions → Build APK Release (68MB Universal) → Run workflow** to build an APK bound to this server.
-
-### 4. Launch the deployment
-
-1. Open the repository's **Actions** tab.
-2. Select **Deploy ABESS VPN to VPS**.
-3. Click **Run workflow** on `main`.
-4. Wait for the validation and deploy jobs to finish.
-
-On success, `https://VPN_DOMAIN/api/v1/ping` should return JSON with `"dataPlane":"ready"`. You can inspect the containers over SSH with:
-
-```bash
-cd ~/abessvpn-server
-docker compose ps
-docker compose logs --tail=100 api xray caddy
-```
-
-A successful container build is not by itself proof that Internet traffic traverses the VPN. After deployment, test from the Android app: import a newly generated licence, connect, verify that the device's public egress IP changes, browse several HTTPS sites, and check that Xray counters and the licence quota increase. Also verify expiration and quota exhaustion disconnect the client.
-
-## API endpoints used by the mobile app
-
-- `POST /api/v1/auth/token` — validate a licence, register the device, and return the per-licence VLESS UUID and endpoint.
-- `POST /api/v1/auth/import-link` — decrypt a panel-issued `abess://` link server-side and validate it as a licence.
-- `GET /api/v1/ping` — control-plane health and Xray readiness.
-- `POST /api/v1/client/telemetry` — return authoritative Xray-accounted usage and licence status.
-- `GET /api/v1/speedtest/download` and `POST /api/v1/speedtest/upload` — bounded HTTP throughput probes.
-
-Licence issuance stays in the authenticated administration/reseller panel. Public mobile token creation is denied, and trial issuance remains disabled until the real data plane is ready.
-
-## Official references
-
-- Docker Engine installation for Ubuntu: https://docs.docker.com/engine/install/ubuntu/
-- Xray-core VLESS inbound: https://xtls.github.io/en/config/inbounds/vless.html
-- Xray-core WebSocket transport: https://xtls.github.io/en/config/transports/websocket.html
-- Caddy automatic HTTPS: https://caddyserver.com/docs/automatic-https
-
-## Protocoles provisionnés
-
-Le control plane actuel provisionne **VLESS uniquement**. Les transports gérés par les profils serveur sont WebSocket, gRPC, HTTPUpgrade, XHTTP et TCP direct. Le chemin historique `/@abess237` reste utilisé pour VLESS + WS. Le profil TCP direct utilise le port TCP 10050.
-
-VMess, Trojan, Shadowsocks, WireGuard, mKCP/UDP et TUN ne sont pas provisionnés par cette version du serveur, même si certains parseurs/importeurs Android ou anciens fichiers du dépôt peuvent reconnaître ces formats. Ne crée pas de licences commerciales pour ces protocoles depuis le panneau.
-
-**SSH :** les anciennes licences SSH sont conservées pour consultation si leurs paramètres existent, mais l'émission de nouvelles licences SSH et la création de comptes Linux sont suspendues. Le déploiement Docker ne provisionne pas de comptes SSH sur l'hôte et aucun mot de passe SSH n'est écrit dans `/etc/ssh/vpn_users.db`. Pour réactiver SSH, il faudra concevoir un provisionneur hôte dédié, authentifié et isolé du conteneur API.
-
-La validation d'une configuration Xray par CI ne remplace pas un test de connexion réel depuis Android.
-
-## Gestion commerciale à distance via Bot Telegram
-
-Le serveur intègre un bot Telegram complet pour administrer, superviser et commercialiser votre infrastructure VPN en direct depuis votre smartphone :
-
-### Configuration
-Ajoutez ces variables dans votre fichier `.env` sur le serveur :
-```env
-TELEGRAM_BOT_TOKEN=123456789:ABCdefGHIjklMNOpqrsTUVwxyz
-TELEGRAM_ADMIN_IDS=123456789,987654321
-```
-Seuls les identifiants listés dans `TELEGRAM_ADMIN_IDS` sont autorisés. La commande `/login` par mot de passe partagé est désactivée. Ajoutez explicitement les identifiants Telegram autorisés dans l'environnement du serveur, puis redémarrez le conteneur API.
-
-### Fonctionnalités du Bot
-- 📊 **Tableau de bord en direct (`/stats`) :** Uptime, CPU, RAM, statut Xray, clients actifs, bande passante consommée vs allouée.
-- 🎟️ **Création de Vouchers / Tickets (`/create`) :** Packs rapides (Test 24h, Semaine 10 Go, Mensuel VIP 50 Go, Illimité 150 Go) avec génération et envoi immédiat du QR Code image, du lien `abess://` et du lien V2Ray universel.
-- 📦 **Génération de Lots (Batch / Grossiste) (`/batch`) :** Création instantanée de 5 à 200 vouchers avec export automatique d'un fichier CSV prêt à être distribué aux revendeurs ou imprimé.
-- 👥 **Gestion du Parc Clients (`/search`, `/reset`) :** Consultation paginée des fiches clients, ajout de quota (+10 Go), prolongation (+7j, +30j), suspension et réinitialisation en 1 clic des appareils liés (Unbind HWID).
-- ⚙️ **Supervision Xray (`/xray`, `/reload`) :** Contrôle et rechargement de la configuration VLESS provisionnée par le serveur.
-- 💾 **Sauvegarde des données (`/backup`) :** Téléchargement d'une archive JSON expurgée des secrets maîtres et des mots de passe SSH historiques. Le fichier `.env` doit être sauvegardé séparément sur le VPS et conservé hors du dépôt.
-- ⚠️ **Alertes Automatiques Proactives :** Notification immédiate des administrateurs dès qu'un utilisateur atteint 90% ou 100% de son quota, ou arrive à expiration.
-
-
-## Browser CORS
-
-The API allows the same-origin browser panel at `https://VPN_DOMAIN` and local Vite development origins. If you host the admin panel on another browser origin, add that exact origin to `CORS_ALLOWED_ORIGINS` as a comma-separated list. Do not use a wildcard.
-
-
-## Interface et vérifications visuelles
-
-Le panneau propose les thèmes clair/sombre, une navigation adaptée au mobile et des animations respectant les préférences d’accessibilité. Pour exécuter les tests navigateur isolés : `npx playwright install chromium`, puis `npm run test:panel`. Pour les tests de sécurité API : `node scripts/test-security.mjs`. Consulter `AUDIT.md` pour les résultats et limites, et `docs/CLOUD_ENVIRONMENT.md` pour la configuration cloud.
+Les essais gratuits et l’émission de licences SSH restent désactivés. Aucun mécanisme ne doit afficher un paiement ou une connexion réussis sans confirmation du service réel.

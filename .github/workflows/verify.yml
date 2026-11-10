@@ -9,16 +9,28 @@ on:
 
 jobs:
   verify:
+    services:
+      postgres:
+        image: postgres:16-bookworm
+        env:
+          POSTGRES_USER: abess
+          POSTGRES_PASSWORD: ci-only-disposable-postgres-password
+          POSTGRES_DB: abess_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U abess -d abess_test"
+          --health-interval 5s --health-timeout 3s --health-retries 20
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Lint all GitHub Actions workflows
         uses: docker://rhysd/actionlint:1.7.12
         with:
           args: -color
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
 
@@ -30,6 +42,14 @@ jobs:
 
       - name: Security regression tests
         run: node scripts/test-security.mjs
+
+      - name: Verify MFA, backup encryption and manual transfer approval
+        run: node --import tsx scripts/test-platform.mjs
+
+      - name: Verify PostgreSQL migration and concurrent transactions
+        env:
+          TEST_DATABASE_URL: postgresql://abess:ci-only-disposable-postgres-password@127.0.0.1:5432/abess_test
+        run: node --import tsx scripts/test-postgres.mjs
 
       - name: TypeScript check
         run: npm run lint
@@ -52,6 +72,9 @@ jobs:
 
       - name: Build official Xray-core sidecar image
         run: docker build --pull -f docker/xray/Dockerfile -t abessvpn-xray:ci ./docker/xray
+
+      - name: Verify official Xray traffic and real quota accounting
+        run: python3 scripts/test-xray-traffic.py
 
       - name: Validate Caddyfile routing configuration
         shell: bash
@@ -77,6 +100,8 @@ jobs:
           DATA_DIR: ${{ runner.temp }}/abessvpn-data
           PORT: "3187"
           NODE_ENV: production
+          ALLOW_JSON_STORAGE: "true"
+          ALLOW_INSECURE_TCP: "true"
           VPN_DOMAIN: vpn.example.test
           ADMIN_EMAIL: ci-admin@example.test
           ADMIN_INITIAL_PASSWORD: ci-only-password-please-ignore-123
@@ -84,7 +109,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$DATA_DIR"
-          PORT="$PORT" DATA_DIR="$DATA_DIR" NODE_ENV="$NODE_ENV" VPN_DOMAIN="$VPN_DOMAIN" ADMIN_EMAIL="$ADMIN_EMAIL" ADMIN_INITIAL_PASSWORD="$ADMIN_INITIAL_PASSWORD" MASTER_SECRET="$MASTER_SECRET" npm run start > "$RUNNER_TEMP/abessvpn-server.log" 2>&1 &
+          ALLOW_INSECURE_TCP=true ALLOW_JSON_STORAGE=true PORT="$PORT" DATA_DIR="$DATA_DIR" NODE_ENV="$NODE_ENV" VPN_DOMAIN="$VPN_DOMAIN" ADMIN_EMAIL="$ADMIN_EMAIL" ADMIN_INITIAL_PASSWORD="$ADMIN_INITIAL_PASSWORD" MASTER_SECRET="$MASTER_SECRET" npm run start > "$RUNNER_TEMP/abessvpn-server.log" 2>&1 &
           server_pid=$!
           trap 'kill "$server_pid" 2>/dev/null || true' EXIT
 
@@ -95,7 +120,7 @@ jobs:
             sleep 1
           done
 
-          node --input-type=module <<'NODE'
+          node --import tsx --input-type=module <<'NODE'
           import assert from 'node:assert/strict';
           import fs from 'node:fs';
           import net from 'node:net';
@@ -433,7 +458,10 @@ jobs:
 
           const autoBackupFiles = fs.readdirSync(`${dataDir}/backups`).filter(name => /^abessvpn-auto-.*\.json$/.test(name));
           assert.ok(autoBackupFiles.length > 0, 'the daily auto-backup must be created at startup');
-          const autoBackup = JSON.parse(fs.readFileSync(`${dataDir}/backups/${autoBackupFiles[0]}`, 'utf8'));
+          const encryptedAutoBackup = JSON.parse(fs.readFileSync(`${dataDir}/backups/${autoBackupFiles[0]}`, 'utf8'));
+          assert.equal(encryptedAutoBackup.format, 'abess-backup-v1');
+          const { unseal } = await import(`file://${process.cwd()}/modules/security.ts`);
+          const autoBackup = unseal(encryptedAutoBackup.sealed, process.env.MASTER_SECRET);
           assert.ok(!('secretPassphrase' in autoBackup.masterConfig), 'daily backups must not persist MASTER_SECRET');
 
           const prematureLicenceResponse = await fetch(`${base}/api/v1/admin/tokens`, {
@@ -828,8 +856,9 @@ jobs:
           assert.ok(directTcpInbound.settings.users.some(user => user.id === licenceB.clientUuid));
           assert.ok(directTcpInbound.settings.users.some(user => user.id === licenceC.clientUuid));
 
-          const compose = fs.readFileSync('docker-compose.yml', 'utf8');
-          assert.ok(compose.includes('"10050:10050/tcp"'), 'VLESS Direct TCP must be published by Docker Compose');
+          const compose = fs.readFileSync('docker-compose.legacy-tcp.yml', 'utf8');
+          assert.ok(!fs.readFileSync('docker-compose.yml','utf8').includes('10050:10050'), 'default deployment must not expose unencrypted VLESS');
+          assert.ok(compose.includes('"10050:10050/tcp"'), 'legacy TCP exposure requires the explicit migration overlay');
 
           // The API must never fake an HTTP/WebSocket handshake as a VPN tunnel.
           const crlf = String.fromCharCode(13, 10);

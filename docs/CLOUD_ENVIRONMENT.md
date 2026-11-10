@@ -32,3 +32,11 @@ Ne pas lancer le backend Node du dépôt Cyber : il est retiré volontairement.
 - L'outil de brouillon cloud renvoie INVALID_ARGUMENT à la lecture et à la sauvegarde. Les instructions ci-dessus sont enregistrées sur disque uniquement ; aucune publication de configuration cloud n'est confirmée.
 
 Après déblocage, relancer les commandes affectées et les tests réels Android/Xray. L'environnement complet Android + sidecars n'est pas encore déclaré prêt.
+
+## Lot PostgreSQL et règlements manuels
+
+La production utilise désormais PostgreSQL et un rôle applicatif distinct. Les tests JSON doivent définir explicitement `ALLOW_JSON_STORAGE=true` sur un stockage jetable. La suite navigateur applique ce réglage dans son propre serveur isolé.
+
+Tests supplémentaires : `node --import tsx scripts/test-platform.mjs`, puis `TEST_DATABASE_URL` sécurisé pour `node --import tsx scripts/test-postgres.mjs`. Le test de trafic réel est `python3 scripts/test-xray-traffic.py` avec Docker ; il est entièrement local et ne valide pas un téléphone Android.
+
+Le règlement est manuel : aucune destination de paiement externe ni clé marchande n’est nécessaire. Pour les sauvegardes S3, autoriser uniquement le hostname du fournisseur choisi. Consulter `OPERATIONS.md` et `MANUAL_PAYMENTS.md`.

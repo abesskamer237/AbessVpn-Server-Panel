@@ -21,3 +21,15 @@ static/*.apk
 # Browser test artifacts
 test-results/
 playwright-report/
+
+deployment-backups/
+.rollback.yml
+
+.secrets/
+
+__pycache__/
+
+# Local deployment material must never become source files.
+.deploy.env
+.deploy.credentials
+INITIAL_ADMIN_CREDENTIALS.txt

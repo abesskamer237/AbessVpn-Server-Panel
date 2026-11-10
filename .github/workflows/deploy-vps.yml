@@ -14,12 +14,24 @@ concurrency:
 
 jobs:
   validate:
+    services:
+      postgres:
+        image: postgres:16-bookworm
+        env:
+          POSTGRES_USER: abess
+          POSTGRES_PASSWORD: ci-only-disposable-postgres-password
+          POSTGRES_DB: abess_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U abess -d abess_test"
+          --health-interval 5s --health-timeout 3s --health-retries 20
     name: Validate code and container images
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
 
@@ -28,6 +40,14 @@ jobs:
 
       - name: Security regression tests
         run: node scripts/test-security.mjs
+
+      - name: Verify MFA, backup encryption and manual transfer approval
+        run: node --import tsx scripts/test-platform.mjs
+
+      - name: Verify PostgreSQL migration and concurrent transactions
+        env:
+          TEST_DATABASE_URL: postgresql://abess:ci-only-disposable-postgres-password@127.0.0.1:5432/abess_test
+        run: node --import tsx scripts/test-postgres.mjs
 
       - name: TypeScript check
         run: npm run lint
@@ -44,6 +64,9 @@ jobs:
       - name: Build Xray-core sidecar image
         run: docker build --pull -f docker/xray/Dockerfile -t abessvpn-xray:ci ./docker/xray
 
+      - name: Verify official Xray traffic and real quota accounting
+        run: python3 scripts/test-xray-traffic.py
+
       - name: Validate Compose file
         shell: bash
         run: |
@@ -58,7 +81,7 @@ jobs:
     needs: validate
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Validate deployment settings and prepare private environment file
         shell: bash
@@ -109,7 +132,13 @@ jobs:
             throw new Error('VPN_DOMAIN must be a hostname only, without https://, a port, or a path.');
           }
 
+          const databasePassword = crypto.randomBytes(32).toString('hex');
+          const appDatabasePassword = crypto.randomBytes(32).toString('hex');
+          console.log(`::add-mask::${appDatabasePassword}`);
+          console.log(`::add-mask::${databasePassword}`);
           const values = {
+            POSTGRES_PASSWORD: databasePassword,
+            POSTGRES_APP_PASSWORD: appDatabasePassword,
             VPN_DOMAIN: hostname,
             ACME_EMAIL: process.env.ACME_EMAIL || process.env.ADMIN_EMAIL,
             ADMIN_EMAIL: process.env.ADMIN_EMAIL,
@@ -154,13 +183,8 @@ jobs:
           if [[ -n "${VPS_KNOWN_HOSTS:-}" ]]; then
             printf '%s\n' "$VPS_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           else
-            VPS_PORT="${VPS_PORT:-22}"
-            ssh-keyscan -H -p "$VPS_PORT" "$VPS_HOST" > "$HOME/.ssh/known_hosts" 2>/dev/null
-            if [[ ! -s "$HOME/.ssh/known_hosts" ]]; then
-              echo "Unable to retrieve the VPS SSH host key. Check the IP and SSH port." >&2
-              exit 1
-            fi
-            echo "::warning::VPS_KNOWN_HOSTS is not configured. A host key was discovered automatically; configure a separately verified key for stronger protection against a first-connection man-in-the-middle attack."
+            echo "Configure VPS_KNOWN_HOSTS using the host key verified through your VPS console before deployment." >&2
+            exit 1
           fi
           chmod 600 "$HOME/.ssh/known_hosts"
           cat > "$HOME/.local/bin/abess-ssh" <<'SH'
@@ -236,7 +260,9 @@ jobs:
             --exclude '.git/' \
             --exclude 'node_modules/' \
             --exclude 'dist/' \
-            --exclude 'data/' \
+            --exclude 'data/'
+            --exclude 'deployment-backups/'
+            --exclude '.rollback.yml' \
             --exclude '.env' \
             --exclude '.deploy.env' \
             --exclude '.deploy.credentials' \
@@ -268,14 +294,16 @@ jobs:
           rm -f .deploy.credentials
           if [ -f .env ]; then
             # Preserve the initial administrator password and master key on redeploys.
-            for key in ADMIN_INITIAL_PASSWORD MASTER_SECRET; do
-              existing_line="$(grep -m1 "^${key}=" .env || true)"
-              if [ -n "$existing_line" ]; then
-                grep -v "^${key}=" .env.new > .env.merged
-                printf '%s\n' "$existing_line" >> .env.merged
-                mv .env.merged .env.new
-              fi
-            done
+            # Keep all local operational credentials; redeploy must not erase
+            # S3, MFA, alert or PostgreSQL settings entered on the VPS.
+            while IFS= read -r existing_line; do
+              key="${existing_line%%=*}"
+              [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+              case "$key" in VPN_DOMAIN|ADMIN_EMAIL|ADMIN_NAME|ACME_EMAIL) continue ;; esac
+              grep -v "^${key}=" .env.new > .env.merged || true
+              printf '%s\n' "$existing_line" >> .env.merged
+              mv .env.merged .env.new
+            done < .env
             rm -f .initial-admin-credentials.new
           else
             if docker volume inspect abessvpn-server_abessvpn_data >/dev/null 2>&1; then
@@ -288,10 +316,31 @@ jobs:
               echo "Initial login details were saved to ~/abessvpn-server/INITIAL_ADMIN_CREDENTIALS.txt (owner-only permissions)."
             fi
           fi
+          rollback_allowed=0
+          if [ -f .env ] && grep -q '^POSTGRES_PASSWORD=' .env; then
+            old_api="$(docker compose images -q api | head -n1)"
+            old_xray="$(docker compose images -q xray | head -n1)"
+            if [ -n "$old_api" ] && [ -n "$old_xray" ]; then
+              docker tag "$old_api" abessvpn-api:rollback
+              docker tag "$old_xray" abessvpn-xray:rollback
+              printf 'services:\n  api:\n    image: abessvpn-api:rollback\n  xray:\n    image: abessvpn-xray:rollback\n' > .rollback.yml
+              chmod 600 .rollback.yml
+              rollback_allowed=1
+            fi
+          fi
+          mkdir -p deployment-backups
+          chmod 700 deployment-backups
+          if docker volume inspect abessvpn-server_abessvpn_data >/dev/null 2>&1; then
+            docker run --rm --env-file .env -v abessvpn-server_abessvpn_data:/source:ro -v "$PWD/deployment-backups:/backup" -v "$PWD/scripts:/tools:ro" node:22-alpine node /tools/snapshot-volume.mjs encrypt /source "/backup/pre-deploy-$(date +%s).tgz.enc"
+          fi
+          if [ "$rollback_allowed" -eq 1 ]; then
+            docker compose exec -T database pg_dump -U abess -Fc abess | docker run --rm -i --env-file .env -v "$PWD/deployment-backups:/backup" -v "$PWD/scripts:/tools:ro" node:22-alpine node /tools/snapshot-volume.mjs encrypt - "/backup/postgres-$(date +%s).dump.enc"
+          fi
           mv .env.new .env
           chmod 600 .env
           docker compose config -q
-          docker compose up -d --build --remove-orphans
+          deploy_failed=0
+          docker compose up -d --build --remove-orphans || deploy_failed=1
           docker compose ps
 
           ready=0
@@ -304,7 +353,13 @@ jobs:
             sleep 5
           done
 
-          if [ "$ready" -ne 1 ]; then
+          if [ "$ready" -ne 1 ] || [ "$deploy_failed" -ne 0 ]; then
+            if [ "$rollback_allowed" -eq 1 ]; then
+              echo 'Health checks failed; restoring the previous PostgreSQL-compatible API/Xray images.' >&2
+              docker compose -f docker-compose.yml -f .rollback.yml up -d --no-build api xray caddy
+            else
+              echo 'Automatic image rollback is unavailable for the first JSON-to-PostgreSQL migration; restore from the protected pre-deployment archive under maintenance.' >&2
+            fi
             echo 'Public HTTPS/Xray readiness check failed. Recent service logs follow.' >&2
             docker compose ps >&2 || true
             docker compose logs --tail=100 api xray caddy >&2 || true
