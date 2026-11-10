@@ -1363,25 +1363,35 @@ function loadProtocolConfigs(): ProtocolConfig[] {
   if (fs.existsSync(protocolConfigsFile)) {
     try {
       const parsed = JSON.parse(fs.readFileSync(protocolConfigsFile, 'utf8'));
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        const valid = parsed.filter((item: any) =>
-          item && typeof item.id === 'string' && typeof item.name === 'string' &&
-          isValidPublicHost(item.serverHost) && isXrayProtocol(item.protocol)
-        ).map((item: any) => publicProtocolConfig({
-          ...item,
-          host: typeof item.host === 'string' ? item.host : '',
-          sniHost: typeof item.sniHost === 'string' ? item.sniHost : '',
-          serverPort: item.protocol === 'ssh' ? (Number(item.serverPort) || 80) : xrayPublicPort(item.protocol, item.transport, Number(item.serverPort) || 443),
-          path: item.protocol === 'ssh' ? (item.path || '/loic') : xrayProfilePath(item.protocol, item.transport, item.path || '/@abess237'),
-          payload: typeof item.payload === 'string' ? item.payload : (item.protocol === 'ssh' ? DEFAULT_SSH_PAYLOAD : ''),
-          remarks: typeof item.remarks === 'string' ? item.remarks : item.name,
-          createdAt: typeof item.createdAt === 'string' ? item.createdAt : new Date().toISOString(),
-          updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : new Date().toISOString()
-        } as ProtocolConfig));
-        if (valid.length > 0) return valid;
+      if (!Array.isArray(parsed)) {
+        throw new Error('Format de tableau invalide.');
       }
+      if (parsed.length === 0) return [];
+
+      // SSH profiles are intentionally retired; do not revive them as usable profiles.
+      const nonRetired = parsed.filter((item: any) => item && item.protocol !== 'ssh');
+      const valid = nonRetired.filter((item: any) =>
+        typeof item.id === 'string' && typeof item.name === 'string' &&
+        isValidPublicHost(item.serverHost) && isXrayProtocol(item.protocol) &&
+        isXrayTransport(item.transport)
+      ).map((item: any) => publicProtocolConfig({
+        ...item,
+        host: typeof item.host === 'string' ? item.host : '',
+        sniHost: typeof item.sniHost === 'string' ? item.sniHost : '',
+        serverPort: xrayPublicPort(item.protocol, item.transport, Number(item.serverPort) || 443),
+        path: xrayProfilePath(item.protocol, item.transport, item.path || '/@abess237'),
+        payload: '',
+        remarks: typeof item.remarks === 'string' ? item.remarks : item.name,
+        createdAt: typeof item.createdAt === 'string' ? item.createdAt : new Date().toISOString(),
+        updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : new Date().toISOString()
+      } as ProtocolConfig));
+
+      if (nonRetired.length > 0 && valid.length === 0) {
+        throw new Error('Aucun profil VLESS valide ne reste après validation.');
+      }
+      return valid;
     } catch {
-      throw new Error('Le fichier data/protocol-configs.json est illisible. Restaurez une sauvegarde avant de continuer.');
+      throw new Error('Le fichier data/protocol-configs.json est invalide ou illisible. Restaurez une sauvegarde avant de continuer.');
     }
   }
   const legacy = legacyProtocolConfig();
