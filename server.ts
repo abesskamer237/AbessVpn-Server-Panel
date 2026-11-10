@@ -2586,7 +2586,7 @@ async function startServer() {
       res.status(400).json({ error: 'Aucun protocole de connexion configuré.' });
       return;
     }
-    if (!isXrayProtocol(profile.protocol)) {
+    if (String(profile.protocol) !== 'vless') {
       res.status(503).json({
         error: 'La génération de lots SSH/autres protocoles est suspendue : seul VLESS est provisionné par le moteur Xray actuel.'
       });
