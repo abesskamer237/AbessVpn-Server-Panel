@@ -2229,6 +2229,7 @@ async function startServer() {
       return;
     }
 
+    let parentCreditBefore: number | null = null;
     if (user.role === 'RESELLER') {
       if (dbUser.status !== 'active') {
         res.status(403).json({ error: 'Votre compte est suspendu. Impossible de créer un sous-revendeur.' });
@@ -2242,18 +2243,8 @@ async function startServer() {
       }
 
       // Deduct credits from parent reseller
-      const prevCredits = dbUser.credits;
+      parentCreditBefore = dbUser.credits;
       dbUser.credits = Math.max(0, dbUser.credits - requestedCredits);
-
-      logTransaction({
-        resellerId: dbUser.id,
-        resellerName: dbUser.name,
-        type: 'SUB_RESELLER_CREATE',
-        amountGb: requestedCredits,
-        balanceBefore: prevCredits,
-        balanceAfter: dbUser.credits,
-        note: `Création du sous-revendeur ${name.trim()} (${requestedCredits} Go transférés)`
-      });
     }
 
     const newReseller: AppUser = {
@@ -2274,6 +2265,18 @@ async function startServer() {
 
     users.push(newReseller);
     saveUsers(users);
+
+    if (parentCreditBefore !== null && requestedCredits > 0) {
+      logTransaction({
+        resellerId: dbUser.id,
+        resellerName: dbUser.name,
+        type: 'SUB_RESELLER_CREATE',
+        amountGb: requestedCredits,
+        balanceBefore: parentCreditBefore,
+        balanceAfter: dbUser.credits,
+        note: `Création du sous-revendeur ${name.trim()} (${requestedCredits} Go transférés)`
+      });
+    }
 
     if (requestedCredits > 0) {
       logTransaction({
