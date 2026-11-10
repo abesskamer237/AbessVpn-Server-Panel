@@ -96,6 +96,17 @@ test('security, payment and operations pages use protected APIs',async({page})=>
   await expect(page.getByText('json-development',{exact:true})).toBeVisible();
 });
 
+test('SSH generator shows actual availability and protects credential export', async ({page}) => {
+  await login(page);
+  await page.getByRole('navigation').getByRole('button', {name:'Comptes SSH',exact:true}).click();
+  await expect(page.getByRole('heading', {name:'Comptes et tunnels SSH'})).toBeVisible();
+  await expect(page.getByText('● Passerelle indisponible', {exact:true})).toBeVisible();
+  await expect(page.getByRole('button', {name:'Créer le compte',exact:true})).toBeDisabled();
+  await expect(page.getByRole('button', {name:'Afficher les paramètres et identifiants',exact:true})).toBeDisabled();
+  await page.getByLabel('Transport SSH').selectOption('wss-alt');
+  await expect(page.getByText(/Sélectionnez un compte et un transport/)).toBeVisible();
+});
+
 test('MFA enrollment and recovery login work through the browser',async({page})=>{
   const adminToken=await login(page);
   const password='ui-test-'+crypto.randomUUID();const email=crypto.randomUUID()+'@example.test';

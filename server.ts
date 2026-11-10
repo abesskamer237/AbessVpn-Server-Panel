@@ -14,6 +14,7 @@ import { promisify } from 'util';
 import QRCode from 'qrcode';
 import { Operations, registerOperations, encryptedBackup, uploadBackup } from './modules/operations.js';
 import { registerCommerce } from './modules/commerce.js';
+import { registerSsh, type SshState } from './modules/ssh.js';
 import { SecurityService, registerSecurityRoutes } from './modules/security.js';
 import { DocumentStore } from './modules/store.js';
 import { startTelegramBot } from './telegram-bot.js';
@@ -2298,8 +2299,36 @@ async function startServer() {
   const commerceFile=path.resolve(dataDir,'commerce.json');
   registerCommerce(app,{authenticate,limiter:publicApiRateLimiter,read:()=>hasDocument(commerceFile)?readDocument(commerceFile):{orders:[]},write:v=>{writeJsonAtomically(commerceFile,v);},users:loadUsers,saveUsers,plans:loadPlans,audit:logAudit,durable:()=>Boolean(storage.pool)});
 
+  const sshFile = path.resolve(dataDir, 'ssh.json');
+  const sshControl = process.env.SSH_CONTROL_DIR || path.resolve(dataDir, 'ssh-control');
+  const readSsh = (): SshState => hasDocument(sshFile) ? readDocument(sshFile) : { accounts: [] };
+  const publishSsh = (state: SshState) => {
+    if (process.env.SSH_GATEWAY_ENABLED !== 'true') return;
+    const projection = { at: Date.now(), enabled: true, accounts: state.accounts.map(({password, ...a}) => a) };
+    storage.afterCommit(() => { fs.mkdirSync(sshControl, {recursive: true, mode: 0o700}); writeJsonAtomically(path.join(sshControl, 'config.json'), projection); });
+  };
+  const reconcileSsh = () => {
+    if (process.env.SSH_GATEWAY_ENABLED !== 'true') return;
+    const state = readSsh(); let changed = false;
+    try {
+      const stats = JSON.parse(fs.readFileSync(path.join(sshControl, 'stats.json'), 'utf8'));
+      if (Date.now() - stats.at >= -5000 && Date.now() - stats.at < 15000 && Array.isArray(stats.accounts)) {
+        for (const a of state.accounts) {
+          const used = stats.accounts.find((v: any) => v.id === a.id)?.usedBytes;
+          if (Number.isSafeInteger(used) && used > a.usedBytes) { a.usedBytes = Math.min(used, a.quotaBytes); changed = true; }
+        }
+      }
+    } catch { /* Gateway remains unavailable until its first heartbeat. */ }
+    if (changed) writeJsonAtomically(sshFile, state);
+    publishSsh(state);
+  };
+  registerSsh(app, { authenticate, read: readSsh, write: state => { writeJsonAtomically(sshFile, state); },
+    publish: publishSsh, key: process.env.MASTER_SECRET!, directory: sshControl, audit: logAudit });
+  await storage.transaction(reconcileSsh);
+  const sshReconcileTimer = setInterval(() => { void storage.transaction(reconcileSsh).catch(() => console.error('[SSH] Control refresh postponed.')); }, 5000);
+  sshReconcileTimer.unref();
   const nodesFile=path.resolve(dataDir,'nodes.json');
-  const fullSnapshot=async()=>({version:3,auditLogs:loadAuditLogs(),auditEvents:await storage.exportAudit(),masterKeyId:crypto.createHash('sha256').update(process.env.MASTER_SECRET!).digest('hex').slice(0,16),users:loadUsers(),tokens:loadTokens().map(backupClientToken),masterConfig:(()=>{const {secretPassphrase,...config}=loadMasterConfig();return config;})(),protocolConfigs:loadProtocolConfigs(),transactions:loadTransactions(),plans:loadPlans(),requests:loadRequests(),appVersion:loadAppVersionConfig(),announcements:loadAnnouncements(),security:{mfa:security.state().mfa,sessions:{}},commerce:hasDocument(commerceFile)?readDocument(commerceFile):{orders:[]},nodes:hasDocument(nodesFile)?readDocument(nodesFile):[]});
+  const fullSnapshot=async()=>({version:3,ssh:readSsh(),auditLogs:loadAuditLogs(),auditEvents:await storage.exportAudit(),masterKeyId:crypto.createHash('sha256').update(process.env.MASTER_SECRET!).digest('hex').slice(0,16),users:loadUsers(),tokens:loadTokens().map(backupClientToken),masterConfig:(()=>{const {secretPassphrase,...config}=loadMasterConfig();return config;})(),protocolConfigs:loadProtocolConfigs(),transactions:loadTransactions(),plans:loadPlans(),requests:loadRequests(),appVersion:loadAppVersionConfig(),announcements:loadAnnouncements(),security:{mfa:security.state().mfa,sessions:{}},commerce:hasDocument(commerceFile)?readDocument(commerceFile):{orders:[]},nodes:hasDocument(nodesFile)?readDocument(nodesFile):[]});
   const restoreSnapshot=async(snapshot:any)=>{
     if(!snapshot || snapshot.masterKeyId!==crypto.createHash('sha256').update(process.env.MASTER_SECRET!).digest('hex').slice(0,16) || !validRestoredUsers(snapshot.users)||!Array.isArray(snapshot.tokens)||!Array.isArray(snapshot.plans)||!Array.isArray(snapshot.protocolConfigs))throw new Error('Invalid snapshot');
     // Keep a verified encrypted pre-restore snapshot; PostgreSQL commits all aggregates together.
@@ -2310,6 +2339,8 @@ async function startServer() {
     if(snapshot.appVersion)saveAppVersionConfig(snapshot.appVersion);
     if(Array.isArray(snapshot.announcements))saveAnnouncements(snapshot.announcements);
     if(snapshot.commerce)writeJsonAtomically(commerceFile,snapshot.commerce);
+    writeJsonAtomically(sshFile, snapshot.ssh || { accounts: [] });
+    publishSsh(snapshot.ssh || { accounts: [] });
     if(Array.isArray(snapshot.nodes))writeJsonAtomically(nodesFile,snapshot.nodes);
     writeJsonAtomically(securityFile,{mfa:snapshot.security?.mfa||{},sessions:{}});
     if(Array.isArray(snapshot.auditEvents))storage.importAudit(snapshot.auditEvents);

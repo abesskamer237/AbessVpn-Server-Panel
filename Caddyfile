@@ -5,6 +5,9 @@
 (abess_routes) {
   encode zstd gzip
 
+  @abess_ssh path /ws-ssh
+  reverse_proxy @abess_ssh ssh:8085
+
   # VLESS WebSocket over TLS
   @abess_vless_ws path /@abess237
   reverse_proxy @abess_vless_ws xray:10000
@@ -31,4 +34,11 @@
 
 :443 {
   import abess_routes
+}
+
+# Dedicated SSH WebSocket TLS listener, sharing the panel certificate.
+{$VPN_DOMAIN}:2084 {
+  @ssh_path path /ws-ssh
+  reverse_proxy @ssh_path ssh:8085
+  respond 404
 }

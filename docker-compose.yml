@@ -39,11 +39,15 @@ services:
       POSTGRES_PASSWORD: ""
       POSTGRES_APP_PASSWORD: ""
       NODE_USE_ENV_PROXY: "1"
+      SSH_GATEWAY_ENABLED: "true"
+      SSH_CONTROL_DIR: /ssh-control
+      SSH_TCP_PORT: ${SSH_TCP_PORT:-2222}
     depends_on:
       database:
         condition: service_healthy
     volumes:
       - abessvpn_data:/app/data
+      - ssh_control:/ssh-control
     expose:
       - "3000"
     healthcheck:
@@ -85,6 +89,36 @@ services:
     networks:
       - abessvpn
 
+  ssh:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["node", "scripts/ssh-gateway.mjs"]
+    restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs: ["/tmp:rw,nosuid,noexec,size=16m"]
+    environment:
+      SSH_CONTROL_DIR: /ssh-control
+      SSH_DATA_DIR: /ssh-data
+    depends_on:
+      api:
+        condition: service_healthy
+    volumes:
+      - ssh_control:/ssh-control
+      - ssh_data:/ssh-data
+    ports:
+      - "${SSH_TCP_PORT:-2222}:2222"
+    expose: ["8085"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8085/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 15s
+    networks: [abessvpn]
+
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
@@ -93,11 +127,14 @@ services:
         condition: service_healthy
       xray:
         condition: service_healthy
+      ssh:
+        condition: service_healthy
     env_file:
       - .env
     ports:
       - "80:80"
       - "443:443"
+      - "2084:2084"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
@@ -106,6 +143,8 @@ services:
       - abessvpn
 
 volumes:
+  ssh_control:
+  ssh_data:
   abessvpn_postgres:
   abessvpn_data:
   caddy_data:

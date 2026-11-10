@@ -41,6 +41,7 @@ const names = [
   "audit-logs",
   "security",
   "commerce",
+  "ssh",
   "nodes",
   "xray-usage-state",
 ];

@@ -70,6 +70,9 @@ jobs:
       - name: Build API Docker image
         run: docker build --pull -f Dockerfile -t abessvpn-api:ci .
 
+      - name: Verify SSH TCP, WebSocket, quota and isolation
+        run: bash scripts/test-ssh-docker.sh
+
       - name: Build official Xray-core sidecar image
         run: docker build --pull -f docker/xray/Dockerfile -t abessvpn-xray:ci ./docker/xray
 

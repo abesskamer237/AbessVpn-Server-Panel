@@ -54,6 +54,7 @@ try {
       "audit-logs",
       "security",
       "commerce",
+      "ssh",
       "nodes",
       "xray-usage-state",
     ];
@@ -85,6 +86,7 @@ try {
             announcements: previous.announcements || [],
             security: { mfa: previous.security?.mfa || {}, sessions: {} },
             commerce: previous.commerce || { orders: [] },
+            ssh: previous.ssh || { accounts: [] },
             nodes: previous.nodes || [],
           },
           key,
@@ -104,6 +106,7 @@ try {
       announcements: snapshot.announcements || [],
       security: { mfa: snapshot.security?.mfa || {}, sessions: {} },
       commerce: snapshot.commerce || { orders: [] },
+      ssh: snapshot.ssh || { accounts: [] },
       nodes: snapshot.nodes || [],
       "xray-usage-state": { generation: "", lastCounters: {} },
     };

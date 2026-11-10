@@ -61,6 +61,9 @@ jobs:
       - name: Build API image
         run: docker build --pull -f Dockerfile -t abessvpn-api:ci .
 
+      - name: Verify SSH TCP, WebSocket, quota and isolation
+        run: bash scripts/test-ssh-docker.sh
+
       - name: Build Xray-core sidecar image
         run: docker build --pull -f docker/xray/Dockerfile -t abessvpn-xray:ci ./docker/xray
 
@@ -342,6 +345,9 @@ jobs:
           if docker volume inspect abessvpn-server_abessvpn_data >/dev/null 2>&1; then
             docker run --rm --env-file .env -v abessvpn-server_abessvpn_data:/source:ro -v "$PWD/deployment-backups:/backup" -v "$PWD/scripts:/tools:ro" node:22-alpine node /tools/snapshot-volume.mjs encrypt /source "/backup/pre-deploy-$(date +%s).tgz.enc"
           fi
+          if docker volume inspect abessvpn-server_ssh_data >/dev/null 2>&1; then
+            docker run --rm --env-file .env -v abessvpn-server_ssh_data:/source:ro -v "$PWD/deployment-backups:/backup" -v "$PWD/scripts:/tools:ro" node:22-alpine node /tools/snapshot-volume.mjs encrypt /source "/backup/ssh-pre-deploy-$(date +%s).tgz.enc"
+          fi
           if [ "$rollback_allowed" -eq 1 ]; then
             docker compose exec -T database pg_dump -U abess -Fc abess | docker run --rm -i --env-file .env -v "$PWD/deployment-backups:/backup" -v "$PWD/scripts:/tools:ro" node:22-alpine node /tools/snapshot-volume.mjs encrypt - "/backup/postgres-$(date +%s).dump.enc"
           fi
@@ -374,8 +380,14 @@ jobs:
             docker compose logs --tail=100 api xray caddy >&2 || true
             exit 1
           fi
+          docker compose exec -T ssh node -e "fetch('http://127.0.0.1:8085/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+          ssh_upgrade="$(curl --http1.1 --silent --show-error --max-time 3 -D - -o /dev/null -H 'Connection: Upgrade' -H 'Upgrade: websocket' "https://${VPN_DOMAIN}/ws-ssh" 2>/dev/null || true)"
+          if ! printf '%s' "$ssh_upgrade" | grep -Eq '^HTTP/1[.]1 101'; then
+            echo '::error::Public SSH WebSocket/TLS upgrade failed. Check Caddy and the domain/CDN WebSocket settings.' >&2
+            exit 1
+          fi
           printf '%s\n' "$response"
-          echo 'ABESS VPN control plane and Xray-core report ready.'
+          echo 'ABESS VPN control plane, Xray-core and public SSH WebSocket/TLS report ready.'
           REMOTE
           rm -f .deploy.env
 

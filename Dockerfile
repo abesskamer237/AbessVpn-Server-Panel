@@ -22,7 +22,7 @@ COPY --from=build --chown=node:node /app/templates ./templates
 COPY --from=build --chown=node:node /app/static ./static
 COPY --from=build --chown=node:node /app/dist ./dist
 
-RUN mkdir -p /app/data /shared && chown -R node:node /app/data /shared
+RUN mkdir -p /app/data /shared /ssh-control /ssh-data && chown -R node:node /app/data /shared /ssh-control /ssh-data
 USER node
 EXPOSE 3000
 CMD ["npm","run","start"]

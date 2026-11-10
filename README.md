@@ -78,3 +78,7 @@ La clé maître doit rester stable : une rotation nécessite une migration des l
 - `/api/v1/admin/nodes` et `/api/v1/nodes/:id/config`, `/heartbeat` : gestion des agents.
 
 Les essais gratuits et l’émission de licences SSH restent désactivés. Aucun mécanisme ne doit afficher un paiement ou une connexion réussis sans confirmation du service réel.
+
+## Comptes SSH et application Android
+
+Le menu **Comptes SSH** permet de créer des accès SSH TCP et WebSocket/TLS, puis d’exporter leur configuration pour ABESS VPN 2.5.0+. Voir [le guide SSH](docs/SSH.md) pour les ports, l’import et les limites.

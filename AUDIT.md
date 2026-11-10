@@ -82,3 +82,11 @@ Les tests de trafic locaux ne remplacent pas la recette Android sur téléphone 
 La clé maître reste stable. Une rotation PostgreSQL requiert une migration dédiée des liens, MFA et audit ; le script JSON historique ne doit pas être utilisé à cette fin. Ne pas considérer cette livraison comme une certification de sécurité ou une validation du paiement en production.
 
 Les tests de confirmation manuelle sur PostgreSQL couvrent également quatre confirmations concurrentes d’une même commande, le refus d’une validation par un revendeur et le refus de réutiliser une référence pour une autre commande.
+
+## Service SSH et client Android 2.5.0
+
+Ajout d’une passerelle SSH 2 indépendante (bibliothèque `ssh2`) et d’un espace **Comptes SSH** Super Admin : création, expiration, quota, connexions simultanées, suspension, suppression, état réel, recherche et export audité. SSH TCP sur 2222 et WebSocket/TLS sur 443/2084 avec `/ws-ssh`. Aucun code propriétaire X-net réutilisé, aucun utilisateur Linux créé, aucun changement du SSH d’administration, aucun accès au socket Docker. Les restrictions et différences avec X-net sont documentées dans `docs/SSH.md`.
+
+Le service tourne non privilégié dans un conteneur séparé. Mots de passe aléatoires chiffrés dans PostgreSQL, vérificateurs scrypt projetés, empreinte SHA-256 persistante, rejet du shell et des destinations privées, contrôle périmé fermé après 30 secondes. Les comptes sont inclus dans les sauvegardes chiffrées et le volume de clé SSH est archivé avant les déploiements suivants.
+
+Tests exécutés : passerelle et API dans un réseau Docker isolé, trafic TCP réel, HTTP Upgrade brut et WebSocket encadré, export sans fuite dans les listes, rôle revendeur refusé, mauvaises authentifications, limite simultanée, accès privé/mappé IPv6 refusé, commande système refusée, suspension, quota persistant, redémarrage et contrôle périmé. **7 tests Chromium réussis**, dont le générateur SSH et son état indisponible réel. TypeScript, image Docker et configuration Caddy validés. Voir le dépôt Android pour les tests du client Dart et de sa chaîne Xray/SOCKS/SSH.
