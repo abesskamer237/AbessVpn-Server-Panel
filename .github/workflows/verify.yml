@@ -494,6 +494,20 @@ jobs:
           assert.equal(variantsAJson.xrayClient.outbounds[0].streamSettings.network, 'ws');
           assert.equal(variantsAJson.xrayClient.outbounds[0].streamSettings.security, 'tls');
           assert.equal(variantsAJson.xrayClient.outbounds[0].streamSettings.wsSettings.headers.Host, 'header.example.test');
+          assert.equal(variantsAJson.variants.length, 6, 'subscription must expose only the six transports implemented by Xray/Caddy');
+          const uriByVariant = Object.fromEntries(variantsAJson.variants.map(variant => [variant.id, new URL(variant.uri)]));
+          assert.equal(uriByVariant.fast.searchParams.get('type'), 'ws');
+          assert.equal(uriByVariant.fast.searchParams.get('path'), '/@abess237?ed=2048');
+          assert.equal(uriByVariant.stable.searchParams.get('path'), '/@abess237');
+          assert.equal(uriByVariant.vless_grpc.searchParams.get('type'), 'grpc');
+          assert.equal(uriByVariant.vless_grpc.searchParams.get('serviceName'), '@abess237/vless/grpc');
+          assert.equal(uriByVariant.vless_httpupgrade.searchParams.get('type'), 'httpupgrade');
+          assert.equal(uriByVariant.vless_httpupgrade.searchParams.get('path'), '/@abess237/vless/httpupgrade');
+          assert.equal(uriByVariant.vless_xhttp.searchParams.get('type'), 'xhttp');
+          assert.equal(uriByVariant.vless_xhttp.searchParams.get('path'), '/@abess237/vless/xhttp');
+          for (const variant of variantsAJson.variants.filter(item => item.id !== 'vless_tcp_direct')) {
+            assert.equal(new URL(variant.uri).searchParams.get('sni'), process.env.VPN_DOMAIN);
+          }
 
           let stableUuid;
           for (const deviceId of ['CI-DEVICE-ONE', 'CI-DEVICE-TWO']) {
@@ -620,6 +634,9 @@ jobs:
           assert.equal(variantsCJson.xrayClient.outbounds[0].streamSettings.network, 'tcp');
           assert.equal(variantsCJson.xrayClient.outbounds[0].streamSettings.security, 'none');
           assert.deepEqual(variantsCJson.xrayClient.outbounds[0].streamSettings.tcpSettings, { header: { type: 'none' } });
+          assert.equal(variantsCJson.variants.length, 6);
+          assert.equal(new URL(variantsCJson.variants.find(item => item.id === 'fast').uri).searchParams.get('sni'), process.env.VPN_DOMAIN,
+            'TCP-only profiles must still use the Caddy certificate SNI for their TLS subscription variants');
 
           const configResponse = JSON.parse(fs.readFileSync(`${dataDir}/xray-config.json`, 'utf8'));
           assert.equal(configResponse.outbounds[0].tag, 'direct', 'default VPN traffic must egress through the direct outbound');
