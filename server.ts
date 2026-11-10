@@ -81,14 +81,14 @@ export interface TransactionLog {
 }
 
 function loadTransactions(): TransactionLog[] {
-  if (fs.existsSync(transactionsFile)) {
-    try {
-      return JSON.parse(fs.readFileSync(transactionsFile, 'utf8')) as TransactionLog[];
-    } catch {
-      return [];
-    }
+  if (!fs.existsSync(transactionsFile)) return [];
+  try {
+    const parsed = JSON.parse(fs.readFileSync(transactionsFile, 'utf8'));
+    if (!Array.isArray(parsed)) throw new Error('invalid transaction array');
+    return parsed as TransactionLog[];
+  } catch {
+    throw new Error('Le fichier data/transactions.json est illisible. Restaurez une sauvegarde avant de continuer.');
   }
-  return [];
 }
 
 function logTransaction(tx: Omit<TransactionLog, 'id' | 'timestamp'>): void {
@@ -368,9 +368,10 @@ export function loadPlans(): PricingPlan[] {
   if (fs.existsSync(plansFile)) {
     try {
       const parsed = JSON.parse(fs.readFileSync(plansFile, 'utf8'));
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      if (!Array.isArray(parsed)) throw new Error('invalid plan array');
+      return parsed;
     } catch {
-      // fallback
+      throw new Error('Le fichier data/plans.json est illisible. Restaurez une sauvegarde avant de continuer.');
     }
   }
   writeJsonAtomically(plansFile, DEFAULT_PLANS);
@@ -382,15 +383,14 @@ export function savePlans(plans: PricingPlan[]): void {
 }
 
 export function loadRequests(): MembershipRequest[] {
-  if (fs.existsSync(requestsFile)) {
-    try {
-      const parsed = JSON.parse(fs.readFileSync(requestsFile, 'utf8'));
-      if (Array.isArray(parsed)) return parsed;
-    } catch {
-      // fallback
-    }
+  if (!fs.existsSync(requestsFile)) return [];
+  try {
+    const parsed = JSON.parse(fs.readFileSync(requestsFile, 'utf8'));
+    if (!Array.isArray(parsed)) throw new Error('invalid request array');
+    return parsed;
+  } catch {
+    throw new Error('Le fichier data/requests.json est illisible. Restaurez une sauvegarde avant de continuer.');
   }
-  return [];
 }
 
 export function saveRequests(reqs: MembershipRequest[]): void {
@@ -398,15 +398,14 @@ export function saveRequests(reqs: MembershipRequest[]): void {
 }
 
 export function loadAuditLogs(): AuditLog[] {
-  if (fs.existsSync(auditLogsFile)) {
-    try {
-      const parsed = JSON.parse(fs.readFileSync(auditLogsFile, 'utf8'));
-      if (Array.isArray(parsed)) return parsed;
-    } catch {
-      // fallback
-    }
+  if (!fs.existsSync(auditLogsFile)) return [];
+  try {
+    const parsed = JSON.parse(fs.readFileSync(auditLogsFile, 'utf8'));
+    if (!Array.isArray(parsed)) throw new Error('invalid audit log array');
+    return parsed;
+  } catch {
+    throw new Error('Le fichier data/audit-logs.json est illisible. Restaurez une sauvegarde avant de continuer.');
   }
-  return [];
 }
 
 export function logAudit(entry: Omit<AuditLog, 'id' | 'timestamp'>): void {
