@@ -38,6 +38,6 @@ Cette livraison ne fournit pas de serveur Dropbear, SlowDNS, stunnel direct, UDP
 
 ## Vérification
 
-`SSH_TEST_IMAGE=abessvpn-api:audit bash scripts/test-ssh-docker.sh` teste le trafic SSH réel, TCP, HTTP Upgrade brut et WebSocket encadré, l’authentification, le stockage chiffré, l’isolation privée, le refus des commandes, la suspension, les connexions simultanées, le quota, le redémarrage et le contrôle périmé. Le réseau Docker est isolé et sans accès Internet. Les deux workflows du panel exécutent ce test avant le déploiement.
+`SSH_TEST_IMAGE=abessvpn-api:audit bash scripts/test-ssh-docker.sh` teste le trafic SSH réel, TCP, HTTP Upgrade brut, WebSocket encadré et le Caddyfile de production en WSS sur 443/2084 avec certificat de test vérifié, l’authentification, le stockage chiffré, l’isolation privée, le refus des commandes, la suspension, les connexions simultanées, le quota, le redémarrage et le contrôle périmé. Le réseau Docker est isolé et sans accès Internet. Les deux workflows du panel exécutent ce test avant le déploiement.
 
 La compilation et les essais logiciels ne remplacent pas la recette Android sur téléphone (DNS, IPv6, changement de réseau, veille et arrêt du service).

@@ -37,7 +37,7 @@ const environment = {
   SSH_DATA_DIR: path.join(dir, "gateway"),
   SSH_GATEWAY_ENABLED: "true",
   SSH_LISTEN_PORT: "12222",
-  SSH_WS_PORT: "18085",
+  SSH_WS_PORT: "8085",
   PORT: "13188",
   NODE_ENV: "production",
   ALLOW_JSON_STORAGE: "true",
@@ -87,7 +87,7 @@ function connect(config, sock) {
   return new Promise((resolve, reject) => {
     const c = new Client();
     clients.push(c);
-    c.once("error", reject);
+    c.on("error", reject);
     c.once("ready", () => resolve(c));
     c.connect({
       host: "127.0.0.1",
@@ -237,7 +237,7 @@ try {
     }),
   );
   await close(client);
-  const raw = net.connect(18085, "127.0.0.1");
+  const raw = net.connect(8085, "127.0.0.1");
   await new Promise((resolve, reject) => {
     let response = Buffer.alloc(0);
     raw.on("error", reject);
@@ -262,12 +262,33 @@ try {
   client = await connect(config, raw);
   assert.ok((await transfer(client)) > 65536, "Raw HTTP Upgrade SSH works");
   await close(client);
-  const ws = new WebSocket("ws://127.0.0.1:18085/ws-ssh");
+  if (process.env.SSH_TEST_CADDY_HOST) {
+    for (const port of [443, 2084]) {
+      const tlsWs = new WebSocket(
+        `wss://${process.env.SSH_TEST_CADDY_HOST}:${port}/ws-ssh`,
+      );
+      const tlsStream = createWebSocketStream(tlsWs);
+      tlsStream.on("error", () => {});
+      await new Promise((resolve, reject) => {
+        tlsWs.once("open", resolve);
+        tlsWs.once("error", reject);
+      });
+      const tlsClient = await connect(config, tlsStream);
+      assert.ok(
+        (await transfer(tlsClient)) > 65536,
+        `Production Caddy WSS routing on ${port}`,
+      );
+      await close(tlsClient);
+    }
+  }
+  const ws = new WebSocket("ws://127.0.0.1:8085/ws-ssh");
+  const wsStream = createWebSocketStream(ws);
+  wsStream.on("error", () => {});
   await new Promise((r, j) => {
     ws.once("open", r);
     ws.once("error", j);
   });
-  client = await connect(config, createWebSocketStream(ws));
+  client = await connect(config, wsStream);
   assert.ok((await transfer(client)) > 65536, "Framed WebSocket SSH works");
   await request(`admin/ssh/accounts/${id}`, { enabled: false }, "PATCH");
   await new Promise((resolve, reject) => {
@@ -318,7 +339,7 @@ try {
   );
   assert.equal(status.ready, false, "Stale controller closes gateway");
   console.log(
-    "SSH integration PASS: TCP, raw Upgrade, framed WS, credentials, host key, session cap, private access denied, revocation, quota, restart and fail-closed.",
+    "SSH integration PASS: TCP, raw Upgrade, framed WS, Caddy WSS 443/2084, credentials, host key, session cap, private access denied, revocation, quota, restart and fail-closed.",
   );
 } catch (e) {
   console.error("SSH integration failed:", e.message);

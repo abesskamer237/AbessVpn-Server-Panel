@@ -38,7 +38,10 @@
 
 # Dedicated SSH WebSocket TLS listener, sharing the panel certificate.
 {$VPN_DOMAIN}:2084 {
-  @ssh_path path /ws-ssh
-  reverse_proxy @ssh_path ssh:8085
-  respond 404
+  handle /ws-ssh {
+    reverse_proxy ssh:8085
+  }
+  handle {
+    respond 404
+  }
 }
