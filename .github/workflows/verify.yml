@@ -233,6 +233,7 @@ jobs:
             }),
           });
           assert.equal(childCreate.status, 201);
+          const branchChild = await childCreate.json();
           const childLogin = await fetch(`${base}/api/v1/auth/login`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -667,7 +668,7 @@ jobs:
           });
           assert.equal(branchLicenceResponse.status, 201);
           const branchLicence = await branchLicenceResponse.json();
-          const deleteBranch = await fetch(`${base}/api/v1/admin/resellers/${childSession.user?.id || (await childCreate.clone().json()).id}`, {
+          const deleteBranch = await fetch(`${base}/api/v1/admin/resellers/${branchChild.id}`, {
             method: 'DELETE',
             headers: resellerHeaders,
           });
