@@ -2107,7 +2107,11 @@ async function startServer() {
       return;
     }
 
-    const requestedCredits = Math.max(0, Number(initialCredits) || 0);
+    const requestedCredits = initialCredits === undefined ? 0 : Number(initialCredits);
+    if (!Number.isFinite(requestedCredits) || requestedCredits < 0 || requestedCredits > 1000000) {
+      res.status(400).json({ error: 'Le crédit initial doit être un nombre fini compris entre 0 et 1000000 Go.' });
+      return;
+    }
 
     const users = loadUsers();
     if (users.some(u => u.email.toLowerCase() === email.toLowerCase().trim())) {
