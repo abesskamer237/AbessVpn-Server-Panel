@@ -218,8 +218,9 @@ export function loadAppVersionConfig(): AppVersionConfig {
           publishedAt: String(data.publishedAt || new Date().toISOString())
         };
       }
+      throw new Error('Format de data/app-version.json invalide.');
     } catch {
-      // rewrite default
+      throw new Error('Le fichier data/app-version.json est illisible. Restaurez une sauvegarde avant de continuer.');
     }
   }
   const defaultConfig: AppVersionConfig = {
@@ -264,8 +265,11 @@ export function loadAnnouncements(): Announcement[] {
   if (fs.existsSync(announcementsFile)) {
     try {
       const data = JSON.parse(fs.readFileSync(announcementsFile, 'utf8'));
-      if (Array.isArray(data)) return data;
-    } catch {}
+      if (!Array.isArray(data)) throw new Error('invalid announcement array');
+      return data;
+    } catch {
+      throw new Error('Le fichier data/announcements.json est illisible. Restaurez une sauvegarde avant de continuer.');
+    }
   }
   const defaultAnnouncements: Announcement[] = [
     {
