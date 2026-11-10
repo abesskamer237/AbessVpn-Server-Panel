@@ -312,6 +312,16 @@ jobs:
             '/api/v1/admin/server-config',
             { Authorization: `Bearer ${login.token}` },
           );
+          await assertCorruptStoreFailsClosed(
+            'app-version.json',
+            '/api/v1/admin/app-version',
+            { Authorization: `Bearer ${login.token}` },
+          );
+          await assertCorruptStoreFailsClosed(
+            'announcements.json',
+            '/api/v1/announcements/active',
+            {},
+          );
 
           const adminBackup = await fetch(`${base}/api/v1/admin/backup`, {
             headers: { Authorization: `Bearer ${login.token}` },
