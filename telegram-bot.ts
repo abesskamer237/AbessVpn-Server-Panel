@@ -111,6 +111,25 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
 
   const authorizedAdmins = loadAdmins();
 
+  function buildSafeBackupSnapshot() {
+    const { secretPassphrase: _secretPassphrase, ...safeMasterConfig } = ctx.loadMasterConfig();
+    const tokens = ctx.loadTokens().map((token) => {
+      const { sshConfig, ...safeToken } = token;
+      if (!sshConfig) return safeToken;
+      const { sshPassword: _sshPassword, ...safeSshConfig } = sshConfig;
+      return { ...safeToken, sshConfig: safeSshConfig };
+    });
+    return {
+      timestamp: new Date().toISOString(),
+      version: 'abessvpn-master-v2',
+      users: ctx.loadUsers(),
+      tokens,
+      masterConfig: safeMasterConfig,
+      protocolConfigs: ctx.loadProtocolConfigs(),
+      transactions: ctx.loadTransactions()
+    };
+  }
+
   function isAdmin(userId: number): boolean {
     return authorizedAdmins.has(userId);
   }
@@ -1142,15 +1161,7 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
           }
         });
       } else if (data === 'action_backup') {
-        const snapshot = {
-          timestamp: new Date().toISOString(),
-          version: 'abessvpn-master-v2',
-          users: ctx.loadUsers(),
-          tokens: ctx.loadTokens(),
-          masterConfig: ctx.loadMasterConfig(),
-          protocolConfigs: ctx.loadProtocolConfigs(),
-          transactions: ctx.loadTransactions()
-        };
+        const snapshot = buildSafeBackupSnapshot();
         const buffer = Buffer.from(JSON.stringify(snapshot, null, 2), 'utf8');
         const filename = `backup_abessvpn_${new Date().toISOString().split('T')[0]}_${Date.now()}.json`;
 
@@ -1516,15 +1527,7 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
     }
 
     if (text === '/backup') {
-      const snapshot = {
-        timestamp: new Date().toISOString(),
-        version: 'abessvpn-master-v2',
-        users: ctx.loadUsers(),
-        tokens: ctx.loadTokens(),
-        masterConfig: ctx.loadMasterConfig(),
-        protocolConfigs: ctx.loadProtocolConfigs(),
-        transactions: ctx.loadTransactions()
-      };
+      const snapshot = buildSafeBackupSnapshot();
       const buffer = Buffer.from(JSON.stringify(snapshot, null, 2), 'utf8');
       const filename = `backup_abessvpn_${Date.now()}.json`;
 
