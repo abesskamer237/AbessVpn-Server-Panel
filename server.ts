@@ -1685,6 +1685,30 @@ setInterval(() => {
   }
 }, 60 * 60 * 1000);
 
+function escapeHtmlText(value: unknown): string {
+  return String(value ?? '').replace(/[&<>"']/g, (character) => {
+    switch (character) {
+      case '&': return '&amp;';
+      case '<': return '&lt;';
+      case '>': return '&gt;';
+      case '"': return '&quot;';
+      case "'": return '&#39;';
+      default: return character;
+    }
+  });
+}
+
+// Inline JSON lives inside a script element. Escaping HTML-significant characters
+// prevents user-controlled strings such as customerNote from closing that script.
+function serializeSafeInlineJson(value: unknown): string {
+  return JSON.stringify(value)
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e')
+    .replace(/&/g, '\\u0026')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
+}
+
 async function startServer() {
   const vpnDomain = process.env.VPN_DOMAIN?.trim();
   const initialAdminEmail = process.env.ADMIN_EMAIL?.trim();
@@ -3670,12 +3694,12 @@ async function startServer() {
           support_phone: matched.customerContact || '+237690123456'
         };
 
-        html = html.replace(/\{\{USER_NAME\}\}/g, userName);
-        html = html.replace(/\{\{USER_TOKEN\}\}/g, matched.token);
-        html = html.replace(/\{\{PANEL_TITLE\}\}/g, panelTitle);
-        html = html.replace(/\{\{VLESS_URI\}\}/g, primaryUri);
-        html = html.replace(/\{\{QR_CODE\}\}/g, primaryQr);
-        html = html.replace(/\{\{SUB_DATA_JSON\}\}/g, JSON.stringify(subData));
+        html = html.replace(/\{\{USER_NAME\}\}/g, escapeHtmlText(userName));
+        html = html.replace(/\{\{USER_TOKEN\}\}/g, escapeHtmlText(matched.token));
+        html = html.replace(/\{\{PANEL_TITLE\}\}/g, escapeHtmlText(panelTitle));
+        html = html.replace(/\{\{VLESS_URI\}\}/g, escapeHtmlText(primaryUri));
+        html = html.replace(/\{\{QR_CODE\}\}/g, escapeHtmlText(primaryQr));
+        html = html.replace(/\{\{SUB_DATA_JSON\}\}/g, serializeSafeInlineJson(subData));
 
         res.setHeader('Content-Type', 'text/html; charset=utf-8');
         res.send(html);
