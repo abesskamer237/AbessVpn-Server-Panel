@@ -175,6 +175,13 @@ jobs:
             }),
           });
           assert.equal(resellerCreate.status, 201);
+          const createdReseller = await resellerCreate.json();
+          const invalidResellerStatus = await fetch(`${base}/api/v1/admin/resellers/${createdReseller.id}/status`, {
+            method: 'PUT',
+            headers: adminHeaders,
+            body: JSON.stringify({ status: 'disabled' }),
+          });
+          assert.equal(invalidResellerStatus.status, 400, 'reseller status must reject unknown values');
           const resellerLogin = await fetch(`${base}/api/v1/auth/login`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -194,6 +201,7 @@ jobs:
             '/api/v1/admin/audit-logs',
             '/api/system/audit-logs',
             '/api/v1/admin/requests',
+            '/api/v1/admin/app-version',
           ]) {
             const response = await fetch(`${base}${path}`, { headers: resellerHeaders });
             assert.equal(response.status, 403, `reseller must not access ${path}`);
@@ -236,8 +244,12 @@ jobs:
             headers: { Authorization: `Bearer ${login.token}` },
           });
           assert.equal(adminRequests.status, 200, 'Super Admin must retain access to onboarding requests');
+          const adminAppVersion = await fetch(`${base}/api/v1/admin/app-version`, {
+            headers: { Authorization: `Bearer ${login.token}` },
+          });
+          assert.equal(adminAppVersion.status, 200, 'Super Admin must retain access to app version configuration');
 
-          const adminBackup = await fetch(`${base}/api/v1/admin/backup`, {
+          const adminBackup = await fetch(`${base}/api/v1/admin/backup`,
             headers: { Authorization: `Bearer ${login.token}` },
           });
           assert.equal(adminBackup.status, 200);
