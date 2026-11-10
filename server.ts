@@ -601,7 +601,12 @@ function loadMasterConfig(): MasterServerConfig {
         secretPassphrase: process.env.MASTER_SECRET || ''
       };
       // Persist normalized fields when whitespace or letter case changed.
-      if (merged.serverHost !== rawStoredHost || merged.host !== rawStoredHeaderHost || merged.sniHost !== rawStoredSni) {
+      if (
+        merged.serverHost !== rawStoredHost ||
+        merged.host !== rawStoredHeaderHost ||
+        merged.sniHost !== rawStoredSni ||
+        Object.prototype.hasOwnProperty.call(stored, 'secretPassphrase')
+      ) {
         saveMasterConfig(merged);
       }
       // Exclusive pure TCP architecture: VLESS only
