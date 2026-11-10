@@ -258,6 +258,13 @@ jobs:
           assert.equal(initialMasterConfig.host, '', 'the HTTP Host header must be independent and optional');
           assert.equal(initialMasterConfig.sniHost, '', 'the VPN profile SNI must be configured explicitly in the panel');
           assert.ok(!('secretPassphrase' in initialMasterConfig), 'MASTER_SECRET must never be returned by the server-config API');
+          const storedMasterConfig = JSON.parse(fs.readFileSync(`${dataDir}/config.json`, 'utf8'));
+          assert.ok(!('secretPassphrase' in storedMasterConfig), 'MASTER_SECRET must never be persisted in config.json');
+
+          const autoBackupFiles = fs.readdirSync(`${dataDir}/backups`).filter(name => /^abessvpn-auto-.*\.json$/.test(name));
+          assert.ok(autoBackupFiles.length > 0, 'the daily auto-backup must be created at startup');
+          const autoBackup = JSON.parse(fs.readFileSync(`${dataDir}/backups/${autoBackupFiles[0]}`, 'utf8'));
+          assert.ok(!('secretPassphrase' in autoBackup.masterConfig), 'daily backups must not persist MASTER_SECRET');
 
           const prematureLicenceResponse = await fetch(`${base}/api/v1/admin/tokens`, {
             method: 'POST',
@@ -282,6 +289,8 @@ jobs:
           assert.equal(protocolConfigUpdate.status, 200);
           const protocolConfigUpdateJson = await protocolConfigUpdate.json();
           assert.ok(!('secretPassphrase' in protocolConfigUpdateJson.config), 'server-config updates must not echo MASTER_SECRET');
+          const updatedStoredMasterConfig = JSON.parse(fs.readFileSync(`${dataDir}/config.json`, 'utf8'));
+          assert.ok(!('secretPassphrase' in updatedStoredMasterConfig), 'server-config updates must not persist MASTER_SECRET');
           const protocolConfigRead = await fetch(`${base}/api/v1/admin/server-config`, {
             headers: { Authorization: `Bearer ${login.token}` },
           });
@@ -619,6 +628,45 @@ jobs:
             }),
           });
           assert.equal(sshLicence.status, 503, 'the panel must not issue SSH licences without a real host provisioner');
+
+          // Legacy SSH credentials are never returned in generic licence objects or backups.
+          const tokenFile = `${dataDir}/tokens.json`;
+          const storedTokens = JSON.parse(fs.readFileSync(tokenFile, 'utf8'));
+          storedTokens.push({
+            id: 'ci-legacy-ssh-token',
+            token: 'ABESS-CI-LEGACY-SSH',
+            resellerId: 'ci-admin',
+            resellerName: 'CI Admin',
+            plan: 'Legacy SSH fixture',
+            bandwidthGb: 1,
+            bandwidthUsedGb: 0,
+            expiresAt: new Date(Date.now() + 86400000).toISOString(),
+            days: 1,
+            deviceLimit: 1,
+            connectionCount: 0,
+            lastSeenAt: null,
+            lastSeenIp: null,
+            status: 'revoked',
+            encryptedLink: '',
+            createdAt: new Date().toISOString(),
+            protocolType: 'ssh',
+            sshConfig: {
+              sshConfigType: 'SSH-Payload',
+              remarks: 'CI redaction fixture',
+              sshHost: 'ssh.example.test',
+              sshPort: 22,
+              sshUsername: 'ci-user',
+              sshPassword: 'CI-PLAINTEXT-SSH-PASSWORD-MUST-NOT-LEAK',
+              payload: 'GET / HTTP/1.1[crlf][crlf]',
+            },
+          });
+          fs.writeFileSync(tokenFile, JSON.stringify(storedTokens, null, 2));
+          const redactedBackup = await fetch(`${base}/api/v1/admin/backup`, { headers: adminHeaders });
+          assert.equal(redactedBackup.status, 200);
+          const redactedBackupJson = await redactedBackup.json();
+          const redactedLegacyToken = redactedBackupJson.tokens.find(token => token.id === 'ci-legacy-ssh-token');
+          assert.ok(redactedLegacyToken);
+          assert.ok(!('sshPassword' in redactedLegacyToken.sshConfig), 'legacy SSH passwords must not appear in API backups');
 
           console.log('API, licensing, privacy, security and Xray config tests passed.');
           NODE
