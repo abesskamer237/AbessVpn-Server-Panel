@@ -752,6 +752,7 @@ jobs:
           storedTokens.push({
             id: 'ci-legacy-ssh-token',
             token: 'ABESS-CI-LEGACY-SSH',
+            clientUuid: 'abcdef12-3456-4123-8123-123456789abc',
             resellerId: 'ci-admin',
             resellerName: 'CI Admin',
             plan: 'Legacy SSH fixture',
@@ -763,7 +764,7 @@ jobs:
             connectionCount: 0,
             lastSeenAt: null,
             lastSeenIp: null,
-            status: 'revoked',
+            status: 'active',
             encryptedLink: '',
             createdAt: new Date().toISOString(),
             protocolType: 'ssh',
@@ -784,6 +785,40 @@ jobs:
           const redactedLegacyToken = redactedBackupJson.tokens.find(token => token.id === 'ci-legacy-ssh-token');
           assert.ok(redactedLegacyToken);
           assert.ok(!('sshPassword' in redactedLegacyToken.sshConfig), 'legacy SSH passwords must not appear in API backups');
+
+          const legacySshActivation = await fetch(`${base}/api/v1/auth/token`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token: 'ABESS-CI-LEGACY-SSH', deviceId: 'CI-SSH-LEGACY-DEVICE' }),
+          });
+          assert.equal(legacySshActivation.status, 410, 'legacy SSH activation must be retired');
+
+          const legacySshSubscription = await fetch(`${base}/sub/ABESS-CI-LEGACY-SSH?raw=1`);
+          assert.equal(legacySshSubscription.status, 410, 'subscription URLs must not distribute legacy SSH credentials');
+
+          const legacySshVariants = await fetch(`${base}/api/v1/admin/tokens/ci-legacy-ssh-token/variants`, {
+            headers: { Authorization: `Bearer ${login.token}` },
+          });
+          assert.equal(legacySshVariants.status, 410, 'legacy SSH tokens must not be converted into VLESS client JSON');
+
+          const resyncAfterLegacySsh = await fetch(`${base}/api/v1/admin/server-config`, {
+            method: 'PUT',
+            headers: adminHeaders,
+            body: JSON.stringify({
+              serverHost: 'profile.example.test',
+              host: 'header.example.test',
+              sniHost: 'vpn.example.test',
+              serverPort: 443,
+              protocol: 'vless',
+              transport: 'ws',
+            }),
+          });
+          assert.equal(resyncAfterLegacySsh.status, 200);
+          const xrayAfterLegacySsh = JSON.parse(fs.readFileSync(`${dataDir}/xray-config.json`, 'utf8'));
+          assert.ok(
+            !JSON.stringify(xrayAfterLegacySsh).includes('abcdef12-3456-4123-8123-123456789abc'),
+            'legacy SSH UUIDs must never be provisioned into Xray',
+          );
 
           console.log('API, licensing, privacy, security and Xray config tests passed.');
           NODE
