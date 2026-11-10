@@ -926,65 +926,86 @@ export function buildDirectProtocolUrl(token: ClientToken, profile: ProtocolConf
 export function generateUserVlessVariants(token: ClientToken, profile?: ProtocolConfig): VlessVariant[] {
   const master = loadMasterConfig();
   const host = profile?.serverHost || master.serverHost || 'panel.pagnol.xyz';
-  const primarySni = profile?.sniHost || master.sniHost || host;
+  // Caddy terminates TLS with the certificate for VPN_DOMAIN. A TCP-only
+  // profile has no SNI of its own, but its other supported variants still do.
+  const primarySni = configuredTlsDomain() || profile?.sniHost || master.sniHost || host;
   const wsHost = profile?.host || master.host || host;
-  const rawPath = profile?.path || master.path || '/@abess237';
-  const cleanPath = rawPath.split('?')[0] || '/@abess237';
   const uuid = token.clientUuid || token.token;
   const baseName = `AbessVpn - ${token.token}`;
-
   const variants: VlessVariant[] = [];
 
-  // 1. Direct TCP (Ultra Low Latency - Pure TCP port 10050)
+  const tcpPort = xrayPublicPort('vless', 'tcp', 10050);
   const tcpTag = `${baseName} 🚀 Direct TCP (Ultra-Fast)`;
-  const tcpUri = `vless://${uuid}@${host}:10050?encryption=none&security=none&type=tcp&headerType=none#${encodeURIComponent(tcpTag)}`;
   variants.push({
     id: 'vless_tcp_direct',
     label: '🚀 VLESS Direct TCP (Port 10050 • Faible Latence)',
     badge: 'DIRECT TCP • MAX SPEED',
     protocol: 'vless',
-    uri: tcpUri,
+    uri: `vless://${uuid}@${host}:${tcpPort}?encryption=none&security=none&type=tcp&headerType=none#${encodeURIComponent(tcpTag)}`,
     sni: '',
-    target: `${host}:10050`
+    target: `${host}:${tcpPort}`
   });
 
-  // 2. Fast (0-RTT Early Data via WebSocket over TLS - Port 443)
+  const tlsPort = xrayPublicPort('vless', 'ws', 443);
+  const tlsBase = `encryption=none&security=tls&sni=${encodeURIComponent(primarySni)}&fp=chrome`;
+  const wsPath = xrayProfilePath('vless', 'ws');
   const fastTag = `${baseName} ⚡ Fast (0-RTT TLS)`;
-  const fastUri = `vless://${uuid}@${host}:443?encryption=none&security=tls&sni=${encodeURIComponent(primarySni)}&fp=chrome&alpn=http%2F1.1&type=ws&host=${encodeURIComponent(wsHost)}&path=${encodeURIComponent(cleanPath + '?ed=2048')}#${encodeURIComponent(fastTag)}`;
   variants.push({
     id: 'fast',
     label: '⚡ VLESS Fast (0-RTT Early Data • Port 443)',
     badge: '0-RTT • RECOMMANDÉ',
     protocol: 'vless',
-    uri: fastUri,
+    uri: `vless://${uuid}@${host}:${tlsPort}?${tlsBase}&alpn=http%2F1.1&type=ws&host=${encodeURIComponent(wsHost)}&path=${encodeURIComponent(wsPath + '?ed=2048')}#${encodeURIComponent(fastTag)}`,
     sni: primarySni,
-    target: `${host}:443`
+    target: `${host}:${tlsPort}`
   });
 
-  // 3. Stable (Standard WebSocket over TLS - Port 443)
   const stableTag = `${baseName} 🛡️ Stable`;
-  const stableUri = `vless://${uuid}@${host}:443?encryption=none&security=tls&sni=${encodeURIComponent(primarySni)}&fp=chrome&alpn=http%2F1.1&type=ws&host=${encodeURIComponent(wsHost)}&path=${encodeURIComponent(cleanPath)}#${encodeURIComponent(stableTag)}`;
   variants.push({
     id: 'stable',
     label: '🛡️ VLESS Stable (WebSocket TLS • Compatibilité Max)',
     badge: 'COMPATIBILITÉ MAX',
     protocol: 'vless',
-    uri: stableUri,
+    uri: `vless://${uuid}@${host}:${tlsPort}?${tlsBase}&alpn=http%2F1.1&type=ws&host=${encodeURIComponent(wsHost)}&path=${encodeURIComponent(wsPath)}#${encodeURIComponent(stableTag)}`,
     sni: primarySni,
-    target: `${host}:443`
+    target: `${host}:${tlsPort}`
   });
 
-  // 4. gRPC High Speed (HTTP/2 Gun Mode over TLS - Port 443)
+  const grpcPath = xrayProfilePath('vless', 'grpc');
+  const grpcService = grpcPath.startsWith('/') ? grpcPath.slice(1) : grpcPath;
   const grpcTag = `${baseName} 🌐 gRPC High Speed`;
-  const grpcUri = `vless://${uuid}@${host}:443?encryption=none&security=tls&type=grpc&serviceName=%40abess237%2Fvless%2Fgrpc&mode=gun&sni=${encodeURIComponent(primarySni)}#${encodeURIComponent(grpcTag)}`;
   variants.push({
     id: 'vless_grpc',
     label: '🌐 VLESS gRPC (HTTP/2 Gun • Haute Vitesse)',
     badge: 'gRPC H2',
     protocol: 'vless',
-    uri: grpcUri,
+    uri: `vless://${uuid}@${host}:${tlsPort}?${tlsBase}&alpn=h2&type=grpc&serviceName=${encodeURIComponent(grpcService)}&mode=gun#${encodeURIComponent(grpcTag)}`,
     sni: primarySni,
-    target: `${host}:443`
+    target: `${host}:${tlsPort}`
+  });
+
+  const httpUpgradePath = xrayProfilePath('vless', 'httpupgrade');
+  const httpUpgradeTag = `${baseName} 🔁 HTTPUpgrade`;
+  variants.push({
+    id: 'vless_httpupgrade',
+    label: '🔁 VLESS HTTPUpgrade (TLS)',
+    badge: 'HTTPUPGRADE',
+    protocol: 'vless',
+    uri: `vless://${uuid}@${host}:${tlsPort}?${tlsBase}&type=httpupgrade&host=${encodeURIComponent(wsHost)}&path=${encodeURIComponent(httpUpgradePath)}#${encodeURIComponent(httpUpgradeTag)}`,
+    sni: primarySni,
+    target: `${host}:${tlsPort}`
+  });
+
+  const xhttpPath = xrayProfilePath('vless', 'xhttp');
+  const xhttpTag = `${baseName} 🌐 XHTTP`;
+  variants.push({
+    id: 'vless_xhttp',
+    label: '🌐 VLESS XHTTP (TLS)',
+    badge: 'XHTTP',
+    protocol: 'vless',
+    uri: `vless://${uuid}@${host}:${tlsPort}?${tlsBase}&type=xhttp&path=${encodeURIComponent(xhttpPath)}&mode=auto#${encodeURIComponent(xhttpTag)}`,
+    sni: primarySni,
+    target: `${host}:${tlsPort}`
   });
 
   return variants;
