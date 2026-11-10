@@ -162,8 +162,37 @@ jobs:
             Authorization: `Bearer ${login.token}`,
           };
 
+          // Batch issuance must reject unbounded values even for the unlimited Super Admin.
+          for (const payload of [
+            { count: 0 },
+            { count: 201 },
+            { bandwidthGb: 'Infinity' },
+            { bandwidthGb: 100001 },
+            { days: 3651 },
+            { deviceLimit: 11 },
+          ]) {
+            const response = await fetch(`${base}/api/v1/admin/tokens/batch`, {
+              method: 'POST',
+              headers: adminHeaders,
+              body: JSON.stringify(payload),
+            });
+            assert.equal(response.status, 400, `batch must reject invalid input: ${JSON.stringify(payload)}`);
+          }
+
           // Privilege regression checks: reseller sessions must never expose backups,
           // audit trails, global onboarding requests or infrastructure diagnostics.
+          const invalidInitialCredit = await fetch(`${base}/api/v1/admin/resellers`, {
+            method: 'POST',
+            headers: adminHeaders,
+            body: JSON.stringify({
+              email: 'ci-infinite-credit@example.test',
+              password: 'ci-reseller-password-please-ignore-123',
+              name: 'Invalid Credit Reseller',
+              initialCredits: 'Infinity',
+            }),
+          });
+          assert.equal(invalidInitialCredit.status, 400, 'initial reseller credit must be finite and bounded');
+
           const resellerCreate = await fetch(`${base}/api/v1/admin/resellers`, {
             method: 'POST',
             headers: adminHeaders,
