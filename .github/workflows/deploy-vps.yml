@@ -357,6 +357,12 @@ jobs:
           docker compose config -q
           deploy_failed=0
           docker compose up -d --build --remove-orphans || deploy_failed=1
+          # rsync may replace the Caddyfile inode. An unchanged Compose service
+          # can retain the previous bind-mounted file and its HTTPS redirects.
+          # Recreate only the edge proxy so it always reads this deployment.
+          if [ "$deploy_failed" -eq 0 ]; then
+            docker compose up -d --no-deps --force-recreate caddy || deploy_failed=1
+          fi
           docker compose ps
 
           ready=0
