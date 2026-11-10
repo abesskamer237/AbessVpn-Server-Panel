@@ -222,6 +222,25 @@ jobs:
             'Content-Type': 'application/json',
             Authorization: `Bearer ${resellerSession.token}`,
           };
+          const childCreate = await fetch(`${base}/api/v1/admin/resellers`, {
+            method: 'POST',
+            headers: resellerHeaders,
+            body: JSON.stringify({
+              email: 'ci-child-reseller@example.test',
+              password: 'ci-child-password-please-ignore-123',
+              name: 'CI Child Reseller',
+              initialCredits: 0,
+            }),
+          });
+          assert.equal(childCreate.status, 201);
+          const childLogin = await fetch(`${base}/api/v1/auth/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: 'ci-child-reseller@example.test', password: 'ci-child-password-please-ignore-123' }),
+          });
+          assert.equal(childLogin.status, 200);
+          const childSession = await childLogin.json();
+          const childHeaders = { Authorization: `Bearer ${childSession.token}` };
 
           for (const path of [
             '/api/v1/admin/backup',
@@ -474,6 +493,15 @@ jobs:
             headers: { Authorization: `Bearer ${resellerSession.token}` },
           });
           assert.equal(crossTenantVariants.status, 403, 'resellers must not inspect another reseller token variants');
+
+          const suspendParent = await fetch(`${base}/api/v1/admin/resellers/${createdReseller.id}/status`, {
+            method: 'PUT',
+            headers: adminHeaders,
+            body: JSON.stringify({ status: 'suspended' }),
+          });
+          assert.equal(suspendParent.status, 200);
+          const childExistingSession = await fetch(`${base}/api/v1/auth/me`, { headers: childHeaders });
+          assert.equal(childExistingSession.status, 401, 'suspending a reseller must immediately revoke active descendant sessions');
           const subscriptionPortal = await fetch(`${base}/sub/${licenceA.token}`, {
             headers: {
               Accept: 'text/html',
