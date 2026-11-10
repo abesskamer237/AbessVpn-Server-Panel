@@ -616,7 +616,7 @@ function loadMasterConfig(): MasterServerConfig {
       merged.serverPort = xrayPublicPort(merged.protocol, merged.transport, 443);
       return merged;
     } catch {
-      // Recreate from environment defaults below.
+      throw new Error('Le fichier data/config.json est illisible. Restaurez une sauvegarde avant de continuer.');
     }
   }
 
