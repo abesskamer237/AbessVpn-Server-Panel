@@ -271,7 +271,7 @@ export function loadAnnouncements(): Announcement[] {
     {
       id: 'ann-welcome-01',
       title: '🛡️ Bienvenue sur AbessVpn v2.1.0',
-      message: 'Votre infrastructure commerciale haute vitesse est pleinement active. Profitez de nos serveurs VLESS Reality, VMess et Trojan sans aucune restriction. Rejoignez le canal officiel pour les dernières actualités !',
+      message: 'Bienvenue sur ABESS VPN. Les licences VLESS sont disponibles sur les profils réellement activés par votre administrateur. Rejoignez le canal officiel pour les dernières actualités !',
       type: 'INFO',
       targetPlatform: 'ALL',
       isMandatory: false,
@@ -2342,7 +2342,11 @@ async function startServer() {
       return;
     }
 
-    const { status } = req.body;
+    const { status } = req.body || {};
+    if (status !== 'active' && status !== 'suspended') {
+      res.status(400).json({ error: 'Le statut doit être active ou suspended.' });
+      return;
+    }
     const users = loadUsers();
     const reseller = users.find(u => u.id === req.params.id && u.role === 'RESELLER');
     if (!reseller) {
@@ -3136,7 +3140,8 @@ async function startServer() {
   // ==========================================
   // APP VERSION & MANDATORY UPDATE MANAGEMENT
   // ==========================================
-  app.get('/api/v1/admin/app-version', authenticate, (_req, res) => {
+  app.get('/api/v1/admin/app-version', authenticate, (req, res) => {
+    if (!requireSuperAdmin(req, res)) return;
     res.json(loadAppVersionConfig());
   });
 
@@ -3977,9 +3982,22 @@ async function startServer() {
     }
     const plans = loadPlans();
     const selectedPlan = plans.find(p => p.id === (req.body?.planId || reqItem.planId)) || plans[1] || plans[0];
+    if (
+      !selectedPlan ||
+      !Number.isFinite(Number(selectedPlan.quotaGb)) ||
+      Number(selectedPlan.quotaGb) <= 0 ||
+      !Number.isFinite(Number(selectedPlan.durationDays)) ||
+      Number(selectedPlan.durationDays) <= 0
+    ) {
+      res.status(409).json({ error: 'Aucun forfait actif et valide ne peut être associé à cette demande.' });
+      return;
+    }
 
     const tokens = loadTokens();
-    const tokenStr = generateTokenCode();
+    let tokenStr = generateTokenCode();
+    while (tokens.some(existing => existing.token.toUpperCase() === tokenStr)) {
+      tokenStr = generateTokenCode();
+    }
     const uuid = crypto.randomUUID();
     const days = selectedPlan.durationDays;
     const bandwidthGb = selectedPlan.quotaGb;
@@ -4052,7 +4070,7 @@ async function startServer() {
       details: `Approbation de la demande de ${reqItem.fullName} -> Token ${tokenStr} (${selectedPlan.name})`
     });
 
-    res.json({ ok: true, status: 'approved', token: dummyToken });
+    res.json({ ok: true, status: 'approved', token: safeClientToken(dummyToken) });
   });
 
   app.post(['/api/admin/requests/:id/reject', '/api/v1/admin/requests/:id/reject'], authenticate, (req, res) => {
