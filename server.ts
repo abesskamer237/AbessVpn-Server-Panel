@@ -3371,12 +3371,11 @@ async function startServer() {
     }
 
     const now = Date.now();
-    const isSsh = found.protocolType === 'ssh' || !!found.sshConfig;
-    const profile = isSsh ? null : protocolConfigForToken(found, loadProtocolConfigs());
+    const profile = protocolConfigForToken(found, loadProtocolConfigs());
     const profileSniError = profile
       ? tlsSniValidationError(profile.transport, profile.sniHost)
       : null;
-    if (!isSsh && (!profile || !isValidPublicHost(profile.serverHost) || profileSniError)) {
+    if (!profile || !isValidPublicHost(profile.serverHost) || profileSniError) {
       res.status(503).json({
         valid: false,
         error: profileSniError || 'La configuration VPN associée à cette licence est indisponible. Contactez le Super Administrateur.'
@@ -3444,44 +3443,6 @@ async function startServer() {
 
     const msRemaining = Math.max(0, expiryTime - now);
     const daysRemaining = Math.ceil(msRemaining / (1000 * 3600 * 24));
-
-    if (isSsh) {
-      const sshJson = generateSshConfigJson(found);
-      const firstCfg = (sshJson.configs as any[])[0];
-      const sshCfg = firstCfg.sshConfig;
-      res.json({
-        valid: true,
-        token: found.token,
-        plan: found.plan,
-        reseller: found.resellerName,
-        expiresAt: found.expiresAt,
-        daysRemaining,
-        deviceLimit,
-        registeredDevices: knownDevices.length,
-        bandwidthGb: found.bandwidthGb,
-        bandwidthUsedGb: Number(found.bandwidthUsedGb.toFixed(2)),
-        bandwidthRemainingGb: Number(Math.max(0, found.bandwidthGb - found.bandwidthUsedGb).toFixed(2)),
-        status: found.status,
-        protocol: 'SSH',
-        configs: sshJson.configs,
-        sshConfig: sshCfg,
-        serverConfig: {
-          address: sshCfg.sshHost,
-          port: Number(sshCfg.sshPort) || 80,
-          path: '/@abess237',
-          uuid: `${sshCfg.sshUsername}:${sshCfg.sshPassword}`,
-          sni: sshCfg.sshHost,
-          host: sshCfg.sshHost,
-          wsHost: 'm.batch.com',
-          protocol: 'ssh',
-          transport: 'ws',
-          security: 'none',
-          method: sshCfg.payload,
-          allowedDeviceId: found.allowedDeviceId || undefined
-        }
-      });
-      return;
-    }
 
     res.json({
       valid: true,
