@@ -2529,17 +2529,27 @@ async function startServer() {
       dbUser.credits += refundedCredits;
     }
 
-    // Persist the revoked licences before removing the branch accounts.
-    saveTokens(updatedTokens);
+    // Persist the account and licence changes as one recoverable operation.
+    // Each JSON file is written atomically; if the second write fails, restore
+    // the original token store and its Xray projection before returning.
     const filteredUsers = users.filter(candidate => !descendantIds.has(candidate.id));
-    saveUsers(filteredUsers);
+    try {
+      saveTokens(updatedTokens);
+      saveUsers(filteredUsers);
+    } catch {
+      try {
+        saveTokens(branchTokens);
+        saveUsers(users);
+      } catch (rollbackError) {
+        console.error('[RESELLER DELETE] Rollback failed; restore the latest data backup before further writes.', rollbackError);
+      }
+      res.status(500).json({ error: 'Suppression interrompue. Les fichiers de données ont été restaurés lorsque possible; vérifiez les sauvegardes avant de réessayer.' });
+      return;
+    }
 
     for (const [sessionToken, session] of activeSessions.entries()) {
       if (descendantIds.has(session.userId)) activeSessions.delete(sessionToken);
     }
-
-    // Make the Xray runtime drop every UUID issued by the removed branch.
-    syncXrayConfig(updatedTokens);
 
     for (const token of tokensToRevoke) {
       logTransaction({
