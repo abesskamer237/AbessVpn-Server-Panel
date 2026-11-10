@@ -334,10 +334,18 @@ jobs:
           assert.ok(!('host' in availableProfiles[0]), 'profile chooser must not expose HTTP Host');
           assert.ok(!('sniHost' in availableProfiles[0]), 'profile chooser must not expose TLS SNI');
 
+          const xssCustomerNote = '</script><script>globalThis.__abess_xss=1</script>';
           const createA = await fetch(`${base}/api/v1/admin/tokens`, {
             method: 'POST',
             headers: adminHeaders,
-            body: JSON.stringify({ plan: 'CI Xray UUID A', bandwidthGb: 2, days: 1, deviceLimit: 2, configurationId: legacyProfile.id }),
+            body: JSON.stringify({
+              plan: 'CI Xray UUID A',
+              bandwidthGb: 2,
+              days: 1,
+              deviceLimit: 2,
+              configurationId: legacyProfile.id,
+              customerNote: xssCustomerNote,
+            }),
           });
           assert.equal(createA.status, 201);
           const licenceA = await createA.json();
@@ -345,6 +353,23 @@ jobs:
             headers: { Authorization: `Bearer ${resellerSession.token}` },
           });
           assert.equal(crossTenantVariants.status, 403, 'resellers must not inspect another reseller token variants');
+          const subscriptionPortal = await fetch(`${base}/sub/${licenceA.token}`, {
+            headers: {
+              Accept: 'text/html',
+              'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36',
+            },
+          });
+          assert.equal(subscriptionPortal.status, 200);
+          const subscriptionHtml = await subscriptionPortal.text();
+          assert.ok(
+            subscriptionHtml.includes('&lt;/script&gt;&lt;script&gt;globalThis.__abess_xss=1&lt;/script&gt;'),
+            'customer-controlled HTML text must be escaped'
+          );
+          assert.ok(
+            subscriptionHtml.includes('\\u003c/script\\u003e\\u003cscript\\u003eglobalThis.__abess_xss=1\\u003c/script\\u003e'),
+            'customer-controlled inline JSON must be escaped for a script context'
+          );
+          assert.ok(!subscriptionHtml.includes(xssCustomerNote), 'raw script-breaking customer text must never appear in portal HTML');
           assert.match(licenceA.clientUuid, /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
 
           let stableUuid;
