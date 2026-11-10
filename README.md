@@ -27,7 +27,7 @@ The local API listens on port 3000 by default. In non-production mode Vite serve
 
 ## Deploy to an Ubuntu VPS using GitHub Actions
 
-The repository includes `.github/workflows/deploy-vps.yml`. It validates the code, panel, Docker images, and Compose configuration before deploying over SSH. Deployment can be started manually from Actions, and pushes to `main` now trigger the same workflow. The workflow deliberately stops before modifying services if Docker/Compose cannot be used or if an unrelated service is listening on ports 80/443.
+The repository includes `.github/workflows/deploy-vps.yml`. It validates the code, panel, Docker images, and Compose configuration before deploying over SSH. Deployment can be started manually from Actions, and pushes to `main` now trigger the same workflow. The workflow deliberately stops before modifying services if Docker/Compose cannot be used or if an unrelated service is listening on ports 80/443. The API no longer pulls and applies updates in the background; a Super Admin must explicitly review the update status and invoke the manual update action.
 
 ### 1. Prepare the VPS
 
@@ -71,7 +71,7 @@ Create these **repository variables**:
 
 Do not paste secrets into chat, source code, workflow files, or commits. For password-based VPS access, save your existing SSH login password as the GitHub secret `VPS_PASSWORD` or `VPS_SSH_PASSWORD`; the workflow already supports this, so an SSH key is not mandatory (a dedicated Ed25519 key is safer). If `VPS_KNOWN_HOSTS` is absent, the workflow discovers the SSH host key using `ssh-keyscan`; for stronger first-connection protection, verify its fingerprint through the Contabo console/provider support and set `VPS_KNOWN_HOSTS`.
 
-The `ADMIN_INITIAL_PASSWORD` and `MASTER_SECRET` secrets are optional. If they are absent, the workflow generates them with cryptographically secure randomness. On a **first deployment**, the generated administrator email/password is saved in `~/abessvpn-server/INITIAL_ADMIN_CREDENTIALS.txt` on the VPS with owner-only permissions; after the successful deployment, connect to the VPS and read that file, then save the password in a password manager and delete the file. The generated master secret is saved in `~/abessvpn-server/.env` with mode `600`. The workflow preserves both values across later deployments, so existing accounts and encrypted `abess://` links continue to work. Back up `.env` securely and do not rotate `MASTER_SECRET` after links have been issued. Changing `ADMIN_INITIAL_PASSWORD` later does not reset an administrator already stored in the persistent user database.
+The `ADMIN_INITIAL_PASSWORD` and `MASTER_SECRET` secrets are optional. If they are absent, the workflow generates them with cryptographically secure randomness. On a **first deployment**, the generated administrator email/password is saved in `~/abessvpn-server/INITIAL_ADMIN_CREDENTIALS.txt` on the VPS with owner-only permissions; after the successful deployment, connect to the VPS and read that file, then save the password in a password manager and delete the file. The generated master secret is saved in `~/abessvpn-server/.env` with mode `600`. The workflow preserves both values across later deployments, so existing accounts and encrypted `abess://` links continue to work. Back up `.env` separately and securely: application-data backups intentionally omit `MASTER_SECRET`, which must remain in the server environment. Do not rotate `MASTER_SECRET` after links have been issued without running a dedicated re-encryption migration. Changing `ADMIN_INITIAL_PASSWORD` later does not reset an administrator already stored in the persistent user database.
 
 **Configure the Android build too:** in `abesskamer237/AbessVpn-Cyber`, add the repository variable `VPN_DOMAIN` with the same control-plane hostname (for example `panneau.pagnol.xyz`). The build compiles `ABESS_API_BASE_URL=https://VPN_DOMAIN`; if the variable is missing, the workflow stops instead of using obsolete demo hosts. Then run **Actions → Build APK Release (68MB Universal) → Run workflow** to build an APK bound to this server.
 
@@ -137,7 +137,7 @@ Seuls les identifiants listés dans `TELEGRAM_ADMIN_IDS` sont autorisés. La com
 - 📦 **Génération de Lots (Batch / Grossiste) (`/batch`) :** Création instantanée de 5 à 200 vouchers avec export automatique d'un fichier CSV prêt à être distribué aux revendeurs ou imprimé.
 - 👥 **Gestion du Parc Clients (`/search`, `/reset`) :** Consultation paginée des fiches clients, ajout de quota (+10 Go), prolongation (+7j, +30j), suspension et réinitialisation en 1 clic des appareils liés (Unbind HWID).
 - ⚙️ **Supervision Xray (`/xray`, `/reload`) :** Contrôle et rechargement de la configuration VLESS provisionnée par le serveur.
-- 💾 **Sauvegarde Système 1-Clic (`/backup`) :** Téléchargement instantané d'une archive JSON complète de la base de données directement dans la conversation Telegram.
+- 💾 **Sauvegarde des données (`/backup`) :** Téléchargement d'une archive JSON expurgée des secrets maîtres et des mots de passe SSH historiques. Le fichier `.env` doit être sauvegardé séparément sur le VPS et conservé hors du dépôt.
 - ⚠️ **Alertes Automatiques Proactives :** Notification immédiate des administrateurs dès qu'un utilisateur atteint 90% ou 100% de son quota, ou arrive à expiration.
 
 
