@@ -17,7 +17,7 @@ export function SshCenter({ token }: { token: string }) {
   const [quotaGb, setQuota] = useState(10);
   const [connections, setConnections] = useState(1);
   const [selected, setSelected] = useState("");
-  const [transport, setTransport] = useState("wss");
+  const [transport, setTransport] = useState("ws");
   const [config, setConfig] = useState<any>(null);
   const [search, setSearch] = useState("");
   const headers = {
@@ -78,8 +78,8 @@ export function SshCenter({ token }: { token: string }) {
             Comptes et tunnels SSH
           </h2>
           <p className="text-sm text-slate-400 mt-2">
-            SSH TCP · WebSocket avec TLS · quotas et expiration contrôlés par la
-            passerelle dédiée.
+            SSH TCP · SSH-WS HTTP Upgrade · WS avec TLS · quotas et expiration
+            contrôlés par la passerelle dédiée.
           </p>
         </div>
         <span className={state?.ready ? "text-emerald-400" : "text-amber-400"}>
@@ -334,17 +334,32 @@ export function SshCenter({ token }: { token: string }) {
               }}
               className="mt-2 w-full bg-slate-950 border border-slate-700 rounded-lg p-3"
             >
-              <option value="wss-alt">SSH WebSocket + TLS — 2084</option>
-              <option value="wss">SSH WebSocket + TLS — 443</option>
+              <option value="ws">SSH-WS · HTTP Upgrade brut — 80</option>
+              <option value="ws-alt">
+                SSH-WS · HTTP Upgrade brut — {state?.ports.wsAlt || 85}
+              </option>
+              <option value="wss-raw">
+                SSH-WS + TLS · HTTP Upgrade brut — 443
+              </option>
+              <option value="wss-raw-alt">
+                SSH-WS + TLS · HTTP Upgrade brut — 2084
+              </option>
+              <option value="wss-alt">WebSocket standard + TLS — 2084</option>
+              <option value="wss">WebSocket standard + TLS — 443</option>
               <option value="tcp">
                 SSH direct TCP — {state?.ports.tcp || 2222}
               </option>
             </select>
           </label>
           <p className="text-sm text-slate-400">
-            Serveur : {state?.host || "…"} · chemin : /ws-ssh · SNI TLS : nom du
-            serveur. Vérification du certificat obligatoire. SSH TCP reste
-            chiffré par SSH.
+            Serveur :{" "}
+            {(transport === "tcp" ||
+            transport === "ws" ||
+            transport === "ws-alt"
+              ? state?.wsHost
+              : state?.host) || "…"}{" "}
+            · chemin : /ws-ssh · SNI TLS : nom du serveur. Vérification du
+            certificat obligatoire. SSH TCP reste chiffré par SSH.
           </p>
           <button
             disabled={busy || !selected}

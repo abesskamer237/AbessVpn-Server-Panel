@@ -1,5 +1,6 @@
 {
   email {$ACME_EMAIL}
+  auto_https disable_redirects
 }
 
 (abess_routes) {
@@ -38,6 +39,25 @@
 
 # Dedicated SSH WebSocket TLS listener, sharing the panel certificate.
 {$VPN_DOMAIN}:2084 {
+  handle /ws-ssh {
+    reverse_proxy ssh:8085
+  }
+  handle {
+    respond 404
+  }
+}
+
+# SSH-WS over HTTP: only the tunnel endpoint avoids the HTTPS redirect.
+:80 {
+  handle /ws-ssh {
+    reverse_proxy ssh:8085
+  }
+  handle {
+    redir https://{$VPN_DOMAIN}{uri} 308
+  }
+}
+
+:85 {
   handle /ws-ssh {
     reverse_proxy ssh:8085
   }

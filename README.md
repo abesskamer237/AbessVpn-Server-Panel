@@ -82,3 +82,5 @@ Les essais gratuits et l’émission de licences SSH restent désactivés. Aucun
 ## Comptes SSH et application Android
 
 Le menu **Comptes SSH** permet de créer des accès SSH TCP et WebSocket/TLS, puis d’exporter leur configuration pour ABESS VPN 2.5.0+. Voir [le guide SSH](docs/SSH.md) pour les ports, l’import et les limites.
+
+Le mode **SSH-WS HTTP Upgrade brut** est maintenant disponible sur 80/85, avec variantes TLS 443/2084, pour l’APK ABESS VPN 2.5.4+. Voir [le guide SSH-WS et la comparaison X-net](docs/SSH_WS_COMPATIBILITY.md).

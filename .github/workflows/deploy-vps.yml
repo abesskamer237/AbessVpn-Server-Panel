@@ -142,6 +142,7 @@ jobs:
             POSTGRES_PASSWORD: databasePassword,
             POSTGRES_APP_PASSWORD: appDatabasePassword,
             VPN_DOMAIN: hostname,
+            SSH_WS_HOST: process.env.VPS_HOST.trim(),
             ACME_EMAIL: process.env.ACME_EMAIL || process.env.ADMIN_EMAIL,
             ADMIN_EMAIL: process.env.ADMIN_EMAIL,
             ADMIN_NAME: process.env.ADMIN_NAME || 'ABESS VPN Administrator',
@@ -386,9 +387,23 @@ jobs:
             echo '::error::Public SSH WebSocket/TLS upgrade failed. Check Caddy and the domain/CDN WebSocket settings.' >&2
             exit 1
           fi
+          ssh_ws_host="$(docker compose exec -T api node -e 'process.stdout.write(process.env.SSH_WS_HOST || process.env.VPN_DOMAIN)')"
+          ssh_ws_upgrade="$(curl --http1.1 --silent --show-error --max-time 3 -D - -o /dev/null -H 'Connection: Upgrade' -H 'Upgrade: websocket' "http://${ssh_ws_host}/ws-ssh" 2>/dev/null || true)"
+          if ! printf '%s' "$ssh_ws_upgrade" | grep -Eq '^HTTP/1[.]1 101'; then
+            echo '::error::Direct SSH-WS HTTP upgrade failed on port 80. Check the origin IP, firewall and Caddy.' >&2
+            exit 1
+          fi
           printf '%s\n' "$response"
           echo 'ABESS VPN control plane, Xray-core and public SSH WebSocket/TLS report ready.'
           REMOTE
+          # Verify the direct origin from the GitHub runner too, not just from
+          # the VPS itself (a provider firewall can block external HTTP).
+          ssh_ws_external="$(curl --http1.1 --silent --show-error --max-time 5 -D - -o /dev/null -H 'Connection: Upgrade' -H 'Upgrade: websocket' "http://${VPS_HOST}/ws-ssh" 2>/dev/null || true)"
+          if ! printf '%s' "$ssh_ws_external" | grep -Eq '^HTTP/1[.]1 101'; then
+            echo '::error::SSH-WS port 80 is not reachable from GitHub. Check the public VPS IP and the provider firewall.' >&2
+            exit 1
+          fi
+          echo 'External SSH-WS HTTP Upgrade on port 80 verified.'
           rm -f .deploy.env
 
       - name: Remove temporary deployment material

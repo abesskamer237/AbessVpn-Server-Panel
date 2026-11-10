@@ -5,6 +5,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import http from "node:http";
 import net from "node:net";
+import tls from "node:tls";
 import { spawn } from "node:child_process";
 import ssh2 from "ssh2";
 const { Client } = ssh2;
@@ -36,6 +37,7 @@ const environment = {
   SSH_CONTROL_DIR: control,
   SSH_DATA_DIR: path.join(dir, "gateway"),
   SSH_GATEWAY_ENABLED: "true",
+  SSH_WS_HOST: targetHost,
   SSH_LISTEN_PORT: "12222",
   SSH_WS_PORT: "8085",
   PORT: "13188",
@@ -262,7 +264,77 @@ try {
   client = await connect(config, raw);
   assert.ok((await transfer(client)) > 65536, "Raw HTTP Upgrade SSH works");
   await close(client);
+  for (const [mode, port, isTls] of [
+    ["ws", 80, false],
+    ["ws-alt", 85, false],
+    ["wss-raw", 443, true],
+    ["wss-raw-alt", 2084, true],
+  ]) {
+    const exported = await request(`admin/ssh/accounts/${id}/config`, {
+      transport: mode,
+    });
+    assert.equal(exported.status, 200);
+    assert.equal(exported.data.port, port);
+    assert.equal(exported.data.tls, isTls);
+    assert.equal(exported.data.wire, "http-upgrade");
+    assert.equal(
+      exported.data.host,
+      isTls ? environment.VPN_DOMAIN : targetHost,
+      "Plain SSH-WS uses the direct origin, TLS retains its certified domain",
+    );
+    assert.equal(exported.data.path, "/ws-ssh");
+    assert.ok(!exported.data.payload.includes("Sec-WebSocket-Key"));
+  }
   if (process.env.SSH_TEST_CADDY_HOST) {
+    for (const port of [80, 85, 443, 2084]) {
+      const socket =
+        port < 100
+          ? net.connect(port, process.env.SSH_TEST_CADDY_HOST)
+          : tls.connect({
+              host: process.env.SSH_TEST_CADDY_HOST,
+              servername: process.env.SSH_TEST_CADDY_HOST,
+              port,
+            });
+      await new Promise((resolve, reject) => {
+        let response = Buffer.alloc(0);
+        socket.on("error", reject);
+        const read = (chunk) => {
+          response = Buffer.concat([response, chunk]);
+          const end = response.indexOf("\r\n\r\n");
+          if (end < 0) return;
+          socket.off("data", read);
+          socket.pause();
+          assert.match(
+            response.subarray(0, end).toString(),
+            /^HTTP\/1[.]1 101/,
+          );
+          if (response.length > end + 4)
+            socket.unshift(response.subarray(end + 4));
+          resolve();
+        };
+        socket.on("data", read);
+        socket.write(
+          "GET /ws-ssh HTTP/1.1\r\nHost: ssh-tls\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n",
+        );
+      });
+      const rawClient = await connect(config, socket);
+      assert.ok(
+        (await transfer(rawClient)) > 65536,
+        `Raw SSH-WS through Caddy ${port}`,
+      );
+      await close(rawClient);
+    }
+    const redirect = await fetch(
+      `http://${process.env.SSH_TEST_CADDY_HOST}/api/v1/ping`,
+      { redirect: "manual" },
+    );
+    assert.equal(redirect.status, 308, "Management API stays on HTTPS");
+    assert.equal(
+      (await fetch(`http://${process.env.SSH_TEST_CADDY_HOST}:85/api/v1/ping`))
+        .status,
+      404,
+      "No management API on WS-only port",
+    );
     for (const port of [443, 2084]) {
       const tlsWs = new WebSocket(
         `wss://${process.env.SSH_TEST_CADDY_HOST}:${port}/ws-ssh`,
@@ -339,7 +411,7 @@ try {
   );
   assert.equal(status.ready, false, "Stale controller closes gateway");
   console.log(
-    "SSH integration PASS: TCP, raw Upgrade, framed WS, Caddy WSS 443/2084, credentials, host key, session cap, private access denied, revocation, quota, restart and fail-closed.",
+    "SSH integration PASS: TCP, raw Upgrade, framed WS, raw SSH-WS 80/85/443/2084 and Caddy WSS, credentials, host key, session cap, private access denied, revocation, quota, restart and fail-closed.",
   );
 } catch (e) {
   console.error("SSH integration failed:", e.message);

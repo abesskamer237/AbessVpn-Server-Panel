@@ -1,3 +1,5 @@
+> Pour le mode SSH-WS HTTP Upgrade brut ajouté en 2.5.4 (80/85 et TLS 443/2084), suivre [le guide SSH-WS](SSH_WS_COMPATIBILITY.md). Les modes WebSocket TLS historiques ci-dessous restent compatibles.
+
 # Comptes SSH ABESS
 
 L’implémentation indépendante utilise le protocole SSH 2 avec `ssh2`, sans reprendre le code propriétaire X-net. Elle ne crée pas d’utilisateurs Linux et ne modifie jamais le SSH d’administration. Le service tourne sans root, sans capacités Linux et sans accès au socket Docker.
@@ -8,7 +10,7 @@ L’implémentation indépendante utilise le protocole SSH 2 avec `ssh2`, sans r
 2. Créer un utilisateur (3 à 32 caractères), une durée, un quota et une limite de connexions SSH simultanées.
 3. Choisir le compte dans le générateur, puis **SSH WebSocket + TLS — 443** (recommandé), **2084**, ou **SSH direct TCP — 2222**.
 4. Afficher les paramètres et télécharger le fichier JSON. Il contient un mot de passe et doit être transmis de manière privée.
-5. Dans **ABESS VPN 2.5.0+**, importer le fichier `.json` ou coller le JSON dans l’import, sélectionner le profil puis connecter.
+5. Dans **ABESS VPN 2.5.4+**, importer le fichier `.json` ou coller le JSON dans l’import, sélectionner le profil puis connecter.
 
 Le mot de passe est généré aléatoirement et chiffré dans PostgreSQL. Le vérificateur scrypt, jamais le mot de passe clair, est projeté vers la passerelle. Les listes ne retournent ni le mot de passe ni le vérificateur. Chaque export d’identifiants est audité.
 

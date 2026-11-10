@@ -42,6 +42,7 @@ services:
       SSH_GATEWAY_ENABLED: "true"
       SSH_CONTROL_DIR: /ssh-control
       SSH_TCP_PORT: ${SSH_TCP_PORT:-2222}
+      SSH_WS_PUBLIC_PORT: ${SSH_WS_PUBLIC_PORT:-85}
     depends_on:
       database:
         condition: service_healthy
@@ -129,12 +130,14 @@ services:
         condition: service_healthy
       ssh:
         condition: service_healthy
-    env_file:
-      - .env
+    environment:
+      VPN_DOMAIN: ${VPN_DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL}
     ports:
       - "80:80"
       - "443:443"
       - "2084:2084"
+      - "${SSH_WS_PUBLIC_PORT:-85}:85"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

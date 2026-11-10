@@ -24,8 +24,9 @@ export function safeSshAccount(a: SshAccount) {
   const { password, salt, verifier, ...safe } = a;
   return safe;
 }
-export function sshPayload(host: string) {
-  return `GET /ws-ssh HTTP/1.1[crlf]Host: ${host}[crlf]Upgrade: websocket[crlf]Connection: Upgrade[crlf][crlf]`;
+export function sshPayload(host: string, port = 80) {
+  const authority = [80, 443].includes(port) ? host : `${host}:${port}`;
+  return `GET /ws-ssh HTTP/1.1[crlf]Host: ${authority}[crlf]Upgrade: websocket[crlf]Connection: Upgrade[crlf][crlf]`;
 }
 export function registerSsh(
   app: Express,
@@ -41,6 +42,7 @@ export function registerSsh(
 ) {
   const enabled = process.env.SSH_GATEWAY_ENABLED === "true";
   const host = process.env.VPN_DOMAIN || "localhost";
+  const wsHost = process.env.SSH_WS_HOST || host;
   const guard: RequestHandler = (req, res, next) => {
     if ((req as any).user.role !== "SUPER_ADMIN") {
       res.sendStatus(403);
@@ -63,6 +65,8 @@ export function registerSsh(
   };
   const ports = {
     tcp: Number(process.env.SSH_TCP_PORT || 2222),
+    ws: 80,
+    wsAlt: Number(process.env.SSH_WS_PUBLIC_PORT || 85),
     wss: 443,
     wssAlt: 2084,
   };
@@ -72,6 +76,7 @@ export function registerSsh(
       enabled,
       ready: Boolean(enabled && status?.ready),
       host,
+      wsHost,
       ports,
       path: "/ws-ssh",
       fingerprint: status?.fingerprint || null,
@@ -83,12 +88,10 @@ export function registerSsh(
   });
   app.post("/api/v1/admin/ssh/accounts", d.authenticate, guard, (req, res) => {
     if (!enabled || !stats()?.ready) {
-      res
-        .status(503)
-        .json({
-          error:
-            "La passerelle SSH doit être opérationnelle avant de créer un compte.",
-        });
+      res.status(503).json({
+        error:
+          "La passerelle SSH doit être opérationnelle avant de créer un compte.",
+      });
       return;
     }
     const username = String(req.body?.username || "").trim();
@@ -109,12 +112,10 @@ export function registerSsh(
       maxConnections < 1 ||
       maxConnections > 10
     ) {
-      res
-        .status(400)
-        .json({
-          error:
-            "Utilisateur : 3–32 caractères, durée : 1–366 jours, quota : 0,01–100000 Go, connexions : 1–10.",
-        });
+      res.status(400).json({
+        error:
+          "Utilisateur : 3–32 caractères, durée : 1–366 jours, quota : 0,01–100000 Go, connexions : 1–10.",
+      });
       return;
     }
     const state = d.read();
@@ -212,41 +213,55 @@ export function registerSsh(
         return;
       }
       const transport = req.body?.transport;
-      if (!["tcp", "wss", "wss-alt"].includes(transport)) {
+      const modes: Record<
+        string,
+        { port: number; tls: boolean; wire: string }
+      > = {
+        tcp: { port: ports.tcp, tls: false, wire: "ssh" },
+        ws: { port: ports.ws, tls: false, wire: "http-upgrade" },
+        "ws-alt": { port: ports.wsAlt, tls: false, wire: "http-upgrade" },
+        "wss-raw": { port: ports.wss, tls: true, wire: "http-upgrade" },
+        "wss-raw-alt": { port: ports.wssAlt, tls: true, wire: "http-upgrade" },
+        wss: { port: ports.wss, tls: true, wire: "websocket" },
+        "wss-alt": { port: ports.wssAlt, tls: true, wire: "websocket" },
+      };
+      if (typeof transport !== "string" || !Object.hasOwn(modes, transport)) {
         res.sendStatus(400);
         return;
       }
-      const tls = transport !== "tcp";
-      const port = tls
-        ? transport === "wss"
-          ? ports.wss
-          : ports.wssAlt
-        : ports.tcp;
+      const { tls, port, wire } = modes[transport];
+      const connectionHost = tls ? host : wsHost;
+      const status = stats();
+      if (!status?.fingerprint) {
+        res.status(503).json({
+          error: "Attendez que la passerelle publie son empreinte SSH.",
+        });
+        return;
+      }
       d.audit({
         action: "SSH_CREDENTIALS_EXPORTED",
         by: (req as any).user.id,
         target: a.id,
       });
-      res
-        .set("Cache-Control", "no-store")
-        .json({
-          format: "abess-ssh-v1",
-          protocol: "ssh",
-          transport,
-          host,
-          port,
-          username: a.username,
-          password: unseal(a.password, d.key),
-          tls,
-          sni: tls ? host : null,
-          path: tls ? "/ws-ssh" : null,
-          payload: tls ? sshPayload(host) : null,
-          fingerprint: stats()?.fingerprint || null,
-          expiresAt: a.expiresAt,
-          quotaGb: a.quotaBytes / 1e9,
-          usedGb: a.usedBytes / 1e9,
-          note: "Import direct dans ABESS VPN 2.5.0 ou supérieur. TCP et DNS dans le tunnel ; autres flux UDP non pris en charge. JSON générique, pas un fichier propriétaire .hc/.ehi.",
-        });
+      res.set("Cache-Control", "no-store").json({
+        format: "abess-ssh-v1",
+        protocol: "ssh",
+        transport,
+        wire,
+        host: connectionHost,
+        port,
+        username: a.username,
+        password: unseal(a.password, d.key),
+        tls,
+        sni: tls ? host : null,
+        path: transport !== "tcp" ? "/ws-ssh" : null,
+        payload: transport !== "tcp" ? sshPayload(connectionHost, port) : null,
+        fingerprint: status.fingerprint,
+        expiresAt: a.expiresAt,
+        quotaGb: a.quotaBytes / 1e9,
+        usedGb: a.usedBytes / 1e9,
+        note: "SSH-WS HTTP Upgrade brut : ABESS VPN 2.5.4 ou supérieur. TCP et DNS dans le tunnel ; autres flux UDP non pris en charge. JSON générique, pas un fichier propriétaire .hc/.ehi.",
+      });
     },
   );
 }
