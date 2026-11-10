@@ -993,12 +993,63 @@ export function generateUserVlessVariants(token: ClientToken, profile?: Protocol
 export function generateXrayClientJson(token: ClientToken, profile?: ProtocolConfig): Record<string, unknown> {
   const master = loadMasterConfig();
   const host = profile?.serverHost || master.serverHost || 'panel.pagnol.xyz';
-  const port = Number(profile?.serverPort || master.serverPort || 443);
+  const transport = profile?.transport || master.transport || 'ws';
+  if (!isXrayTransport(transport)) throw new Error('Transport client Xray non pris en charge.');
+  const port = xrayPublicPort('vless', transport, Number(profile?.serverPort || master.serverPort || 443));
   const primarySni = profile?.sniHost || master.sniHost || host;
   const wsHost = profile?.host || master.host || host;
   const rawPath = profile?.path || master.path || '/@abess237';
-  const cleanPath = rawPath.split('?')[0] || '/@abess237';
+  const cleanPath = xrayProfilePath('vless', transport, rawPath);
   const uuid = token.clientUuid || token.token;
+
+  const tlsSettings = {
+    serverName: primarySni,
+    allowInsecure: false,
+    fingerprint: 'chrome',
+    ...(transport === 'grpc' ? { alpn: ['h2'] } : {})
+  };
+  const streamSettings: Record<string, unknown> = {
+    network: transport,
+    security: transport === 'tcp' ? 'none' : 'tls',
+    sockopt: {
+      tcpFastOpen: true,
+      tcpNoDelay: true,
+      tcpKeepAliveIdle: 30,
+      tcpKeepAliveInterval: 15
+    }
+  };
+
+  if (transport === 'tcp') {
+    streamSettings.tcpSettings = { header: { type: 'none' } };
+  } else {
+    streamSettings.tlsSettings = tlsSettings;
+    switch (transport) {
+      case 'ws':
+        streamSettings.wsSettings = {
+          path: cleanPath,
+          headers: { Host: wsHost }
+        };
+        break;
+      case 'grpc':
+        streamSettings.grpcSettings = {
+          serviceName: cleanPath.replace(/^\\/+/, ''),
+          multiMode: false
+        };
+        break;
+      case 'httpupgrade':
+        streamSettings.httpupgradeSettings = {
+          path: cleanPath,
+          host: wsHost
+        };
+        break;
+      case 'xhttp':
+        streamSettings.xhttpSettings = {
+          path: cleanPath,
+          mode: 'auto'
+        };
+        break;
+    }
+  }
 
   return {
     remarks: `${token.token} ⚡ AbessVpn Pro`,
@@ -1067,26 +1118,7 @@ export function generateXrayClientJson(token: ClientToken, profile?: ProtocolCon
             }
           ]
         },
-        streamSettings: {
-          network: 'ws',
-          security: 'tls',
-          tlsSettings: {
-            serverName: primarySni,
-            allowInsecure: false,
-            fingerprint: 'chrome',
-            alpn: ['http/1.1']
-          },
-          wsSettings: {
-            path: cleanPath,
-            headers: { Host: wsHost }
-          },
-          sockopt: {
-            tcpFastOpen: true,
-            tcpNoDelay: true,
-            tcpKeepAliveIdle: 30,
-            tcpKeepAliveInterval: 15
-          }
-        },
+        streamSettings,
         mux: { enabled: false }
       },
       { tag: 'dns-out', protocol: 'dns', settings: { network: 'tcp', nonIPQuery: 'skip' } },
