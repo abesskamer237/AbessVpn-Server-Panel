@@ -561,8 +561,8 @@ jobs:
           assert.equal(subscriptionById.status, 404, 'internal token IDs must not act as subscription credentials');
           const subscriptionByUuid = await fetch(`${base}/sub/${licenceA.clientUuid}?raw=1`);
           assert.equal(subscriptionByUuid.status, 404, 'Xray UUIDs must not act as subscription credentials');
-          const sshConfigById = await fetch(`${base}/api/v1/ssh/config/${licenceA.id}`);
-          assert.equal(sshConfigById.status, 404, 'internal token IDs must not expose SSH configurations');
+          const retiredSshConfigByToken = await fetch(`${base}/api/v1/ssh/config/${licenceA.token}`);
+          assert.equal(retiredSshConfigByToken.status, 410, 'legacy SSH config download must never return stored plaintext passwords');
 
           // Membership status responses must not disclose customer contact/payment data.
           const membershipCreate = await fetch(`${base}/api/v1/membership/request`, {
@@ -591,7 +591,8 @@ jobs:
           const emptyMembershipLookup = await fetch(`${base}/api/v1/membership/status`);
           assert.equal(emptyMembershipLookup.status, 400, 'membership status must require a request ID or device ID');
 
-          // SSH profiles are retained for legacy visibility, but cannot issue a false/unsupported licence.
+          // SSH account creation and password delivery remain disabled until a
+          // dedicated, authenticated host-side provisioner is available.
           const sshProfileResponse = await fetch(`${base}/api/v1/admin/protocol-configs`, {
             method: 'POST',
             headers: adminHeaders,
@@ -604,31 +605,20 @@ jobs:
               payload: 'GET / HTTP/1.1[crlf]Host: example.test[crlf][crlf]',
             }),
           });
-          assert.equal(sshProfileResponse.status, 201);
-          const sshProfile = (await sshProfileResponse.json()).config;
+          assert.equal(sshProfileResponse.status, 400, 'the panel must not accept new SSH profiles');
+
           const sshLicence = await fetch(`${base}/api/v1/admin/tokens`, {
             method: 'POST',
             headers: adminHeaders,
             body: JSON.stringify({
               plan: 'CI unsupported SSH',
+              protocol: 'ssh',
               bandwidthGb: 1,
               days: 1,
               deviceLimit: 1,
-              configurationId: sshProfile.id,
             }),
           });
           assert.equal(sshLicence.status, 503, 'the panel must not issue SSH licences without a real host provisioner');
-          const sshBatch = await fetch(`${base}/api/v1/admin/tokens/batch`, {
-            method: 'POST',
-            headers: adminHeaders,
-            body: JSON.stringify({
-              count: 2,
-              bandwidthGb: 1,
-              days: 1,
-              configurationId: sshProfile.id,
-            }),
-          });
-          assert.equal(sshBatch.status, 503, 'the panel must not generate unsupported SSH batches');
 
           console.log('API, licensing, privacy, security and Xray config tests passed.');
           NODE
