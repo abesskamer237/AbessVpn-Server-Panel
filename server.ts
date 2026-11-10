@@ -2760,7 +2760,7 @@ async function startServer() {
       masterConfig: safeMasterConfig,
       protocolConfigs: loadProtocolConfigs(),
       users: loadUsers().map(u => ({ ...u, passwordHash: u.passwordHash })),
-      tokens: loadTokens(),
+      tokens: loadTokens().map(safeClientToken),
       transactions: loadTransactions()
     };
 
@@ -4202,7 +4202,7 @@ async function startServer() {
     res.setHeader('Content-Disposition', `attachment; filename="abessvpn-full-backup-${Date.now()}.json"`);
     res.json({
       users: loadUsers(),
-      tokens: loadTokens(),
+      tokens: loadTokens().map(safeClientToken),
       config: safeConfig,
       protocolConfigs: loadProtocolConfigs(),
       transactions: loadTransactions(),
