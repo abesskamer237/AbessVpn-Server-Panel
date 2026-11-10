@@ -269,7 +269,14 @@ jobs:
           set -euo pipefail
           VPS_PORT="${VPS_PORT:-22}"
           DEST="${VPS_USER}@${VPS_HOST}"
-          rsync -az --delete -e "$HOME/.local/bin/abess-ssh -p $VPS_PORT -o StrictHostKeyChecking=yes" \
+          # shellcheck disable=SC2016
+          remote_dir="$("$HOME/.local/bin/abess-ssh" -p "$VPS_PORT" -o StrictHostKeyChecking=yes "$DEST" 'printf "%s/abessvpn-server" "$HOME"')"
+          if [[ ! "$remote_dir" =~ ^/[A-Za-z0-9._/-]+$ ]]; then
+            echo '::error::Cannot determine a safe absolute VPS deployment directory.' >&2
+            exit 1
+          fi
+          sha256sum docker-compose.yml Caddyfile modules/ssh.ts scripts/diagnose-ssh-origin.sh > .deploy-source.sha256
+          rsync -azc --delete -e "$HOME/.local/bin/abess-ssh -p $VPS_PORT -o StrictHostKeyChecking=yes" \
             --exclude '.git/' \
             --exclude 'node_modules/' \
             --exclude 'dist/' \
@@ -281,10 +288,10 @@ jobs:
             --exclude '.deploy.credentials' \
             --exclude '.initial-admin-credentials.new' \
             --exclude 'INITIAL_ADMIN_CREDENTIALS.txt' \
-            ./ "$DEST:abessvpn-server/"
-          "$HOME/.local/bin/abess-scp" -P "$VPS_PORT" -o StrictHostKeyChecking=yes .deploy.env "$DEST:abessvpn-server/.env.new"
+            ./ "$DEST:${remote_dir}/"
+          "$HOME/.local/bin/abess-scp" -P "$VPS_PORT" -o StrictHostKeyChecking=yes .deploy.env "$DEST:${remote_dir}/.env.new"
           if [[ -f .deploy.credentials ]]; then
-            "$HOME/.local/bin/abess-scp" -P "$VPS_PORT" -o StrictHostKeyChecking=yes .deploy.credentials "$DEST:abessvpn-server/.initial-admin-credentials.new"
+            "$HOME/.local/bin/abess-scp" -P "$VPS_PORT" -o StrictHostKeyChecking=yes .deploy.credentials "$DEST:${remote_dir}/.initial-admin-credentials.new"
           fi
           # shellcheck disable=SC2016
           "$HOME/.local/bin/abess-ssh" -p "$VPS_PORT" -o StrictHostKeyChecking=yes "$DEST" 'chmod 600 "$HOME/abessvpn-server/.env.new"; if [ -f "$HOME/abessvpn-server/.initial-admin-credentials.new" ]; then chmod 600 "$HOME/abessvpn-server/.initial-admin-credentials.new"; fi'
@@ -309,6 +316,11 @@ jobs:
           set -euo pipefail
           cd "$HOME/abessvpn-server"
           export COMPOSE_FILE="$PWD/docker-compose.yml"
+          umask 077
+          if ! sha256sum --check .deploy-source.sha256; then
+            echo '::error::Transferred deployment sources do not match the GitHub commit. Refusing to build stale configuration.' >&2
+            exit 1
+          fi
           rm -f .deploy.credentials
           if [ -f .env ]; then
             # Preserve the initial administrator password and master key on redeploys.
@@ -416,11 +428,13 @@ jobs:
           set -euo pipefail
           cd "$HOME/abessvpn-server"
           export COMPOSE_FILE="$PWD/docker-compose.yml"
-          docker compose exec -T api node -e 'process.stdout.write((process.env.SSH_WS_HOST || process.env.VPN_DOMAIN) + "\n" + (process.env.SSH_WS_PUBLIC_PORT || "85"))'
+          docker compose exec -T api node -e 'console.log("ABESS_SSH_ENDPOINT=" + JSON.stringify({host: process.env.SSH_WS_HOST || process.env.VPN_DOMAIN, port: process.env.SSH_WS_PUBLIC_PORT || "85"}))'
           ORIGIN
           )"
-          ssh_ws_origin="$(printf '%s\n' "$ssh_ws_endpoint" | head -n 1)"
-          ssh_ws_port="$(printf '%s\n' "$ssh_ws_endpoint" | tail -n 1)"
+          ssh_ws_endpoint="$(printf '%s\n' "$ssh_ws_endpoint" | sed -n 's/^ABESS_SSH_ENDPOINT=//p' | tail -n 1)"
+          ssh_ws_origin="$(printf '%s' "$ssh_ws_endpoint" | node -e 'process.stdout.write(JSON.parse(require("node:fs").readFileSync(0,"utf8")).host)')"
+          ssh_ws_port="$(printf '%s' "$ssh_ws_endpoint" | node -e 'process.stdout.write(String(JSON.parse(require("node:fs").readFileSync(0,"utf8")).port))')"
+          expected_ws_origin="$(node -e 'process.stdout.write(process.env.VPS_HOST.trim())')"
           if [[ ! "$ssh_ws_port" =~ ^[0-9]+$ ]] || ((ssh_ws_port < 1 || ssh_ws_port > 65535)); then
             echo '::error::Invalid SSH-WS public port.' >&2
             exit 1
@@ -429,7 +443,7 @@ jobs:
             echo '::error::The exported SSH-WS origin must be an IPv4 address or hostname.' >&2
             exit 1
           fi
-          if [ "$ssh_ws_origin" != "$VPS_HOST" ]; then
+          if [ "$ssh_ws_origin" != "$expected_ws_origin" ]; then
             "$HOME/.local/bin/abess-ssh" -p "$VPS_PORT" -o StrictHostKeyChecking=yes "$DEST" 'bash abessvpn-server/scripts/diagnose-ssh-origin.sh' || true
             echo "::error::The running API did not load the deployed SSH_WS_HOST (running public origin: ${ssh_ws_origin}). Refusing to distribute an outdated SSH-WS origin." >&2
             exit 1
@@ -476,4 +490,4 @@ jobs:
 
       - name: Remove temporary deployment material
         if: always()
-        run: rm -f .deploy.env .deploy.credentials
+        run: rm -f .deploy.env .deploy.credentials .deploy-source.sha256

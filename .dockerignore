@@ -16,3 +16,5 @@ coverage
 INITIAL_ADMIN_CREDENTIALS.txt
 .rollback.yml
 *.log
+
+.deploy-source.sha256
