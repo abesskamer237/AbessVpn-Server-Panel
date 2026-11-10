@@ -1129,15 +1129,15 @@ export function generateSshConfigJson(token: ClientToken): Record<string, unknow
     configs: [
       {
         name: ssh.remarks || token.plan || '𖤍 ORANGE🍊〆DANNY 𖤍',
-        address: `${ssh.sshHost || host}:${ssh.sshPort || 80}`,
+        address: `${ssh.sshHost}:${Number(ssh.sshPort) || 80}`,
         type: 'SSH',
         sshConfig: {
           sshConfigType: ssh.sshConfigType || 'SSH-Payload',
-          remarks: ssh.remarks || token.plan || '𖤍 ORANGE🍊〆DANNY 𖤍',
-          sshHost: ssh.sshHost || host,
+          remarks: ssh.remarks || token.plan || 'Configuration SSH historique',
+          sshHost: ssh.sshHost,
           sshPort: Number(ssh.sshPort) || 80,
-          sshUsername: ssh.sshUsername || 'dany',
-          sshPassword: ssh.sshPassword || '#12345',
+          sshUsername: ssh.sshUsername,
+          sshPassword: ssh.sshPassword,
           payload: ssh.payload || DEFAULT_SSH_PAYLOAD
         }
       }
@@ -1145,30 +1145,13 @@ export function generateSshConfigJson(token: ClientToken): Record<string, unknow
   };
 }
 
+/**
+ * Disabled: this Node container is not the Linux SSH host and must not attempt
+ * to inspect or kill host processes with sudo. A dedicated SSH provisioner is
+ * required before SSH account management can be re-enabled.
+ */
 export function enforceSshDeviceLimits(): void {
-  try {
-    const tokens = loadTokens();
-    const sshTokens = tokens.filter(t => t.status === 'active' && (t.protocolType === 'ssh' || t.sshConfig?.sshUsername));
-    for (const t of sshTokens) {
-      const username = t.sshConfig?.sshUsername;
-      if (!username || !/^[a-zA-Z0-9_-]{3,32}$/.test(username)) continue;
-      const limit = Math.max(1, Math.floor(Number(t.deviceLimit) || 1));
-      try {
-        const out = execSync(`pgrep -u ${username} dropbear 2>/dev/null || true`, { encoding: 'utf8' }).trim();
-        if (out) {
-          const pids = out.split('\n').map(p => p.trim()).filter(Boolean);
-          if (pids.length > limit) {
-            const excess = pids.slice(0, pids.length - limit);
-            for (const pid of excess) {
-              try {
-                execSync(`sudo kill -9 ${pid} 2>/dev/null || true`);
-              } catch {}
-            }
-          }
-        }
-      } catch {}
-    }
-  } catch {}
+  return;
 }
 
 export function probeEndpoint(targetServer: string, sni: string, timeoutMs = 3000): Promise<{ tcp_latency_ms: number; tls_latency_ms: number; latency_ms: number; status: string; error?: string }> {
@@ -1190,7 +1173,7 @@ export function probeEndpoint(targetServer: string, sni: string, timeoutMs = 300
       const tlsSocket = tls.connect({
         socket,
         servername: sni || host,
-        rejectUnauthorized: false,
+        rejectUnauthorized: true,
         timeout: timeoutMs
       }, () => {
         const tlsDoneAt = Date.now();
