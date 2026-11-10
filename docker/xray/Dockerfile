@@ -1,4 +1,4 @@
-FROM ghcr.io/xtls/xray-core:26.7.28 AS xray-core
+FROM ghcr.io/xtls/xray-core:26.10.31 AS xray-core
 
 FROM alpine:3.22
 RUN apk add --no-cache ca-certificates jq
