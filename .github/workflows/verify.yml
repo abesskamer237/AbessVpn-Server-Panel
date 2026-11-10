@@ -200,7 +200,7 @@ jobs:
               email: 'ci-reseller@example.test',
               password: 'ci-reseller-password-please-ignore-123',
               name: 'CI Reseller',
-              initialCredits: 0,
+              initialCredits: 20,
             }),
           });
           assert.equal(resellerCreate.status, 201);
@@ -229,7 +229,7 @@ jobs:
               email: 'ci-child-reseller@example.test',
               password: 'ci-child-password-please-ignore-123',
               name: 'CI Child Reseller',
-              initialCredits: 0,
+              initialCredits: 10,
             }),
           });
           assert.equal(childCreate.status, 201);
@@ -240,7 +240,47 @@ jobs:
           });
           assert.equal(childLogin.status, 200);
           const childSession = await childLogin.json();
-          const childHeaders = { Authorization: `Bearer ${childSession.token}` };
+          const creditChildHeaders = { Authorization: `Bearer ${childSession.token}` };
+          const grandchildCreate = await fetch(`${base}/api/v1/admin/resellers`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${childSession.token}` },
+            body: JSON.stringify({
+              email: 'ci-grandchild-reseller@example.test',
+              password: 'ci-grandchild-password-please-ignore-123',
+              name: 'CI Grandchild Reseller',
+              initialCredits: 5,
+            }),
+          });
+          assert.equal(grandchildCreate.status, 201);
+          const grandchild = await grandchildCreate.json();
+          const grandchildLogin = await fetch(`${base}/api/v1/auth/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: 'ci-grandchild-reseller@example.test', password: 'ci-grandchild-password-please-ignore-123' }),
+          });
+          assert.equal(grandchildLogin.status, 200);
+          const grandchildSession = await grandchildLogin.json();
+          const grandchildHeaders = { 'Content-Type': 'application/json', Authorization: `Bearer ${grandchildSession.token}` };
+
+          const suspensionChildCreate = await fetch(`${base}/api/v1/admin/resellers`, {
+            method: 'POST',
+            headers: resellerHeaders,
+            body: JSON.stringify({
+              email: 'ci-suspension-child@example.test',
+              password: 'ci-suspension-child-password-please-ignore-123',
+              name: 'CI Suspension Child',
+              initialCredits: 0,
+            }),
+          });
+          assert.equal(suspensionChildCreate.status, 201);
+          const suspensionChildLogin = await fetch(`${base}/api/v1/auth/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: 'ci-suspension-child@example.test', password: 'ci-suspension-child-password-please-ignore-123' }),
+          });
+          assert.equal(suspensionChildLogin.status, 200);
+          const suspensionChildSession = await suspensionChildLogin.json();
+          const childHeaders = { Authorization: `Bearer ${suspensionChildSession.token}` };
 
           for (const path of [
             '/api/v1/admin/backup',
@@ -494,14 +534,6 @@ jobs:
           });
           assert.equal(crossTenantVariants.status, 403, 'resellers must not inspect another reseller token variants');
 
-          const suspendParent = await fetch(`${base}/api/v1/admin/resellers/${createdReseller.id}/status`, {
-            method: 'PUT',
-            headers: adminHeaders,
-            body: JSON.stringify({ status: 'suspended' }),
-          });
-          assert.equal(suspendParent.status, 200);
-          const childExistingSession = await fetch(`${base}/api/v1/auth/me`, { headers: childHeaders });
-          assert.equal(childExistingSession.status, 401, 'suspending a reseller must immediately revoke active descendant sessions');
           const subscriptionPortal = await fetch(`${base}/sub/${licenceA.token}`, {
             headers: {
               Accept: 'text/html',
@@ -620,6 +652,50 @@ jobs:
           assert.equal(correctPinnedDevice.status, 200, 'the pinned installation ID must be allowed');
           const pinnedValidation = await correctPinnedDevice.json();
           assert.equal(pinnedValidation.serverConfig.allowedDeviceId, pinnedDeviceId);
+
+          // Deleting a reseller branch refunds all unused credits and revokes every active child/grandchild licence.
+          const branchLicenceResponse = await fetch(`${base}/api/v1/admin/tokens`, {
+            method: 'POST',
+            headers: grandchildHeaders,
+            body: JSON.stringify({
+              plan: 'CI licence inside reseller branch',
+              bandwidthGb: 1,
+              days: 1,
+              deviceLimit: 1,
+              configurationId: legacyProfile.id,
+            }),
+          });
+          assert.equal(branchLicenceResponse.status, 201);
+          const branchLicence = await branchLicenceResponse.json();
+          const deleteBranch = await fetch(`${base}/api/v1/admin/resellers/${childSession.user?.id || (await childCreate.clone().json()).id}`, {
+            method: 'DELETE',
+            headers: resellerHeaders,
+          });
+          assert.equal(deleteBranch.status, 200);
+          const deleteBranchResult = await deleteBranch.json();
+          assert.equal(deleteBranchResult.deletedCount, 2);
+          assert.equal(deleteBranchResult.revokedTokenCount, 1);
+          assert.equal(deleteBranchResult.refundedCreditsGb, 9);
+          const parentAfterBranchDelete = await fetch(`${base}/api/v1/auth/me`, { headers: resellerHeaders });
+          assert.equal(parentAfterBranchDelete.status, 200);
+          assert.equal((await parentAfterBranchDelete.json()).credits, 19);
+          const branchUsersAfterDelete = JSON.parse(fs.readFileSync(`${dataDir}/users.json`, 'utf8'));
+          assert.ok(!branchUsersAfterDelete.some(item => item.id === grandchild.id));
+          const branchTokensAfterDelete = JSON.parse(fs.readFileSync(`${dataDir}/tokens.json`, 'utf8'));
+          assert.equal(branchTokensAfterDelete.find(item => item.id === branchLicence.id).status, 'revoked');
+          const branchXrayAfterDelete = JSON.parse(fs.readFileSync(`${dataDir}/xray-config.json`, 'utf8'));
+          assert.ok(!JSON.stringify(branchXrayAfterDelete).includes(branchLicence.clientUuid), 'branch licences must be removed from Xray');
+          const deletedGrandchildSession = await fetch(`${base}/api/v1/auth/me`, { headers: grandchildHeaders });
+          assert.equal(deletedGrandchildSession.status, 401, 'deleting a branch must revoke descendant sessions');
+
+          const suspendParent = await fetch(`${base}/api/v1/admin/resellers/${createdReseller.id}/status`, {
+            method: 'PUT',
+            headers: adminHeaders,
+            body: JSON.stringify({ status: 'suspended' }),
+          });
+          assert.equal(suspendParent.status, 200);
+          const childExistingSession = await fetch(`${base}/api/v1/auth/me`, { headers: childHeaders });
+          assert.equal(childExistingSession.status, 401, 'suspending a reseller must immediately revoke active descendant sessions');
 
           const createB = await fetch(`${base}/api/v1/admin/tokens`, {
             method: 'POST',
