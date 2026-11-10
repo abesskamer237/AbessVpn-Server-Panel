@@ -90,3 +90,5 @@ L’overlay `docker-compose.monitoring.yml` fournit Prometheus et Blackbox Expor
 ## Limites de validation
 
 Les tests Docker locaux prouvent le trafic VLESS, les compteurs et le refus après épuisement/rechargement dans un réseau de test isolé. Ils ne remplacent pas les tests TLS, DNS/IPv6, batterie et reconnexion sur un appareil Android réel. La configuration S3, les certificats publics des VPS, les notifications externes et les encaissements réels exigent leurs services et identifiants. Ne pas déclarer ces intégrations actives sans les vérifier.
+
+Le workflow installe les prérequis absents sur un VPS Debian/Ubuntu : Docker Engine depuis le dépôt officiel signé, Compose, Buildx, curl, rsync et iproute2. Cette préparation requiert root ou sudo sans interaction. Un moteur Docker existant n’est pas redémarré et aucun service occupant les ports publics n’est arrêté.

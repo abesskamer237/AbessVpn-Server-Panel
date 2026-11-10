@@ -204,6 +204,17 @@ jobs:
           exec scp -i "$HOME/.ssh/id_ed25519" -o BatchMode=yes -o IdentitiesOnly=yes "$@"
           SH
           chmod 700 "$HOME/.local/bin/abess-ssh" "$HOME/.local/bin/abess-scp"
+      - name: Install missing VPS deployment prerequisites
+        shell: bash
+        env:
+          VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD || secrets.VPS_PASSWORD }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ vars.VPS_PORT }}
+        run: |
+          set -euo pipefail
+          "$HOME/.local/bin/abess-ssh" -p "${VPS_PORT:-22}" -o StrictHostKeyChecking=yes "${VPS_USER}@${VPS_HOST}" 'bash -s' < scripts/prepare-vps.sh
+
       - name: Preflight VPS without stopping existing services
         shell: bash
         env:
