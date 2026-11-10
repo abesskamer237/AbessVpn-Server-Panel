@@ -5,6 +5,7 @@ import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import net from 'net';
+import { lookup as dnsLookup } from 'node:dns/promises';
 import tls from 'tls';
 import os from 'os';
 import { fileURLToPath } from 'url';
@@ -60,7 +61,7 @@ function writeJsonAtomically(filePath: string, value: unknown): boolean {
       // Rewrite an unreadable or incomplete file atomically.
     }
   }
-  const tempPath = `${filePath}.${process.pid}.${Math.random().toString(36).substring(2, 7)}.tmp`;
+  const tempPath = `${filePath}.${process.pid}.${crypto.randomBytes(8).toString('hex')}.tmp`;
   fs.writeFileSync(tempPath, contents, { encoding: 'utf8', mode: 0o640 });
   fs.renameSync(tempPath, filePath);
   return true;
@@ -80,14 +81,14 @@ export interface TransactionLog {
 }
 
 function loadTransactions(): TransactionLog[] {
-  if (fs.existsSync(transactionsFile)) {
-    try {
-      return JSON.parse(fs.readFileSync(transactionsFile, 'utf8')) as TransactionLog[];
-    } catch {
-      return [];
-    }
+  if (!fs.existsSync(transactionsFile)) return [];
+  try {
+    const parsed = JSON.parse(fs.readFileSync(transactionsFile, 'utf8'));
+    if (!Array.isArray(parsed)) throw new Error('invalid transaction array');
+    return parsed as TransactionLog[];
+  } catch {
+    throw new Error('Le fichier data/transactions.json est illisible. Restaurez une sauvegarde avant de continuer.');
   }
-  return [];
 }
 
 function logTransaction(tx: Omit<TransactionLog, 'id' | 'timestamp'>): void {
@@ -217,8 +218,9 @@ export function loadAppVersionConfig(): AppVersionConfig {
           publishedAt: String(data.publishedAt || new Date().toISOString())
         };
       }
+      throw new Error('Format de data/app-version.json invalide.');
     } catch {
-      // rewrite default
+      throw new Error('Le fichier data/app-version.json est illisible. Restaurez une sauvegarde avant de continuer.');
     }
   }
   const defaultConfig: AppVersionConfig = {
@@ -263,14 +265,17 @@ export function loadAnnouncements(): Announcement[] {
   if (fs.existsSync(announcementsFile)) {
     try {
       const data = JSON.parse(fs.readFileSync(announcementsFile, 'utf8'));
-      if (Array.isArray(data)) return data;
-    } catch {}
+      if (!Array.isArray(data)) throw new Error('invalid announcement array');
+      return data;
+    } catch {
+      throw new Error('Le fichier data/announcements.json est illisible. Restaurez une sauvegarde avant de continuer.');
+    }
   }
   const defaultAnnouncements: Announcement[] = [
     {
       id: 'ann-welcome-01',
       title: '🛡️ Bienvenue sur AbessVpn v2.1.0',
-      message: 'Votre infrastructure commerciale haute vitesse est pleinement active. Profitez de nos serveurs VLESS Reality, VMess et Trojan sans aucune restriction. Rejoignez le canal officiel pour les dernières actualités !',
+      message: 'Bienvenue sur ABESS VPN. Les licences VLESS sont disponibles sur les profils réellement activés par votre administrateur. Rejoignez le canal officiel pour les dernières actualités !',
       type: 'INFO',
       targetPlatform: 'ALL',
       isMandatory: false,
@@ -367,9 +372,10 @@ export function loadPlans(): PricingPlan[] {
   if (fs.existsSync(plansFile)) {
     try {
       const parsed = JSON.parse(fs.readFileSync(plansFile, 'utf8'));
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      if (!Array.isArray(parsed)) throw new Error('invalid plan array');
+      return parsed;
     } catch {
-      // fallback
+      throw new Error('Le fichier data/plans.json est illisible. Restaurez une sauvegarde avant de continuer.');
     }
   }
   writeJsonAtomically(plansFile, DEFAULT_PLANS);
@@ -381,15 +387,14 @@ export function savePlans(plans: PricingPlan[]): void {
 }
 
 export function loadRequests(): MembershipRequest[] {
-  if (fs.existsSync(requestsFile)) {
-    try {
-      const parsed = JSON.parse(fs.readFileSync(requestsFile, 'utf8'));
-      if (Array.isArray(parsed)) return parsed;
-    } catch {
-      // fallback
-    }
+  if (!fs.existsSync(requestsFile)) return [];
+  try {
+    const parsed = JSON.parse(fs.readFileSync(requestsFile, 'utf8'));
+    if (!Array.isArray(parsed)) throw new Error('invalid request array');
+    return parsed;
+  } catch {
+    throw new Error('Le fichier data/requests.json est illisible. Restaurez une sauvegarde avant de continuer.');
   }
-  return [];
 }
 
 export function saveRequests(reqs: MembershipRequest[]): void {
@@ -397,15 +402,14 @@ export function saveRequests(reqs: MembershipRequest[]): void {
 }
 
 export function loadAuditLogs(): AuditLog[] {
-  if (fs.existsSync(auditLogsFile)) {
-    try {
-      const parsed = JSON.parse(fs.readFileSync(auditLogsFile, 'utf8'));
-      if (Array.isArray(parsed)) return parsed;
-    } catch {
-      // fallback
-    }
+  if (!fs.existsSync(auditLogsFile)) return [];
+  try {
+    const parsed = JSON.parse(fs.readFileSync(auditLogsFile, 'utf8'));
+    if (!Array.isArray(parsed)) throw new Error('invalid audit log array');
+    return parsed;
+  } catch {
+    throw new Error('Le fichier data/audit-logs.json est illisible. Restaurez une sauvegarde avant de continuer.');
   }
-  return [];
 }
 
 export function logAudit(entry: Omit<AuditLog, 'id' | 'timestamp'>): void {
@@ -484,19 +488,46 @@ export async function getServerUpdateStatus(): Promise<ServerUpdateStatus> {
 }
 
 export async function executeServerUpdate(): Promise<{ success: boolean; output: string; currentCommit: string }> {
-  try {
-    if (!fs.existsSync(path.resolve(__dirname, '.git'))) {
-      return { success: false, output: 'Dépôt git absent', currentCommit: 'unknown' };
-    }
-    const { stdout: pullOut } = await execAsync('git pull origin main', { cwd: __dirname, timeout: 30000 });
-    const { stdout: newCommit } = await execAsync('git rev-parse --short HEAD', { cwd: __dirname });
+  if (!fs.existsSync(path.resolve(__dirname, '.git'))) {
+    return { success: false, output: 'Dépôt git absent', currentCommit: 'unknown' };
+  }
 
-    syncXrayConfig();
+  let previousCommit = 'unknown';
+  try {
+    const { stdout: workingTree } = await execAsync('git status --porcelain', { cwd: __dirname, timeout: 10000 });
+    if (workingTree.trim()) {
+      return {
+        success: false,
+        output: 'Mise à jour annulée : des modifications locales existent dans le dépôt. Sauvegardez-les ou nettoyez le dépôt avant de continuer.',
+        currentCommit: (await execAsync('git rev-parse --short HEAD', { cwd: __dirname })).stdout.trim()
+      };
+    }
+
+    previousCommit = (await execAsync('git rev-parse HEAD', { cwd: __dirname })).stdout.trim();
+    await execAsync('git fetch --quiet origin main', { cwd: __dirname, timeout: 30000 });
+    const targetCommit = (await execAsync('git rev-parse origin/main', { cwd: __dirname, timeout: 10000 })).stdout.trim();
+    if (!/^[0-9a-f]{40}$/i.test(targetCommit)) {
+      throw new Error('Commit distant invalide.');
+    }
+    if (targetCommit === previousCommit) {
+      return { success: true, output: 'Le serveur est déjà à jour.', currentCommit: targetCommit.slice(0, 7) };
+    }
+
+    await execAsync(`git merge --ff-only ${targetCommit}`, { cwd: __dirname, timeout: 30000 });
 
     try {
-      await execAsync('npm run build', { cwd: __dirname, timeout: 60000 });
-    } catch (buildErr) {
-      console.error('[AUTO-UPDATE] Note build frontend:', buildErr);
+      await execAsync('npm run build', { cwd: __dirname, timeout: 120000 });
+      syncXrayConfig();
+    } catch (buildOrConfigError) {
+      const reason = buildOrConfigError instanceof Error ? buildOrConfigError.message : String(buildOrConfigError);
+      await execAsync(`git reset --hard ${previousCommit}`, { cwd: __dirname, timeout: 30000 });
+      await execAsync('npm run build', { cwd: __dirname, timeout: 120000 });
+      syncXrayConfig();
+      return {
+        success: false,
+        output: `Mise à jour annulée et commit précédent restauré après échec du build/configuration : ${reason}`,
+        currentCommit: previousCommit.slice(0, 7)
+      };
     }
 
     logTransaction({
@@ -506,19 +537,19 @@ export async function executeServerUpdate(): Promise<{ success: boolean; output:
       amountGb: 0,
       balanceBefore: 0,
       balanceAfter: 0,
-      note: `Mise à jour serveur vers commit ${newCommit.trim()}`
+      note: `Mise à jour serveur validée de ${previousCommit.slice(0, 7)} vers ${targetCommit.slice(0, 7)}`
     });
 
     return {
       success: true,
-      output: pullOut.trim(),
-      currentCommit: newCommit.trim()
+      output: `Mise à jour et build validés : ${targetCommit.slice(0, 7)}`,
+      currentCommit: targetCommit.slice(0, 7)
     };
   } catch (err: unknown) {
     return {
       success: false,
       output: err instanceof Error ? err.message : String(err),
-      currentCommit: 'error'
+      currentCommit: previousCommit === 'unknown' ? 'error' : previousCommit.slice(0, 7)
     };
   }
 }
@@ -573,7 +604,12 @@ function loadMasterConfig(): MasterServerConfig {
         secretPassphrase: process.env.MASTER_SECRET || ''
       };
       // Persist normalized fields when whitespace or letter case changed.
-      if (merged.serverHost !== rawStoredHost || merged.host !== rawStoredHeaderHost || merged.sniHost !== rawStoredSni) {
+      if (
+        merged.serverHost !== rawStoredHost ||
+        merged.host !== rawStoredHeaderHost ||
+        merged.sniHost !== rawStoredSni ||
+        Object.prototype.hasOwnProperty.call(stored, 'secretPassphrase')
+      ) {
         saveMasterConfig(merged);
       }
       // Exclusive pure TCP architecture: VLESS only
@@ -584,15 +620,17 @@ function loadMasterConfig(): MasterServerConfig {
       merged.serverPort = xrayPublicPort(merged.protocol, merged.transport, 443);
       return merged;
     } catch {
-      // Recreate from environment defaults below.
+      throw new Error('Le fichier data/config.json est illisible. Restaurez une sauvegarde avant de continuer.');
     }
   }
 
-  fs.writeFileSync(configFile, JSON.stringify(defaults, null, 2), 'utf8');
+  saveMasterConfig(defaults);
   return defaults;
 }
 function saveMasterConfig(cfg: MasterServerConfig) {
-  writeJsonAtomically(configFile, cfg);
+  // MASTER_SECRET must live only in the process environment, never in JSON files.
+  const { secretPassphrase: _secretPassphrase, ...safeConfig } = cfg;
+  writeJsonAtomically(configFile, safeConfig);
 }
 
 // User Storage with Initial Super Admin
@@ -650,7 +688,7 @@ function loadUsers(): AppUser[] {
   };
 
   const initial = [superAdmin];
-  fs.writeFileSync(usersFile, JSON.stringify(initial, null, 2), 'utf8');
+  writeJsonAtomically(usersFile, initial);
   return initial;
 }
 function saveUsers(users: AppUser[]) {
@@ -673,7 +711,7 @@ function loadTokens(): ClientToken[] {
           changed = true;
         }
       }
-      if (changed) fs.writeFileSync(tokensFile, JSON.stringify(loaded, null, 2), 'utf8');
+      if (changed) writeJsonAtomically(tokensFile, loaded);
       return loaded;
     } catch {
       throw new Error('Le fichier data/tokens.json est illisible. Restaurez une sauvegarde avant de redémarrer.');
@@ -681,7 +719,7 @@ function loadTokens(): ClientToken[] {
   }
 
   const initial: ClientToken[] = [];
-  fs.writeFileSync(tokensFile, JSON.stringify(initial, null, 2), 'utf8');
+  writeJsonAtomically(tokensFile, initial);
   return initial;
 }
 
@@ -888,65 +926,86 @@ export function buildDirectProtocolUrl(token: ClientToken, profile: ProtocolConf
 export function generateUserVlessVariants(token: ClientToken, profile?: ProtocolConfig): VlessVariant[] {
   const master = loadMasterConfig();
   const host = profile?.serverHost || master.serverHost || 'panel.pagnol.xyz';
-  const primarySni = profile?.sniHost || master.sniHost || host;
+  // Caddy terminates TLS with the certificate for VPN_DOMAIN. A TCP-only
+  // profile has no SNI of its own, but its other supported variants still do.
+  const primarySni = configuredTlsDomain() || profile?.sniHost || master.sniHost || host;
   const wsHost = profile?.host || master.host || host;
-  const rawPath = profile?.path || master.path || '/@abess237';
-  const cleanPath = rawPath.split('?')[0] || '/@abess237';
   const uuid = token.clientUuid || token.token;
   const baseName = `AbessVpn - ${token.token}`;
-
   const variants: VlessVariant[] = [];
 
-  // 1. Direct TCP (Ultra Low Latency - Pure TCP port 10050)
+  const tcpPort = xrayPublicPort('vless', 'tcp', 10050);
   const tcpTag = `${baseName} 🚀 Direct TCP (Ultra-Fast)`;
-  const tcpUri = `vless://${uuid}@${host}:10050?encryption=none&security=none&type=tcp&headerType=none#${encodeURIComponent(tcpTag)}`;
   variants.push({
     id: 'vless_tcp_direct',
     label: '🚀 VLESS Direct TCP (Port 10050 • Faible Latence)',
     badge: 'DIRECT TCP • MAX SPEED',
     protocol: 'vless',
-    uri: tcpUri,
+    uri: `vless://${uuid}@${host}:${tcpPort}?encryption=none&security=none&type=tcp&headerType=none#${encodeURIComponent(tcpTag)}`,
     sni: '',
-    target: `${host}:10050`
+    target: `${host}:${tcpPort}`
   });
 
-  // 2. Fast (0-RTT Early Data via WebSocket over TLS - Port 443)
+  const tlsPort = xrayPublicPort('vless', 'ws', 443);
+  const tlsBase = `encryption=none&security=tls&sni=${encodeURIComponent(primarySni)}&fp=chrome`;
+  const wsPath = xrayProfilePath('vless', 'ws');
   const fastTag = `${baseName} ⚡ Fast (0-RTT TLS)`;
-  const fastUri = `vless://${uuid}@${host}:443?encryption=none&security=tls&sni=${encodeURIComponent(primarySni)}&fp=chrome&alpn=http%2F1.1&type=ws&host=${encodeURIComponent(wsHost)}&path=${encodeURIComponent(cleanPath + '?ed=2048')}#${encodeURIComponent(fastTag)}`;
   variants.push({
     id: 'fast',
     label: '⚡ VLESS Fast (0-RTT Early Data • Port 443)',
     badge: '0-RTT • RECOMMANDÉ',
     protocol: 'vless',
-    uri: fastUri,
+    uri: `vless://${uuid}@${host}:${tlsPort}?${tlsBase}&alpn=http%2F1.1&type=ws&host=${encodeURIComponent(wsHost)}&path=${encodeURIComponent(wsPath + '?ed=2048')}#${encodeURIComponent(fastTag)}`,
     sni: primarySni,
-    target: `${host}:443`
+    target: `${host}:${tlsPort}`
   });
 
-  // 3. Stable (Standard WebSocket over TLS - Port 443)
   const stableTag = `${baseName} 🛡️ Stable`;
-  const stableUri = `vless://${uuid}@${host}:443?encryption=none&security=tls&sni=${encodeURIComponent(primarySni)}&fp=chrome&alpn=http%2F1.1&type=ws&host=${encodeURIComponent(wsHost)}&path=${encodeURIComponent(cleanPath)}#${encodeURIComponent(stableTag)}`;
   variants.push({
     id: 'stable',
     label: '🛡️ VLESS Stable (WebSocket TLS • Compatibilité Max)',
     badge: 'COMPATIBILITÉ MAX',
     protocol: 'vless',
-    uri: stableUri,
+    uri: `vless://${uuid}@${host}:${tlsPort}?${tlsBase}&alpn=http%2F1.1&type=ws&host=${encodeURIComponent(wsHost)}&path=${encodeURIComponent(wsPath)}#${encodeURIComponent(stableTag)}`,
     sni: primarySni,
-    target: `${host}:443`
+    target: `${host}:${tlsPort}`
   });
 
-  // 4. gRPC High Speed (HTTP/2 Gun Mode over TLS - Port 443)
+  const grpcPath = xrayProfilePath('vless', 'grpc');
+  const grpcService = grpcPath.startsWith('/') ? grpcPath.slice(1) : grpcPath;
   const grpcTag = `${baseName} 🌐 gRPC High Speed`;
-  const grpcUri = `vless://${uuid}@${host}:443?encryption=none&security=tls&type=grpc&serviceName=%40abess237%2Fvless%2Fgrpc&mode=gun&sni=${encodeURIComponent(primarySni)}#${encodeURIComponent(grpcTag)}`;
   variants.push({
     id: 'vless_grpc',
     label: '🌐 VLESS gRPC (HTTP/2 Gun • Haute Vitesse)',
     badge: 'gRPC H2',
     protocol: 'vless',
-    uri: grpcUri,
+    uri: `vless://${uuid}@${host}:${tlsPort}?${tlsBase}&alpn=h2&type=grpc&serviceName=${encodeURIComponent(grpcService)}&mode=gun#${encodeURIComponent(grpcTag)}`,
     sni: primarySni,
-    target: `${host}:443`
+    target: `${host}:${tlsPort}`
+  });
+
+  const httpUpgradePath = xrayProfilePath('vless', 'httpupgrade');
+  const httpUpgradeTag = `${baseName} 🔁 HTTPUpgrade`;
+  variants.push({
+    id: 'vless_httpupgrade',
+    label: '🔁 VLESS HTTPUpgrade (TLS)',
+    badge: 'HTTPUPGRADE',
+    protocol: 'vless',
+    uri: `vless://${uuid}@${host}:${tlsPort}?${tlsBase}&type=httpupgrade&host=${encodeURIComponent(wsHost)}&path=${encodeURIComponent(httpUpgradePath)}#${encodeURIComponent(httpUpgradeTag)}`,
+    sni: primarySni,
+    target: `${host}:${tlsPort}`
+  });
+
+  const xhttpPath = xrayProfilePath('vless', 'xhttp');
+  const xhttpTag = `${baseName} 🌐 XHTTP`;
+  variants.push({
+    id: 'vless_xhttp',
+    label: '🌐 VLESS XHTTP (TLS)',
+    badge: 'XHTTP',
+    protocol: 'vless',
+    uri: `vless://${uuid}@${host}:${tlsPort}?${tlsBase}&type=xhttp&path=${encodeURIComponent(xhttpPath)}&mode=auto#${encodeURIComponent(xhttpTag)}`,
+    sni: primarySni,
+    target: `${host}:${tlsPort}`
   });
 
   return variants;
@@ -955,12 +1014,63 @@ export function generateUserVlessVariants(token: ClientToken, profile?: Protocol
 export function generateXrayClientJson(token: ClientToken, profile?: ProtocolConfig): Record<string, unknown> {
   const master = loadMasterConfig();
   const host = profile?.serverHost || master.serverHost || 'panel.pagnol.xyz';
-  const port = Number(profile?.serverPort || master.serverPort || 443);
+  const transport = profile?.transport || master.transport || 'ws';
+  if (!isXrayTransport(transport)) throw new Error('Transport client Xray non pris en charge.');
+  const port = xrayPublicPort('vless', transport, Number(profile?.serverPort || master.serverPort || 443));
   const primarySni = profile?.sniHost || master.sniHost || host;
   const wsHost = profile?.host || master.host || host;
   const rawPath = profile?.path || master.path || '/@abess237';
-  const cleanPath = rawPath.split('?')[0] || '/@abess237';
+  const cleanPath = xrayProfilePath('vless', transport, rawPath);
   const uuid = token.clientUuid || token.token;
+
+  const tlsSettings = {
+    serverName: primarySni,
+    allowInsecure: false,
+    fingerprint: 'chrome',
+    ...(transport === 'grpc' ? { alpn: ['h2'] } : {})
+  };
+  const streamSettings: Record<string, unknown> = {
+    network: transport,
+    security: transport === 'tcp' ? 'none' : 'tls',
+    sockopt: {
+      tcpFastOpen: true,
+      tcpNoDelay: true,
+      tcpKeepAliveIdle: 30,
+      tcpKeepAliveInterval: 15
+    }
+  };
+
+  if (transport === 'tcp') {
+    streamSettings.tcpSettings = { header: { type: 'none' } };
+  } else {
+    streamSettings.tlsSettings = tlsSettings;
+    switch (transport) {
+      case 'ws':
+        streamSettings.wsSettings = {
+          path: cleanPath,
+          headers: { Host: wsHost }
+        };
+        break;
+      case 'grpc':
+        streamSettings.grpcSettings = {
+          serviceName: cleanPath.startsWith('/') ? cleanPath.slice(1) : cleanPath,
+          multiMode: false
+        };
+        break;
+      case 'httpupgrade':
+        streamSettings.httpupgradeSettings = {
+          path: cleanPath,
+          host: wsHost
+        };
+        break;
+      case 'xhttp':
+        streamSettings.xhttpSettings = {
+          path: cleanPath,
+          mode: 'auto'
+        };
+        break;
+    }
+  }
 
   return {
     remarks: `${token.token} ⚡ AbessVpn Pro`,
@@ -1029,26 +1139,7 @@ export function generateXrayClientJson(token: ClientToken, profile?: ProtocolCon
             }
           ]
         },
-        streamSettings: {
-          network: 'ws',
-          security: 'tls',
-          tlsSettings: {
-            serverName: primarySni,
-            allowInsecure: false,
-            fingerprint: 'chrome',
-            alpn: ['http/1.1']
-          },
-          wsSettings: {
-            path: cleanPath,
-            headers: { Host: wsHost }
-          },
-          sockopt: {
-            tcpFastOpen: true,
-            tcpNoDelay: true,
-            tcpKeepAliveIdle: 30,
-            tcpKeepAliveInterval: 15
-          }
-        },
+        streamSettings,
         mux: { enabled: false }
       },
       { tag: 'dns-out', protocol: 'dns', settings: { network: 'tcp', nonIPQuery: 'skip' } },
@@ -1068,79 +1159,48 @@ export function generateUnifiedToken(): string {
   const chars = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
   let rand = '';
   for (let i = 0; i < 11; i++) {
-    rand += chars[Math.floor(Math.random() * chars.length)];
+    rand += chars[crypto.randomInt(chars.length)];
   }
   return `ABESS-${rand}`;
 }
 
 export const DEFAULT_SSH_PAYLOAD = "GET / HTTP/1.1[crlf]FoxNews.com;www.epicgames.com;us.shop.battle.net;unity3d.com;www.icloud.com;www.bing.com;www.samsung.com;store.nintendo.com.br;www.garena.com;n41-06-05.opera-mini.net[crlf]Host: m.batch.com[crlf][crlf]X / HTTP/1.1[crlf]FoxNews.com;www.epicgames.com;us.shop.battle.net;unity3d.com;www.icloud.com;www.bing.com;www.samsung.com;store.nintendo.com.br;www.garena.com;n41-06-05.opera-mini.net[crlf]Host: [host][crlf][crlf]GET /loic HTTP/1.1[crlf]Host: dbl5i9lrmmeui.cloudfront.net[crlf]Backend: crashlyticsreports-pa.googleapis.com[crlf]Upgrade: websocket[crlf]Connection: Upgrade[crlf]User-agent:[ua][crlf][crlf]";
 
-export function createLinuxSshAccount(username: string, password: string, days = 30): boolean {
-  try {
-    const cleanUser = String(username || '').trim().toLowerCase();
-    if (!/^[a-zA-Z0-9_-]{3,32}$/.test(cleanUser)) return false;
-    const expiryDate = new Date(Date.now() + Math.max(1, days) * 86400000).toISOString().split('T')[0];
-    const check = execSync(`id ${cleanUser} 2>/dev/null || true`, { encoding: 'utf8' });
-    if (!check.includes('uid=')) {
-      execSync(`sudo useradd -e ${expiryDate} -s /bin/false -M ${cleanUser}`, { encoding: 'utf8' });
-    } else {
-      execSync(`sudo chage -E ${expiryDate} ${cleanUser}`, { encoding: 'utf8' });
-    }
-    const proc = spawn('sudo', ['chpasswd'], { stdio: ['pipe', 'ignore', 'ignore'] });
-    proc.stdin.write(`${cleanUser}:${password}\n`);
-    proc.stdin.end();
-    try {
-      fs.appendFileSync('/etc/ssh/vpn_users.db', `${cleanUser}:${password}:${expiryDate}\n`);
-    } catch {}
-    return true;
-  } catch (e) {
-    console.error('Error creating Linux SSH account:', e);
-    return false;
-  }
+/**
+ * Host-level SSH account management is unavailable in the containerized
+ * control plane. A dedicated host-side provisioner with a narrow authenticated
+ * interface is required. This process must never run sudo useradd/chpasswd or
+ * persist plaintext SSH passwords on the host.
+ */
+export function createLinuxSshAccount(_username: string, _password: string, _days = 30): boolean {
+  return false;
 }
 
-export function deleteLinuxSshAccount(username: string): boolean {
-  try {
-    const cleanUser = String(username || '').trim().toLowerCase();
-    if (!/^[a-zA-Z0-9_-]{3,32}$/.test(cleanUser)) return false;
-    execSync(`sudo userdel -f ${cleanUser} 2>/dev/null || true`, { encoding: 'utf8' });
-    try {
-      if (fs.existsSync('/etc/ssh/vpn_users.db')) {
-        const lines = fs.readFileSync('/etc/ssh/vpn_users.db', 'utf8').split('\n');
-        fs.writeFileSync('/etc/ssh/vpn_users.db', lines.filter(l => !l.startsWith(`${cleanUser}:`)).join('\n'));
-      }
-    } catch {}
-    return true;
-  } catch {
-    return false;
-  }
+export function deleteLinuxSshAccount(_username: string): boolean {
+  return false;
 }
 
 export function generateSshConfigJson(token: ClientToken): Record<string, unknown> {
-  const master = loadMasterConfig();
-  const host = master.serverHost || process.env.VPN_DOMAIN || 'server.nexustunnel.me';
-  const ssh = token.sshConfig || {
-    sshConfigType: 'SSH-Payload',
-    remarks: token.plan || '𖤍 ORANGE🍊〆DANNY 𖤍',
-    sshHost: host,
-    sshPort: 80,
-    sshUsername: 'dany',
-    sshPassword: '#12345',
-    payload: DEFAULT_SSH_PAYLOAD
-  };
+  const ssh = token.sshConfig;
+  if (!ssh || !ssh.sshHost || !ssh.sshUsername || !ssh.sshPassword) {
+    return {
+      configs: [],
+      error: 'Cette ancienne licence SSH ne contient pas de paramètres provisionnés valides.'
+    };
+  }
   return {
     configs: [
       {
         name: ssh.remarks || token.plan || '𖤍 ORANGE🍊〆DANNY 𖤍',
-        address: `${ssh.sshHost || host}:${ssh.sshPort || 80}`,
+        address: `${ssh.sshHost}:${Number(ssh.sshPort) || 80}`,
         type: 'SSH',
         sshConfig: {
           sshConfigType: ssh.sshConfigType || 'SSH-Payload',
-          remarks: ssh.remarks || token.plan || '𖤍 ORANGE🍊〆DANNY 𖤍',
-          sshHost: ssh.sshHost || host,
+          remarks: ssh.remarks || token.plan || 'Configuration SSH historique',
+          sshHost: ssh.sshHost,
           sshPort: Number(ssh.sshPort) || 80,
-          sshUsername: ssh.sshUsername || 'dany',
-          sshPassword: ssh.sshPassword || '#12345',
+          sshUsername: ssh.sshUsername,
+          sshPassword: ssh.sshPassword,
           payload: ssh.payload || DEFAULT_SSH_PAYLOAD
         }
       }
@@ -1148,30 +1208,13 @@ export function generateSshConfigJson(token: ClientToken): Record<string, unknow
   };
 }
 
+/**
+ * Disabled: this Node container is not the Linux SSH host and must not attempt
+ * to inspect or kill host processes with sudo. A dedicated SSH provisioner is
+ * required before SSH account management can be re-enabled.
+ */
 export function enforceSshDeviceLimits(): void {
-  try {
-    const tokens = loadTokens();
-    const sshTokens = tokens.filter(t => t.status === 'active' && (t.protocolType === 'ssh' || t.sshConfig?.sshUsername));
-    for (const t of sshTokens) {
-      const username = t.sshConfig?.sshUsername;
-      if (!username || !/^[a-zA-Z0-9_-]{3,32}$/.test(username)) continue;
-      const limit = Math.max(1, Math.floor(Number(t.deviceLimit) || 1));
-      try {
-        const out = execSync(`pgrep -u ${username} dropbear 2>/dev/null || true`, { encoding: 'utf8' }).trim();
-        if (out) {
-          const pids = out.split('\n').map(p => p.trim()).filter(Boolean);
-          if (pids.length > limit) {
-            const excess = pids.slice(0, pids.length - limit);
-            for (const pid of excess) {
-              try {
-                execSync(`sudo kill -9 ${pid} 2>/dev/null || true`);
-              } catch {}
-            }
-          }
-        }
-      } catch {}
-    }
-  } catch {}
+  return;
 }
 
 export function probeEndpoint(targetServer: string, sni: string, timeoutMs = 3000): Promise<{ tcp_latency_ms: number; tls_latency_ms: number; latency_ms: number; status: string; error?: string }> {
@@ -1193,7 +1236,7 @@ export function probeEndpoint(targetServer: string, sni: string, timeoutMs = 300
       const tlsSocket = tls.connect({
         socket,
         servername: sni || host,
-        rejectUnauthorized: false,
+        rejectUnauthorized: true,
         timeout: timeoutMs
       }, () => {
         const tlsDoneAt = Date.now();
@@ -1320,25 +1363,35 @@ function loadProtocolConfigs(): ProtocolConfig[] {
   if (fs.existsSync(protocolConfigsFile)) {
     try {
       const parsed = JSON.parse(fs.readFileSync(protocolConfigsFile, 'utf8'));
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        const valid = parsed.filter((item: any) =>
-          item && typeof item.id === 'string' && typeof item.name === 'string' &&
-          isValidPublicHost(item.serverHost) && (isXrayProtocol(item.protocol) || item.protocol === 'ssh')
-        ).map((item: any) => publicProtocolConfig({
-          ...item,
-          host: typeof item.host === 'string' ? item.host : '',
-          sniHost: typeof item.sniHost === 'string' ? item.sniHost : '',
-          serverPort: item.protocol === 'ssh' ? (Number(item.serverPort) || 80) : xrayPublicPort(item.protocol, item.transport, Number(item.serverPort) || 443),
-          path: item.protocol === 'ssh' ? (item.path || '/loic') : xrayProfilePath(item.protocol, item.transport, item.path || '/@abess237'),
-          payload: typeof item.payload === 'string' ? item.payload : (item.protocol === 'ssh' ? DEFAULT_SSH_PAYLOAD : ''),
-          remarks: typeof item.remarks === 'string' ? item.remarks : item.name,
-          createdAt: typeof item.createdAt === 'string' ? item.createdAt : new Date().toISOString(),
-          updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : new Date().toISOString()
-        } as ProtocolConfig));
-        if (valid.length > 0) return valid;
+      if (!Array.isArray(parsed)) {
+        throw new Error('Format de tableau invalide.');
       }
+      if (parsed.length === 0) return [];
+
+      // SSH profiles are intentionally retired; do not revive them as usable profiles.
+      const nonRetired = parsed.filter((item: any) => item && item.protocol !== 'ssh');
+      const valid = nonRetired.filter((item: any) =>
+        typeof item.id === 'string' && typeof item.name === 'string' &&
+        isValidPublicHost(item.serverHost) && isXrayProtocol(item.protocol) &&
+        isXrayTransport(item.transport)
+      ).map((item: any) => publicProtocolConfig({
+        ...item,
+        host: typeof item.host === 'string' ? item.host : '',
+        sniHost: typeof item.sniHost === 'string' ? item.sniHost : '',
+        serverPort: xrayPublicPort(item.protocol, item.transport, Number(item.serverPort) || 443),
+        path: xrayProfilePath(item.protocol, item.transport, item.path || '/@abess237'),
+        payload: '',
+        remarks: typeof item.remarks === 'string' ? item.remarks : item.name,
+        createdAt: typeof item.createdAt === 'string' ? item.createdAt : new Date().toISOString(),
+        updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : new Date().toISOString()
+      } as ProtocolConfig));
+
+      if (nonRetired.length > 0 && valid.length === 0) {
+        throw new Error('Aucun profil VLESS valide ne reste après validation.');
+      }
+      return valid;
     } catch {
-      throw new Error('Le fichier data/protocol-configs.json est illisible. Restaurez une sauvegarde avant de continuer.');
+      throw new Error('Le fichier data/protocol-configs.json est invalide ou illisible. Restaurez une sauvegarde avant de continuer.');
     }
   }
   const legacy = legacyProtocolConfig();
@@ -1361,25 +1414,9 @@ function normalizeProtocolConfig(input: any, existing?: ProtocolConfig): Protoco
   if (!isValidPublicHost(serverHost) || (host !== '' && !isValidPublicHost(host))) return null;
 
   const now = new Date().toISOString();
-  if (protocol === 'ssh') {
-    const port = Number(input?.serverPort ?? existing?.serverPort) || 80;
-    return {
-      id: existing?.id || 'cfg_ssh_' + crypto.randomBytes(4).toString('hex'),
-      name,
-      serverHost,
-      host: host || 'm.batch.com',
-      serverPort: port,
-      protocol: 'ssh',
-      transport: 'ws',
-      path: input?.path || '/loic',
-      sniHost: sniHost || serverHost,
-      payload,
-      remarks,
-      createdAt: existing?.createdAt || now,
-      updatedAt: now
-    };
-  }
-
+  // SSH provisioning is retired until a dedicated host-side agent replaces the
+  // unsafe legacy root/password-file integration.
+  if (protocol === 'ssh') return null;
   if (!isXrayProtocol(protocol)) return null;
   if (!isXrayTransport(transport)) return null;
   if (tlsSniValidationError(transport, sniHost)) return null;
@@ -1405,18 +1442,41 @@ function protocolConfigForToken(token: ClientToken, configs = loadProtocolConfig
   }
   return configs[0] || null;
 }
-function safeClientToken(token: ClientToken): Omit<ClientToken, 'configurationSnapshot'> {
-  const { configurationSnapshot: _configurationSnapshot, ...safe } = token;
-  return safe;
+type SafeClientToken = Omit<ClientToken, 'configurationSnapshot' | 'sshConfig'> & {
+  sshConfig?: Omit<NonNullable<ClientToken['sshConfig']>, 'sshPassword'>;
+};
+
+function safeClientToken(token: ClientToken): SafeClientToken {
+  const { configurationSnapshot: _configurationSnapshot, sshConfig, ...safe } = token;
+  if (!sshConfig) return safe;
+  const { sshPassword: _sshPassword, ...safeSshConfig } = sshConfig;
+  return { ...safe, sshConfig: safeSshConfig };
+}
+
+// Backups are Super Admin-only recovery artifacts: retain each token's immutable
+// protocol snapshot, but never serialize a historical clear-text SSH password.
+type BackupClientToken = Omit<ClientToken, 'sshConfig'> & {
+  sshConfig?: Omit<NonNullable<ClientToken['sshConfig']>, 'sshPassword'>;
+};
+
+function backupClientToken(token: ClientToken): BackupClientToken {
+  const { sshConfig, ...fullToken } = token;
+  if (!sshConfig) return fullToken;
+  const { sshPassword: _sshPassword, ...safeSshConfig } = sshConfig;
+  return { ...fullToken, sshConfig: safeSshConfig };
 }
 
 function syncXrayConfig(tokens: ClientToken[] = loadTokens()): boolean {
   const masterConfig = loadMasterConfig();
   const now = Date.now();
-  const activeTokens = tokens.filter(token => token.status === 'active' &&
+  const activeTokens = tokens.filter(token =>
+    token.protocolType !== 'ssh' &&
+    !token.sshConfig &&
+    token.status === 'active' &&
     Number.isFinite(new Date(token.expiresAt).getTime()) && new Date(token.expiresAt).getTime() > now &&
     Number(token.bandwidthUsedGb) < Number(token.bandwidthGb) &&
-    typeof token.clientUuid === 'string' && token.clientUuid.length > 0);
+    typeof token.clientUuid === 'string' && token.clientUuid.length > 0
+  );
   const users = activeTokens.map(token => ({
     id: token.clientUuid as string,
     email: xrayUserEmail(token),
@@ -1653,15 +1713,11 @@ interface PublicRateBucket {
 const publicRateLimits = new Map<string, PublicRateBucket>();
 
 function publicApiRateLimiter(req: express.Request, res: express.Response, next: express.NextFunction) {
-  const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.socket.remoteAddress || '127.0.0.1';
+  // Do not trust caller-supplied X-Forwarded-For for abuse controls.
+  const ip = req.ip || 'unknown';
   const now = Date.now();
   let bucket = publicRateLimits.get(ip);
-  if (!bucket || now >= bucket.resetAt) {
-    bucket = { count: 1, resetAt: now + 60000, blockedUntil: 0 };
-    publicRateLimits.set(ip, bucket);
-    return next();
-  }
-  if (bucket.blockedUntil > now) {
+  if (bucket?.blockedUntil && bucket.blockedUntil > now) {
     const retryAfter = Math.ceil((bucket.blockedUntil - now) / 1000);
     res.set('Retry-After', String(retryAfter));
     return res.status(429).json({
@@ -1669,6 +1725,11 @@ function publicApiRateLimiter(req: express.Request, res: express.Response, next:
       error: `Trop de requêtes. Veuillez patienter ${retryAfter} secondes.`,
       status: 'rate_limited'
     });
+  }
+  if (!bucket || now >= bucket.resetAt) {
+    bucket = { count: 1, resetAt: now + 60000, blockedUntil: 0 };
+    publicRateLimits.set(ip, bucket);
+    return next();
   }
   bucket.count++;
   if (bucket.count > 60) {
@@ -1704,6 +1765,30 @@ setInterval(() => {
   }
 }, 60 * 60 * 1000);
 
+function escapeHtmlText(value: unknown): string {
+  return String(value ?? '').replace(/[&<>"']/g, (character) => {
+    switch (character) {
+      case '&': return '&amp;';
+      case '<': return '&lt;';
+      case '>': return '&gt;';
+      case '"': return '&quot;';
+      case "'": return '&#39;';
+      default: return character;
+    }
+  });
+}
+
+// Inline JSON lives inside a script element. Escaping HTML-significant characters
+// prevents user-controlled strings such as customerNote from closing that script.
+function serializeSafeInlineJson(value: unknown): string {
+  return JSON.stringify(value)
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e')
+    .replace(/&/g, '\\u0026')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
+}
+
 async function startServer() {
   const vpnDomain = process.env.VPN_DOMAIN?.trim();
   const initialAdminEmail = process.env.ADMIN_EMAIL?.trim();
@@ -1723,15 +1808,37 @@ async function startServer() {
   syncXrayConfig(startupTokens);
 
   const app = express();
+  // The API is reachable only through the private Docker network in production.
+  // Trust private Caddy proxy hops so req.ip resolves the visitor address without
+  // trusting X-Forwarded-For from arbitrary public peers.
+  app.set('trust proxy', 'uniquelocal');
   app.use(express.json());
 
-  // CORS
+  // Same-origin panel access plus explicit local development or configured origins.
+  const allowedOrigins = new Set<string>([
+    `https://${vpnDomain}`,
+    'http://localhost:5173',
+    'http://127.0.0.1:5173',
+    ...(process.env.CORS_ALLOWED_ORIGINS || '')
+      .split(',')
+      .map(origin => origin.trim())
+      .filter(Boolean)
+  ]);
+
   app.use((req, res, next) => {
-    res.header('Access-Control-Allow-Origin', '*');
+    const origin = req.headers.origin;
+    if (typeof origin === 'string') {
+      if (!allowedOrigins.has(origin)) {
+        res.status(403).json({ error: 'Origine non autorisée.' });
+        return;
+      }
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Vary', 'Origin');
+    }
     res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
     res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
     if (req.method === 'OPTIONS') {
-      res.sendStatus(200);
+      res.sendStatus(204);
       return;
     }
     next();
@@ -1857,9 +1964,7 @@ async function startServer() {
     }
 
     found.lastSeenAt = new Date(now).toISOString();
-    found.lastSeenIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim()
-      || req.socket.remoteAddress
-      || 'unknown';
+    found.lastSeenIp = req.ip || 'unknown';
     saveTokens(tokens);
 
     res.json({
@@ -1918,21 +2023,50 @@ async function startServer() {
     const users = loadUsers();
     const user = users.find(u => u.id === session.userId && u.status === 'active');
     if (!user) {
+      activeSessions.delete(token);
       res.status(401).json({ error: 'Compte suspendu ou introuvable.' });
       return;
+    }
+
+    // Re-check the entire reseller ancestry on every request. Suspending a
+    // parent immediately disables already-issued sessions of its descendants.
+    const visitedParents = new Set<string>([user.id]);
+    let parentId = user.parentId;
+    while (parentId) {
+      if (visitedParents.has(parentId)) {
+        activeSessions.delete(token);
+        res.status(403).json({ error: 'Hiérarchie revendeur invalide.' });
+        return;
+      }
+      visitedParents.add(parentId);
+      const parent = users.find(candidate => candidate.id === parentId);
+      if (!parent || parent.status !== 'active') {
+        activeSessions.delete(token);
+        res.status(401).json({ error: 'Votre branche revendeur parente est suspendue ou introuvable. Reconnexion refusée.' });
+        return;
+      }
+      parentId = parent.parentId;
     }
 
     (req as any).user = user;
     next();
   };
 
+  const requireSuperAdmin = (req: express.Request, res: express.Response): boolean => {
+    const user = (req as any).user as AppUser | undefined;
+    if (user?.role !== 'SUPER_ADMIN') {
+      res.status(403).json({ error: 'Accès réservé au Super Administrateur.' });
+      return false;
+    }
+    return true;
+  };
+
   // ==========================================
   // 1. AUTHENTICATION & LOGIN (Admin & Reseller)
   // ==========================================
   app.post('/api/v1/auth/login', (req, res) => {
-    const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim()
-      || req.socket.remoteAddress
-      || 'unknown';
+    // X-Forwarded-For is untrusted unless a trusted proxy is explicitly configured.
+    const clientIp = req.ip || 'unknown';
 
     const rateCheck = checkLoginRateLimit(clientIp);
     if (!rateCheck.allowed) {
@@ -2077,7 +2211,11 @@ async function startServer() {
       return;
     }
 
-    const requestedCredits = Math.max(0, Number(initialCredits) || 0);
+    const requestedCredits = initialCredits === undefined ? 0 : Number(initialCredits);
+    if (!Number.isFinite(requestedCredits) || requestedCredits < 0 || requestedCredits > 1000000) {
+      res.status(400).json({ error: 'Le crédit initial doit être un nombre fini compris entre 0 et 1000000 Go.' });
+      return;
+    }
 
     const users = loadUsers();
     if (users.some(u => u.email.toLowerCase() === email.toLowerCase().trim())) {
@@ -2091,6 +2229,7 @@ async function startServer() {
       return;
     }
 
+    let parentCreditBefore: number | null = null;
     if (user.role === 'RESELLER') {
       if (dbUser.status !== 'active') {
         res.status(403).json({ error: 'Votre compte est suspendu. Impossible de créer un sous-revendeur.' });
@@ -2104,18 +2243,8 @@ async function startServer() {
       }
 
       // Deduct credits from parent reseller
-      const prevCredits = dbUser.credits;
+      parentCreditBefore = dbUser.credits;
       dbUser.credits = Math.max(0, dbUser.credits - requestedCredits);
-
-      logTransaction({
-        resellerId: dbUser.id,
-        resellerName: dbUser.name,
-        type: 'SUB_RESELLER_CREATE',
-        amountGb: requestedCredits,
-        balanceBefore: prevCredits,
-        balanceAfter: dbUser.credits,
-        note: `Création du sous-revendeur ${name.trim()} (${requestedCredits} Go transférés)`
-      });
     }
 
     const newReseller: AppUser = {
@@ -2136,6 +2265,18 @@ async function startServer() {
 
     users.push(newReseller);
     saveUsers(users);
+
+    if (parentCreditBefore !== null && requestedCredits > 0) {
+      logTransaction({
+        resellerId: dbUser.id,
+        resellerName: dbUser.name,
+        type: 'SUB_RESELLER_CREATE',
+        amountGb: requestedCredits,
+        balanceBefore: parentCreditBefore,
+        balanceAfter: dbUser.credits,
+        note: `Création du sous-revendeur ${name.trim()} (${requestedCredits} Go transférés)`
+      });
+    }
 
     if (requestedCredits > 0) {
       logTransaction({
@@ -2312,7 +2453,11 @@ async function startServer() {
       return;
     }
 
-    const { status } = req.body;
+    const { status } = req.body || {};
+    if (status !== 'active' && status !== 'suspended') {
+      res.status(400).json({ error: 'Le statut doit être active ou suspended.' });
+      return;
+    }
     const users = loadUsers();
     const reseller = users.find(u => u.id === req.params.id && u.role === 'RESELLER');
     if (!reseller) {
@@ -2331,7 +2476,8 @@ async function startServer() {
     res.json({ success: true, status: reseller.status });
   });
 
-  // Delete Reseller
+  // Delete a reseller and its full descendant branch. Outstanding credits are
+  // returned to the direct parent; every associated licence and session is revoked.
   app.delete('/api/v1/admin/resellers/:id', authenticate, (req, res) => {
     const user: AppUser = (req as any).user;
     if (user.role !== 'SUPER_ADMIN' && user.role !== 'RESELLER') {
@@ -2340,41 +2486,113 @@ async function startServer() {
     }
 
     const users = loadUsers();
+    const originalUsersSnapshot = users.map(account => ({ ...account }));
     const target = users.find(u => u.id === req.params.id && u.role === 'RESELLER');
     if (!target) {
       res.status(404).json({ error: 'Revendeur introuvable.' });
       return;
     }
 
-    if (user.role === 'RESELLER') {
-      if (target.parentId !== user.id) {
-        res.status(403).json({ error: 'Vous ne pouvez supprimer que vos propres sous-revendeurs.' });
-        return;
-      }
-
-      const dbUser = users.find(u => u.id === user.id);
-      if (dbUser && target.credits > 0) {
-        const refund = target.credits;
-        const prev = dbUser.credits;
-        dbUser.credits += refund;
-
-        logTransaction({
-          resellerId: dbUser.id,
-          resellerName: dbUser.name,
-          type: 'RESELLER_DELETE_REFUND',
-          amountGb: refund,
-          balanceBefore: prev,
-          balanceAfter: dbUser.credits,
-          note: `Remboursement de ${refund} Go suite à la suppression du sous-revendeur ${target.name}`
-        });
-      }
+    if (user.role === 'RESELLER' && target.parentId !== user.id) {
+      res.status(403).json({ error: 'Vous ne pouvez supprimer que vos propres sous-revendeurs.' });
+      return;
     }
 
     const descendantIds = new Set([target.id, ...getSubResellerIdsRecursive(target.id, users)]);
-    const filtered = users.filter(u => !descendantIds.has(u.id));
-    saveUsers(filtered);
+    const branchUsers = users.filter(candidate => descendantIds.has(candidate.id));
+    const branchTokens = loadTokens();
+    const tokensToRevoke = branchTokens.filter(token =>
+      descendantIds.has(token.resellerId) && token.status === 'active'
+    );
+    const updatedTokens = branchTokens.map(token =>
+      descendantIds.has(token.resellerId) && token.status === 'active'
+        ? { ...token, status: 'revoked' as const }
+        : token
+    );
 
-    res.json({ success: true, deletedCount: descendantIds.size });
+    let refundedCredits = 0;
+    if (user.role === 'RESELLER') {
+      const dbUser = users.find(candidate => candidate.id === user.id);
+      if (!dbUser || dbUser.status !== 'active') {
+        res.status(401).json({ error: 'Compte parent introuvable ou suspendu.' });
+        return;
+      }
+
+      refundedCredits = branchUsers.reduce((total, branchUser) => {
+        const credits = Number(branchUser.credits);
+        if (!Number.isFinite(credits) || credits < 0) {
+          throw new Error(`Solde invalide pour le revendeur ${branchUser.id}; suppression annulée.`);
+        }
+        return total + credits;
+      }, 0);
+
+      if (!Number.isFinite(refundedCredits) || refundedCredits > 1000000000) {
+        res.status(409).json({ error: 'Le total des crédits de la branche est invalide; suppression annulée.' });
+        return;
+      }
+      dbUser.credits += refundedCredits;
+    }
+
+    // Persist the account and licence changes as one recoverable operation.
+    // Each JSON file is written atomically; if the second write fails, restore
+    // the original token store and its Xray projection before returning.
+    const filteredUsers = users.filter(candidate => !descendantIds.has(candidate.id));
+    try {
+      saveTokens(updatedTokens);
+      saveUsers(filteredUsers);
+    } catch {
+      try {
+        saveTokens(branchTokens);
+        saveUsers(originalUsersSnapshot);
+      } catch (rollbackError) {
+        console.error('[RESELLER DELETE] Rollback failed; restore the latest data backup before further writes.', rollbackError);
+      }
+      res.status(500).json({ error: 'Suppression interrompue. Les fichiers de données ont été restaurés lorsque possible; vérifiez les sauvegardes avant de réessayer.' });
+      return;
+    }
+
+    for (const [sessionToken, session] of activeSessions.entries()) {
+      if (descendantIds.has(session.userId)) activeSessions.delete(sessionToken);
+    }
+
+    for (const token of tokensToRevoke) {
+      logTransaction({
+        resellerId: token.resellerId,
+        resellerName: token.resellerName,
+        type: 'TOKEN_REVOKE',
+        amountGb: 0,
+        balanceBefore: 0,
+        balanceAfter: 0,
+        note: `Révocation automatique de la licence ${token.token} après suppression de la branche revendeur.`
+      });
+    }
+
+    if (user.role === 'RESELLER' && refundedCredits > 0) {
+      const parent = filteredUsers.find(candidate => candidate.id === user.id);
+      logTransaction({
+        resellerId: user.id,
+        resellerName: user.name,
+        type: 'RESELLER_DELETE_REFUND',
+        amountGb: refundedCredits,
+        balanceBefore: Number(parent?.credits || 0) - refundedCredits,
+        balanceAfter: Number(parent?.credits || 0),
+        note: `Remboursement de ${refundedCredits} Go pour suppression de la branche ${target.name} (${descendantIds.size} compte(s)).`
+      });
+    }
+
+    logAudit({
+      actor: user.name,
+      role: user.role,
+      action: 'RESELLER_BRANCH_DELETE',
+      details: `Suppression de la branche ${target.name}: ${descendantIds.size} compte(s), ${tokensToRevoke.length} licence(s) révoquée(s), ${refundedCredits} Go remboursés.`
+    });
+
+    res.json({
+      success: true,
+      deletedCount: descendantIds.size,
+      revokedTokenCount: tokensToRevoke.length,
+      refundedCreditsGb: refundedCredits
+    });
   });
 
   // ==========================================
@@ -2427,7 +2645,17 @@ async function startServer() {
     const isSsh = String(req.body?.protocolType || req.body?.protocol || req.body?.type || '').toLowerCase() === 'ssh' ||
                   (selected && selected.protocol === 'ssh');
     const profile = selected || (configs.length === 1 && !configurationId ? configs[0] : undefined);
-    if (!profile && !isSsh) {
+    if (isSsh || profile?.protocol === 'ssh') {
+      res.status(503).json({
+        error: 'La création de licences SSH est suspendue : aucun provisionneur SSH sécurisé n’est connecté au control plane. Utilisez un profil VLESS opérationnel.'
+      });
+      return;
+    }
+    if (profile && !isXrayProtocol(profile.protocol)) {
+      res.status(400).json({ error: 'Seul le protocole VLESS est provisionné par ce serveur.' });
+      return;
+    }
+    if (!profile) {
       res.status(409).json({
         error: configs.length === 0
           ? 'Aucune configuration VPN n’est disponible. Le Super Administrateur doit en créer une dans Infrastructure.'
@@ -2470,70 +2698,41 @@ async function startServer() {
     const customerNote = req.body?.customerNote?.toString()?.trim() || undefined;
     const customerContact = req.body?.customerContact?.toString()?.trim() || undefined;
 
-    const defaultHost = process.env.VPN_DOMAIN || 'server.nexustunnel.me';
-    let encryptedLink = '';
-    let directLink = '';
-    let sshConfigData: ClientToken['sshConfig'] | undefined = undefined;
-
-    if (isSsh) {
-      const sshHost = String(selected?.serverHost || req.body?.sshHost || defaultHost).trim();
-      const sshPort = Number(selected?.serverPort || req.body?.sshPort) || 80;
-      const payload = String(selected?.payload || req.body?.payload || DEFAULT_SSH_PAYLOAD).trim();
-      const remarks = String(selected?.remarks || selected?.name || plan || '𖤍 ORANGE🍊〆DANNY 𖤍').trim();
-
-      const cleanTokenPart = finalToken.toLowerCase().replace(/[^a-z0-9]/g, '').slice(-8);
-      const sshUsername = String(req.body?.sshUsername || ('u_' + cleanTokenPart)).trim().toLowerCase();
-      const sshPassword = String(req.body?.sshPassword || ('#' + crypto.randomBytes(3).toString('hex'))).trim();
-
-      createLinuxSshAccount(sshUsername, sshPassword, daysRemaining);
-
-      sshConfigData = {
-        sshConfigType: 'SSH-Payload',
-        remarks,
-        sshHost,
-        sshPort,
-        sshUsername,
-        sshPassword,
-        payload
-      };
-
-      const dummyToken: any = { plan: remarks, sshConfig: sshConfigData };
-      const configsJson = generateSshConfigJson(dummyToken);
-      directLink = JSON.stringify(configsJson, null, 2);
-      encryptedLink = encryptConfig({
-        vpnName: 'AbessVpn', token: finalToken, protocol: 'ssh',
-        sshHost, sshPort, sshUsername, sshPassword, payload, remarks
-      }, masterSecret);
-    } else {
-      const encryptedPayload = {
-        vpnName: 'AbessVpn', token: finalToken, bandwidthGb: requestedGb,
-        expiresAt: calculatedExpiresAt, allowedDeviceId: allowedDeviceId || undefined,
-        configurationId: profile!.id, configurationName: profile!.name,
-        serverHost: profile!.serverHost, host: profile!.host || profile!.serverHost,
-        serverPort: xrayPublicPort(profile!.protocol, profile!.transport, profile!.serverPort),
-        path: xrayProfilePath(profile!.protocol as XrayProtocol, profile!.transport as XrayTransport, profile!.path),
-        sniHost: profile!.sniHost, uuid: clientUuid, protocol: profile!.protocol, transport: profile!.transport,
-        security: profile!.transport === 'tcp' ? 'none' : 'tls'
-      };
-      encryptedLink = encryptConfig(encryptedPayload, masterSecret);
-      directLink = buildDirectProtocolUrl({ token: finalToken, clientUuid } as any, profile!);
-    }
+    const encryptedPayload = {
+      vpnName: 'AbessVpn',
+      token: finalToken,
+      bandwidthGb: requestedGb,
+      expiresAt: calculatedExpiresAt,
+      allowedDeviceId: allowedDeviceId || undefined,
+      configurationId: profile!.id,
+      configurationName: profile!.name,
+      serverHost: profile!.serverHost,
+      host: profile!.host || profile!.serverHost,
+      serverPort: xrayPublicPort(profile!.protocol, profile!.transport, profile!.serverPort),
+      path: xrayProfilePath(profile!.protocol as XrayProtocol, profile!.transport as XrayTransport, profile!.path),
+      sniHost: profile!.sniHost,
+      uuid: clientUuid,
+      protocol: 'vless',
+      transport: profile!.transport,
+      security: profile!.transport === 'tcp' ? 'none' : 'tls'
+    };
+    const encryptedLink = encryptConfig(encryptedPayload, masterSecret);
+    const directLink = buildDirectProtocolUrl({ token: finalToken, clientUuid } as any, profile!);
 
     const tokens = loadTokens();
     const newToken: ClientToken = {
       id: 'tok_' + crypto.randomUUID().slice(0, 8), token: finalToken, clientUuid,
       resellerId: user.id, resellerName: user.name,
-      plan: String(plan || (isSsh ? '𖤍 ORANGE🍊〆DANNY 𖤍' : `${requestedGb} GO CYBER VIP`)).trim().slice(0, 80),
+      plan: String(plan || `${requestedGb} GO CYBER VIP`).trim().slice(0, 80),
       bandwidthGb: requestedGb, bandwidthUsedGb: 0, expiresAt: calculatedExpiresAt, days: daysRemaining,
       deviceLimit: clientLimit, deviceIds: [], allowedDeviceId: allowedDeviceId || undefined,
       customerNote, customerContact,
       connectionCount: 0, lastSeenAt: null, lastSeenIp: null,
       status: 'active',
-      configurationId: profile?.id,
-      configurationName: profile?.name || (isSsh ? 'SSH-Payload (Dropbear/WebSocket)' : undefined),
-      configurationSnapshot: profile ? publicProtocolConfig(profile) : undefined,
-      protocolType: isSsh ? 'ssh' : 'vless',
-      sshConfig: sshConfigData,
+      configurationId: profile!.id,
+      configurationName: profile!.name,
+      configurationSnapshot: publicProtocolConfig(profile!),
+      protocolType: 'vless',
       encryptedLink,
       directLink,
       createdAt: new Date().toISOString()
@@ -2565,10 +2764,29 @@ async function startServer() {
   // Batch / Bulk Token Generation for commercial vouchers & scratch cards
   app.post('/api/v1/admin/tokens/batch', authenticate, (req, res) => {
     const user: AppUser = (req as any).user;
-    const count = Math.min(200, Math.max(1, Number(req.body?.count) || 5));
-    const requestedGb = Math.max(1, Number(req.body?.bandwidthGb) || 50);
-    const days = Math.max(1, Number(req.body?.days) || 30);
-    const clientLimit = Math.max(1, Math.min(10, Math.floor(Number(req.body?.deviceLimit) || 2)));
+    const count = req.body?.count === undefined ? 5 : Number(req.body.count);
+    const requestedGb = req.body?.bandwidthGb === undefined ? 50 : Number(req.body.bandwidthGb);
+    const days = req.body?.days === undefined ? 30 : Number(req.body.days);
+    const rawDeviceLimit = req.body?.deviceLimit === undefined ? 2 : Number(req.body.deviceLimit);
+
+    if (!Number.isInteger(count) || count < 1 || count > 200) {
+      res.status(400).json({ error: 'La quantité du lot doit être un entier compris entre 1 et 200.' });
+      return;
+    }
+    if (!Number.isFinite(requestedGb) || requestedGb < 1 || requestedGb > 100000) {
+      res.status(400).json({ error: 'Le quota unitaire doit être compris entre 1 et 100000 Go.' });
+      return;
+    }
+    if (!Number.isInteger(days) || days < 1 || days > 3650) {
+      res.status(400).json({ error: 'La durée du lot doit être un entier compris entre 1 et 3650 jours.' });
+      return;
+    }
+    if (!Number.isInteger(rawDeviceLimit) || rawDeviceLimit < 1 || rawDeviceLimit > 10) {
+      res.status(400).json({ error: 'La limite d’appareils doit être un entier compris entre 1 et 10.' });
+      return;
+    }
+
+    const clientLimit = rawDeviceLimit;
     const voucherPrefix = (req.body?.voucherPrefix?.toString()?.trim() || 'VIP').toUpperCase().replace(/[^A-Z0-9]/g, '');
     const plan = req.body?.plan?.toString()?.trim() || `${requestedGb} GO CYBER VIP`;
     const customerNotePrefix = req.body?.customerNotePrefix?.toString()?.trim() || '';
@@ -2589,6 +2807,12 @@ async function startServer() {
       res.status(400).json({ error: 'Aucun protocole de connexion configuré.' });
       return;
     }
+    if (String(profile.protocol) !== 'vless') {
+      res.status(503).json({
+        error: 'La génération de lots SSH/autres protocoles est suspendue : seul VLESS est provisionné par le moteur Xray actuel.'
+      });
+      return;
+    }
 
     const masterSecret = process.env.MASTER_SECRET || loadMasterConfig().secretPassphrase;
     if (!masterSecret || masterSecret.length < 32) {
@@ -2604,55 +2828,25 @@ async function startServer() {
     for (let i = 0; i < count; i++) {
       const finalToken = generateUnifiedToken();
       const clientUuid = crypto.randomUUID();
-      const defaultHost = process.env.VPN_DOMAIN || 'server.nexustunnel.me';
-
-      let encryptedLink = '';
-      let directLink = '';
-      let sshConfigData: ClientToken['sshConfig'] | undefined = undefined;
-
-      if (profile.protocol === 'ssh') {
-        const sshHost = String(profile.serverHost || defaultHost).trim();
-        const sshPort = Number(profile.serverPort) || 80;
-        const payload = String(profile.payload || DEFAULT_SSH_PAYLOAD).trim();
-        const remarks = String(profile.remarks || profile.name || plan || '𖤍 ORANGE🍊〆DANNY 𖤍').trim();
-
-        const cleanTokenPart = finalToken.toLowerCase().replace(/[^a-z0-9]/g, '').slice(-8);
-        const sshUsername = ('u_' + cleanTokenPart).trim().toLowerCase();
-        const sshPassword = '#' + crypto.randomBytes(3).toString('hex');
-
-        createLinuxSshAccount(sshUsername, sshPassword, daysRemaining);
-
-        sshConfigData = {
-          sshConfigType: 'SSH-Payload',
-          remarks,
-          sshHost,
-          sshPort,
-          sshUsername,
-          sshPassword,
-          payload
-        };
-
-        const dummyToken: any = { plan: remarks, sshConfig: sshConfigData };
-        const configsJson = generateSshConfigJson(dummyToken);
-        directLink = JSON.stringify(configsJson, null, 2);
-        encryptedLink = encryptConfig({
-          vpnName: 'AbessVpn', token: finalToken, protocol: 'ssh',
-          sshHost, sshPort, sshUsername, sshPassword, payload, remarks
-        }, masterSecret);
-      } else {
-        const encryptedPayload = {
-          vpnName: 'AbessVpn', token: finalToken, bandwidthGb: requestedGb,
-          expiresAt: calculatedExpiresAt,
-          configurationId: profile.id, configurationName: profile.name,
-          serverHost: profile.serverHost, host: profile.host || profile.serverHost,
-          serverPort: xrayPublicPort(profile.protocol, profile.transport, profile.serverPort),
-          path: xrayProfilePath(profile.protocol as XrayProtocol, profile.transport as XrayTransport, profile.path),
-          sniHost: profile.sniHost, uuid: clientUuid, protocol: profile.protocol, transport: profile.transport,
-          security: profile.transport === 'tcp' ? 'none' : 'tls'
-        };
-        encryptedLink = encryptConfig(encryptedPayload, masterSecret);
-        directLink = buildDirectProtocolUrl({ token: finalToken, clientUuid } as any, profile);
-      }
+      const encryptedPayload = {
+        vpnName: 'AbessVpn',
+        token: finalToken,
+        bandwidthGb: requestedGb,
+        expiresAt: calculatedExpiresAt,
+        configurationId: profile.id,
+        configurationName: profile.name,
+        serverHost: profile.serverHost,
+        host: profile.host || profile.serverHost,
+        serverPort: xrayPublicPort(profile.protocol, profile.transport, profile.serverPort),
+        path: xrayProfilePath(profile.protocol as XrayProtocol, profile.transport as XrayTransport, profile.path),
+        sniHost: profile.sniHost,
+        uuid: clientUuid,
+        protocol: 'vless',
+        transport: profile.transport,
+        security: profile.transport === 'tcp' ? 'none' : 'tls'
+      };
+      const encryptedLink = encryptConfig(encryptedPayload, masterSecret);
+      const directLink = buildDirectProtocolUrl({ token: finalToken, clientUuid } as any, profile);
 
       const newToken: ClientToken = {
         id: 'tok_' + crypto.randomUUID().slice(0, 8),
@@ -2675,8 +2869,7 @@ async function startServer() {
         configurationId: profile.id,
         configurationName: profile.name,
         configurationSnapshot: publicProtocolConfig(profile),
-        protocolType: profile.protocol === 'ssh' ? 'ssh' : 'vless',
-        sshConfig: sshConfigData,
+        protocolType: 'vless',
         encryptedLink,
         directLink,
         createdAt: new Date().toISOString()
@@ -2774,13 +2967,14 @@ async function startServer() {
       return;
     }
 
+    const { secretPassphrase: _secretPassphrase, ...safeMasterConfig } = loadMasterConfig();
     const backupData = {
       timestamp: new Date().toISOString(),
       version: '2.5.0-commercial',
-      masterConfig: loadMasterConfig(),
+      masterConfig: safeMasterConfig,
       protocolConfigs: loadProtocolConfigs(),
       users: loadUsers().map(u => ({ ...u, passwordHash: u.passwordHash })),
-      tokens: loadTokens(),
+      tokens: loadTokens().map(backupClientToken),
       transactions: loadTransactions()
     };
 
@@ -2806,12 +3000,13 @@ async function startServer() {
 
     // Safety snapshot before restoring
     const safetyBackupPath = path.resolve(backupsDir, `pre-restore-${Date.now()}.json`);
+    const { secretPassphrase: _secretPassphrase, ...safeMasterConfig } = loadMasterConfig();
     const currentSnapshot = {
       timestamp: new Date().toISOString(),
-      masterConfig: loadMasterConfig(),
+      masterConfig: safeMasterConfig,
       protocolConfigs: loadProtocolConfigs(),
       users: loadUsers(),
-      tokens: loadTokens(),
+      tokens: loadTokens().map(backupClientToken),
       transactions: loadTransactions()
     };
     writeJsonAtomically(safetyBackupPath, currentSnapshot);
@@ -2839,10 +3034,13 @@ async function startServer() {
         timestamp: new Date().toISOString(),
         type: 'AUTOMATIC_DAILY',
         version: '2.5.0-commercial',
-        masterConfig: loadMasterConfig(),
+        masterConfig: (() => {
+          const { secretPassphrase: _secretPassphrase, ...safeConfig } = loadMasterConfig();
+          return safeConfig;
+        })(),
         protocolConfigs: loadProtocolConfigs(),
         users: loadUsers().map(u => ({ ...u, passwordHash: u.passwordHash })),
-        tokens: loadTokens(),
+        tokens: loadTokens().map(backupClientToken),
         transactions: loadTransactions()
       };
       writeJsonAtomically(backupFile, backupData);
@@ -2931,7 +3129,8 @@ async function startServer() {
       res.status(403).json({ error: 'ACCÈS REFUSÉ : Les informations d\'infrastructure (Host, SNI, IP) sont confidentielles et réservées au Super Administrateur.' });
       return;
     }
-    res.json(loadMasterConfig());
+    const { secretPassphrase: _secretPassphrase, ...safeConfig } = loadMasterConfig();
+    res.json(safeConfig);
   });
 
   // Named protocol configurations: only the Super Administrator can create, edit or delete them.
@@ -3092,7 +3291,8 @@ async function startServer() {
     };
     saveMasterConfig(updated);
     syncXrayConfig();
-    res.json({ success: true, config: updated });
+    const { secretPassphrase: _secretPassphrase, ...safeConfig } = updated;
+    res.json({ success: true, config: safeConfig });
   });
 
   // ==========================================
@@ -3143,7 +3343,8 @@ async function startServer() {
   // ==========================================
   // APP VERSION & MANDATORY UPDATE MANAGEMENT
   // ==========================================
-  app.get('/api/v1/admin/app-version', authenticate, (_req, res) => {
+  app.get('/api/v1/admin/app-version', authenticate, (req, res) => {
+    if (!requireSuperAdmin(req, res)) return;
     res.json(loadAppVersionConfig());
   });
 
@@ -3321,7 +3522,8 @@ async function startServer() {
   // ==========================================
   // SERVER AUTOMATED UPDATE & HEALTH
   // ==========================================
-  app.get('/api/v1/admin/system/update-status', authenticate, async (_req, res) => {
+  app.get('/api/v1/admin/system/update-status', authenticate, async (req, res) => {
+    if (!requireSuperAdmin(req, res)) return;
     const status = await getServerUpdateStatus();
     res.json(status);
   });
@@ -3360,13 +3562,20 @@ async function startServer() {
 
     const tokens = loadTokens();
     const cleanToken = rawToken.toUpperCase();
-    const found = tokens.find(t => t.token.toUpperCase() === cleanToken || (cleanToken === 'ABESS-SSH-ORANGE-DANY' && t.id === 'tok_ssh_dany'));
-    const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim()
-      || req.socket.remoteAddress
-      || 'unknown';
+    const found = tokens.find(t => t.token.toUpperCase() === cleanToken);
+    const clientIp = req.ip || 'unknown';
 
     if (!found) {
       res.status(401).json({ valid: false, error: 'Token client non reconnu ou révoqué.' });
+      return;
+    }
+
+    if (found.protocolType === 'ssh' || found.sshConfig) {
+      res.status(410).json({
+        valid: false,
+        status: 'unsupported_protocol',
+        error: 'Les anciennes licences SSH sont suspendues. Le provisionneur SSH sécurisé n’est pas disponible sur cette architecture.'
+      });
       return;
     }
 
@@ -3381,12 +3590,11 @@ async function startServer() {
     }
 
     const now = Date.now();
-    const isSsh = found.protocolType === 'ssh' || !!found.sshConfig;
-    const profile = isSsh ? null : protocolConfigForToken(found, loadProtocolConfigs());
+    const profile = protocolConfigForToken(found, loadProtocolConfigs());
     const profileSniError = profile
       ? tlsSniValidationError(profile.transport, profile.sniHost)
       : null;
-    if (!isSsh && (!profile || !isValidPublicHost(profile.serverHost) || profileSniError)) {
+    if (!profile || !isValidPublicHost(profile.serverHost) || profileSniError) {
       res.status(503).json({
         valid: false,
         error: profileSniError || 'La configuration VPN associée à cette licence est indisponible. Contactez le Super Administrateur.'
@@ -3454,44 +3662,6 @@ async function startServer() {
 
     const msRemaining = Math.max(0, expiryTime - now);
     const daysRemaining = Math.ceil(msRemaining / (1000 * 3600 * 24));
-
-    if (isSsh) {
-      const sshJson = generateSshConfigJson(found);
-      const firstCfg = (sshJson.configs as any[])[0];
-      const sshCfg = firstCfg.sshConfig;
-      res.json({
-        valid: true,
-        token: found.token,
-        plan: found.plan,
-        reseller: found.resellerName,
-        expiresAt: found.expiresAt,
-        daysRemaining,
-        deviceLimit,
-        registeredDevices: knownDevices.length,
-        bandwidthGb: found.bandwidthGb,
-        bandwidthUsedGb: Number(found.bandwidthUsedGb.toFixed(2)),
-        bandwidthRemainingGb: Number(Math.max(0, found.bandwidthGb - found.bandwidthUsedGb).toFixed(2)),
-        status: found.status,
-        protocol: 'SSH',
-        configs: sshJson.configs,
-        sshConfig: sshCfg,
-        serverConfig: {
-          address: sshCfg.sshHost,
-          port: Number(sshCfg.sshPort) || 80,
-          path: '/@abess237',
-          uuid: `${sshCfg.sshUsername}:${sshCfg.sshPassword}`,
-          sni: sshCfg.sshHost,
-          host: sshCfg.sshHost,
-          wsHost: 'm.batch.com',
-          protocol: 'ssh',
-          transport: 'ws',
-          security: 'none',
-          method: sshCfg.payload,
-          allowedDeviceId: found.allowedDeviceId || undefined
-        }
-      });
-      return;
-    }
 
     res.json({
       valid: true,
@@ -3574,31 +3744,12 @@ async function startServer() {
     }
   });
 
-  // Dedicated SSH Config JSON Endpoint
-  app.get(['/api/v1/ssh/config/:token', '/ssh/config/:token'], publicApiRateLimiter, (req, res) => {
-    const rawToken = String(req.params.token || '').trim();
-    if (!rawToken) {
-      res.status(400).json({ error: 'Jeton requis.' });
-      return;
-    }
-    const tokens = loadTokens();
-    const cleanToken = rawToken.toUpperCase();
-    const matched = tokens.find(t =>
-      t.token.toUpperCase() === cleanToken ||
-      (cleanToken === 'ABESS-SSH-ORANGE-DANY' && t.id === 'tok_ssh_dany') ||
-      (t.clientUuid && t.clientUuid.toLowerCase() === rawToken.toLowerCase()) ||
-      t.id === rawToken
-    );
-    if (!matched) {
-      res.status(404).json({ error: 'Abonnement introuvable.' });
-      return;
-    }
-    const sshJson = generateSshConfigJson(matched);
-    res.setHeader('Content-Type', 'application/json; charset=utf-8');
-    if (req.query.download === '1') {
-      res.setHeader('Content-Disposition', `attachment; filename="${matched.token}-ssh.json"`);
-    }
-    res.send(JSON.stringify(sshJson, null, 2));
+  // Legacy SSH config endpoint retired: it could disclose stored plaintext passwords.
+  app.get(['/api/v1/ssh/config/:token', '/ssh/config/:token'], publicApiRateLimiter, (_req, res) => {
+    res.status(410).json({
+      ok: false,
+      error: 'La distribution des anciennes configurations SSH est désactivée. Aucun mot de passe SSH ne sera renvoyé par cette API.'
+    });
   });
 
   // Presets of tested SSH HTTP Payloads (Orange Cameroon, MTN, Generic)
@@ -3643,24 +3794,23 @@ async function startServer() {
     }
     const tokens = loadTokens();
     const cleanToken = rawToken.toUpperCase();
-    const matched = tokens.find(t =>
-      t.token.toUpperCase() === cleanToken ||
-      (cleanToken === 'ABESS-SSH-ORANGE-DANY' && t.id === 'tok_ssh_dany') ||
-      (t.clientUuid && t.clientUuid.toLowerCase() === rawToken.toLowerCase()) ||
-      t.id === rawToken
-    );
+    const matched = tokens.find(t => t.token.toUpperCase() === cleanToken);
     if (!matched) {
       res.status(404).send('Abonnement introuvable.');
       return;
     }
-
     if (matched.protocolType === 'ssh' || matched.sshConfig) {
-      const sshJson = generateSshConfigJson(matched);
-      res.setHeader('Content-Type', 'application/json; charset=utf-8');
-      if (req.query.download === '1') {
-        res.setHeader('Content-Disposition', `attachment; filename="${matched.token}-ssh.json"`);
-      }
-      res.send(JSON.stringify(sshJson, null, 2));
+      res.status(410).send('Les anciennes licences SSH sont suspendues. Aucun identifiant SSH ne sera distribué.');
+      return;
+    }
+
+    const subscriptionExpiry = new Date(matched.expiresAt).getTime();
+    const subscriptionInvalid = matched.status !== 'active' ||
+      !Number.isFinite(subscriptionExpiry) ||
+      subscriptionExpiry <= Date.now() ||
+      Number(matched.bandwidthUsedGb) >= Number(matched.bandwidthGb);
+    if (subscriptionInvalid) {
+      res.status(403).send('Compte inactif, expiré ou quota dépassé.');
       return;
     }
 
@@ -3719,12 +3869,12 @@ async function startServer() {
           support_phone: matched.customerContact || '+237690123456'
         };
 
-        html = html.replace(/\{\{USER_NAME\}\}/g, userName);
-        html = html.replace(/\{\{USER_TOKEN\}\}/g, matched.token);
-        html = html.replace(/\{\{PANEL_TITLE\}\}/g, panelTitle);
-        html = html.replace(/\{\{VLESS_URI\}\}/g, primaryUri);
-        html = html.replace(/\{\{QR_CODE\}\}/g, primaryQr);
-        html = html.replace(/\{\{SUB_DATA_JSON\}\}/g, JSON.stringify(subData));
+        html = html.replace(/\{\{USER_NAME\}\}/g, escapeHtmlText(userName));
+        html = html.replace(/\{\{USER_TOKEN\}\}/g, escapeHtmlText(matched.token));
+        html = html.replace(/\{\{PANEL_TITLE\}\}/g, escapeHtmlText(panelTitle));
+        html = html.replace(/\{\{VLESS_URI\}\}/g, escapeHtmlText(primaryUri));
+        html = html.replace(/\{\{QR_CODE\}\}/g, escapeHtmlText(primaryQr));
+        html = html.replace(/\{\{SUB_DATA_JSON\}\}/g, serializeSafeInlineJson(subData));
 
         res.setHeader('Content-Type', 'text/html; charset=utf-8');
         res.send(html);
@@ -3733,13 +3883,6 @@ async function startServer() {
     }
 
     // Raw VPN Subscription Response
-    const isExpired = Number.isFinite(new Date(matched.expiresAt).getTime()) && new Date(matched.expiresAt).getTime() <= Date.now();
-    const isExceeded = Number(matched.bandwidthUsedGb) >= Number(matched.bandwidthGb);
-    if (matched.status !== 'active' || isExpired || isExceeded) {
-      res.status(403).send('Compte inactif, expiré ou quota dépassé.');
-      return;
-    }
-
     const rawUris = variants.map(v => v.uri).join('\n');
     const b64Sub = Buffer.from(rawUris, 'utf8').toString('base64');
 
@@ -3910,7 +4053,7 @@ async function startServer() {
   // ==========================================
   // 9. ONBOARDING & MEMBERSHIP REQUESTS
   // ==========================================
-  app.post(['/api/membership/request', '/api/v1/membership/request'], (req, res) => {
+  app.post(['/api/membership/request', '/api/v1/membership/request'], publicApiRateLimiter, (req, res) => {
     const { firstName, lastName, countryCode, channel, contactDetail, deviceId, deviceModel, deviceOs, planId, paymentMethod, paymentRef } = req.body;
     if (!firstName || !lastName || !contactDetail) {
       res.status(400).json({ error: 'Prénom, nom et contact requis.' });
@@ -3919,7 +4062,7 @@ async function startServer() {
     const countries = loadAfricanCountries();
     const cCode = String(countryCode || 'CM').toUpperCase();
     const country = countries.find((c: any) => c.code === cCode) || countries[0];
-    const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.socket.remoteAddress || '127.0.0.1';
+    const clientIp = req.ip || 'unknown';
 
     const plans = loadPlans();
     const plan = plans.find(p => p.id === planId) || plans[0];
@@ -3943,7 +4086,7 @@ async function startServer() {
     }
 
     const newReq: MembershipRequest = {
-      id: `req_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      id: `req_${crypto.randomUUID()}`,
       firstName: String(firstName).trim(),
       lastName: String(lastName).trim(),
       fullName: `${String(firstName).trim()} ${String(lastName).trim()}`,
@@ -3969,11 +4112,17 @@ async function startServer() {
     res.json({ status: 'pending', request: newReq, message: 'Demande enregistrée avec succès. Vous recevrez un accès dès validation.' });
   });
 
-  app.get(['/api/membership/status', '/api/v1/membership/status'], (req, res) => {
+  app.get(['/api/membership/status', '/api/v1/membership/status'], publicApiRateLimiter, (req, res) => {
     const deviceId = req.query.device_id ? String(req.query.device_id).trim() : '';
     const requestId = req.query.request_id ? String(req.query.request_id).trim() : '';
     const requests = loadRequests();
-    const reqFound = requests.find(r => (requestId && r.id === requestId) || (deviceId && r.deviceId === deviceId));
+    if (!requestId && !deviceId) {
+      res.status(400).json({ status: 'invalid_request', message: 'request_id ou device_id requis.' });
+      return;
+    }
+    const reqFound = requests.find(r =>
+      (!requestId || r.id === requestId) && (!deviceId || r.deviceId === deviceId)
+    );
     if (!reqFound) {
       res.status(404).json({ status: 'not_found', message: 'Aucune demande trouvée pour cet appareil.' });
       return;
@@ -3994,42 +4143,83 @@ async function startServer() {
     }
     res.json({
       status: reqFound.status.toLowerCase(),
-      request: reqFound,
+      request: {
+        id: reqFound.id,
+        status: reqFound.status,
+        planName: reqFound.planName,
+        submittedAt: reqFound.submittedAt,
+        processedAt: reqFound.processedAt,
+        rejectionReason: reqFound.status === 'REJECTED' ? reqFound.rejectionReason : undefined
+      },
       message: reqFound.status === 'PENDING' ? 'Demande en cours d\'examen par un administrateur.' : 'Demande rejetée.'
     });
   });
 
   function generateTokenCode(): string {
-    const p1 = Math.random().toString(36).substring(2, 6).toUpperCase();
-    const p2 = Math.random().toString(36).substring(2, 6).toUpperCase();
-    return `ABESS-${p1}-${p2}`;
+    return generateUnifiedToken();
   }
 
-  app.get(['/api/admin/requests', '/api/v1/admin/requests'], authenticate, (_req, res) => {
+  app.get(['/api/admin/requests', '/api/v1/admin/requests'], authenticate, (req, res) => {
+    if (!requireSuperAdmin(req, res)) return;
     res.json(loadRequests());
   });
 
   app.post(['/api/admin/requests/:id/approve', '/api/v1/admin/requests/:id/approve'], authenticate, (req, res) => {
     const user: AppUser = (req as any).user;
+    if (!requireSuperAdmin(req, res)) return;
     const requests = loadRequests();
     const reqItem = requests.find(r => r.id === req.params.id);
     if (!reqItem) {
       res.status(404).json({ error: 'Demande introuvable.' });
       return;
     }
+    if (reqItem.status !== 'PENDING') {
+      res.status(409).json({ error: 'Cette demande a déjà été traitée.' });
+      return;
+    }
     const plans = loadPlans();
     const selectedPlan = plans.find(p => p.id === (req.body?.planId || reqItem.planId)) || plans[1] || plans[0];
+    if (
+      !selectedPlan ||
+      !Number.isFinite(Number(selectedPlan.quotaGb)) ||
+      Number(selectedPlan.quotaGb) <= 0 ||
+      !Number.isFinite(Number(selectedPlan.durationDays)) ||
+      Number(selectedPlan.durationDays) <= 0
+    ) {
+      res.status(409).json({ error: 'Aucun forfait actif et valide ne peut être associé à cette demande.' });
+      return;
+    }
 
     const tokens = loadTokens();
-    const tokenStr = generateTokenCode();
+    let tokenStr = generateTokenCode();
+    while (tokens.some(existing => existing.token.toUpperCase() === tokenStr)) {
+      tokenStr = generateTokenCode();
+    }
     const uuid = crypto.randomUUID();
     const days = selectedPlan.durationDays;
     const bandwidthGb = selectedPlan.quotaGb;
     const expiresAt = new Date(Date.now() + days * 24 * 3600 * 1000).toISOString();
 
-    const masterConfig = loadMasterConfig();
     const protocolConfigs = loadProtocolConfigs();
     const profile = protocolConfigs[0];
+    if (!profile || !isXrayProtocol(profile.protocol)) {
+      res.status(503).json({
+        error: 'Impossible d’approuver cette demande : aucun profil VLESS provisionnable n’est configuré.'
+      });
+      return;
+    }
+    const profileSniError = tlsSniValidationError(profile.transport, profile.sniHost);
+    if (!isValidPublicHost(profile.serverHost) || profileSniError) {
+      res.status(503).json({
+        error: profileSniError || 'Le profil VLESS ne possède pas une destination publique valide.'
+      });
+      return;
+    }
+    const masterSecret = process.env.MASTER_SECRET || loadMasterConfig().secretPassphrase;
+    if (!masterSecret || masterSecret.length < 32) {
+      res.status(503).json({ error: 'MASTER_SECRET est absent ou invalide. La demande n’a pas été approuvée.' });
+      return;
+    }
 
     const dummyToken: ClientToken = {
       id: 'tok_' + crypto.randomUUID(),
@@ -4049,16 +4239,17 @@ async function startServer() {
       lastSeenAt: null,
       lastSeenIp: null,
       status: 'active',
-      configurationId: profile?.id,
-      configurationName: profile?.name,
-      configurationSnapshot: profile,
+      configurationId: profile.id,
+      configurationName: profile.name,
+      configurationSnapshot: publicProtocolConfig(profile),
+      protocolType: 'vless',
       customerNote: reqItem.fullName,
       customerContact: reqItem.contactDetail,
       encryptedLink: '',
       createdAt: new Date().toISOString()
     };
-    dummyToken.encryptedLink = encryptConfig({ token: tokenStr, v: 2 }, masterConfig.secretPassphrase);
-    dummyToken.directLink = profile ? buildDirectProtocolUrl(dummyToken, profile) : undefined;
+    dummyToken.encryptedLink = encryptConfig({ token: tokenStr, v: 2 }, masterSecret);
+    dummyToken.directLink = buildDirectProtocolUrl(dummyToken, profile);
 
     tokens.push(dummyToken);
     saveTokens(tokens);
@@ -4076,11 +4267,12 @@ async function startServer() {
       details: `Approbation de la demande de ${reqItem.fullName} -> Token ${tokenStr} (${selectedPlan.name})`
     });
 
-    res.json({ ok: true, status: 'approved', token: dummyToken });
+    res.json({ ok: true, status: 'approved', token: safeClientToken(dummyToken) });
   });
 
   app.post(['/api/admin/requests/:id/reject', '/api/v1/admin/requests/:id/reject'], authenticate, (req, res) => {
     const user: AppUser = (req as any).user;
+    if (!requireSuperAdmin(req, res)) return;
     const requests = loadRequests();
     const reqItem = requests.find(r => r.id === req.params.id);
     if (!reqItem) {
@@ -4103,6 +4295,7 @@ async function startServer() {
   });
 
   app.delete(['/api/admin/requests/:id', '/api/v1/admin/requests/:id'], authenticate, (req, res) => {
+    if (!requireSuperAdmin(req, res)) return;
     const requests = loadRequests();
     const updated = requests.filter(r => r.id !== req.params.id);
     saveRequests(updated);
@@ -4112,214 +4305,92 @@ async function startServer() {
   // ==========================================
   // 10. VPN TELEMETRY & HEARTBEAT ENGINE
   // ==========================================
-  app.post(['/api/vpn/heartbeat', '/api/traffic/heartbeat', '/api/v1/vpn/heartbeat'], (req, res) => {
-    const { token: reqToken, uuid: reqUuid, device_id: deviceId, bytes_up = 0, bytes_down = 0, bytes_delta = 0, client_ip, device_model, os_version } = req.body || {};
-    const tokens = loadTokens();
-    const cleanTok = String(reqToken || '').trim().toUpperCase();
-    const cleanUuid = String(reqUuid || '').trim().toLowerCase();
-    const cleanDev = String(deviceId || '').trim();
-
-    let matched = tokens.find(t =>
-      (cleanTok && t.token.toUpperCase() === cleanTok) ||
-      (cleanUuid && (t.clientUuid || '').toLowerCase() === cleanUuid) ||
-      (cleanDev && Array.isArray(t.deviceIds) && t.deviceIds.includes(cleanDev))
-    );
-
-    if (!matched) {
-      res.json({
-        status: 'revoked',
-        should_disconnect: true,
-        disconnect_reason: 'Identifiants ou token non reconnus.'
-      });
-      return;
-    }
-
-    // Auto-activation on first use
-    if (matched.on_hold) {
-      matched.on_hold = false;
-      matched.firstConnectedAt = new Date().toISOString();
-      matched.expiresAt = new Date(Date.now() + matched.days * 86400000).toISOString();
-    }
-
-    // Device binding
-    if (cleanDev) {
-      if (!Array.isArray(matched.deviceIds)) matched.deviceIds = [];
-      if (!matched.deviceIds.includes(cleanDev)) {
-        if (matched.deviceIds.length >= matched.deviceLimit) {
-          res.json({
-            status: 'device_limit_reached',
-            should_disconnect: true,
-            disconnect_reason: `Limite d'appareils atteinte (${matched.deviceLimit}).`
-          });
-          return;
-        }
-        matched.deviceIds.push(cleanDev);
-      }
-    }
-
-    // Traffic delta accounting
-    let deltaBytes = Number(bytes_delta) || 0;
-    if (deltaBytes === 0 && (bytes_up > 0 || bytes_down > 0)) {
-      deltaBytes = Number(bytes_up) + Number(bytes_down);
-    }
-    if (deltaBytes > 0) {
-      const deltaGb = deltaBytes / (1024 ** 3);
-      matched.bandwidthUsedGb = Math.min(matched.bandwidthGb, matched.bandwidthUsedGb + deltaGb);
-    }
-
-    matched.lastSeenAt = new Date().toISOString();
-    if (client_ip) matched.lastSeenIp = String(client_ip);
-    matched.connectionCount = (matched.connectionCount || 0) + 1;
-
-    const isExpired = Number.isFinite(new Date(matched.expiresAt).getTime()) && new Date(matched.expiresAt).getTime() <= Date.now();
-    const isQuotaExceeded = matched.bandwidthUsedGb >= matched.bandwidthGb;
-
-    if (isExpired) matched.status = 'expired';
-    else if (isQuotaExceeded) matched.status = 'quota_exceeded';
-
-    saveTokens(tokens);
-
-    if (matched.status !== 'active') {
-      res.json({
-        status: matched.status,
-        should_disconnect: true,
-        disconnect_reason: matched.status === 'expired' ? 'Forfait arrivé à expiration.' : 'Quota de données épuisé.'
-      });
-      return;
-    }
-
-    const master = loadMasterConfig();
-    res.json({
-      status: 'ok',
-      should_disconnect: false,
-      user: {
-        token: matched.token,
-        uuid: matched.clientUuid || matched.token,
-        plan: matched.plan,
-        bandwidthGb: matched.bandwidthGb,
-        bandwidthUsedGb: Number(matched.bandwidthUsedGb.toFixed(3)),
-        expiresAt: matched.expiresAt
-      },
-      config: {
-        host: master.serverHost || 'panel.pagnol.xyz',
-        target_server: `${master.serverHost || 'panel.pagnol.xyz'}:${master.serverPort || 443}`,
-        sni: master.sniHost || master.serverHost,
-        path: master.path || '/@abess237'
-      }
+  app.post(['/api/vpn/heartbeat', '/api/traffic/heartbeat', '/api/v1/vpn/heartbeat'], (_req, res) => {
+    res.status(410).json({
+      ok: false,
+      error: 'Cette ancienne API de heartbeat est désactivée. Les quotas sont désormais comptabilisés exclusivement par Xray-core.'
     });
   });
 
-  app.post(['/api/token/verify', '/api/v1/token/verify'], (req, res) => {
-    const rawCode = String(req.body?.token || req.body?.code || '').trim().toUpperCase();
-    const deviceId = req.body?.deviceId ? String(req.body.deviceId).trim() : undefined;
-    if (!rawCode) {
-      res.status(400).json({ error: 'Code ou token requis.' });
-      return;
-    }
-    const tokens = loadTokens();
-    const found = tokens.find(t => t.token.toUpperCase() === rawCode || (t.clientUuid && t.clientUuid.toUpperCase() === rawCode));
-    if (!found) {
-      res.status(404).json({ error: 'Code voucher ou token introuvable.' });
-      return;
-    }
-    if (deviceId) {
-      if (!Array.isArray(found.deviceIds)) found.deviceIds = [];
-      if (!found.deviceIds.includes(deviceId) && found.deviceIds.length < found.deviceLimit) {
-        found.deviceIds.push(deviceId);
-        saveTokens(tokens);
-      }
-    }
-    const variants = generateUserVlessVariants(found);
-    res.json({
-      status: found.status,
-      token: found.token,
-      uuid: found.clientUuid,
-      plan: found.plan,
-      bandwidthGb: found.bandwidthGb,
-      bandwidthUsedGb: found.bandwidthUsedGb,
-      expiresAt: found.expiresAt,
-      variants,
-      subUrl: `/sub/${found.token}`
+  app.post(['/api/token/verify', '/api/v1/token/verify'], (_req, res) => {
+    res.status(410).json({
+      ok: false,
+      error: 'Cette ancienne API de validation est désactivée. Utilisez /api/v1/auth/token.'
     });
   });
 
-  app.post(['/api/users/quick-trial', '/api/v1/users/quick-trial'], (req, res) => {
-    const tokens = loadTokens();
-    const tokenStr = generateTokenCode();
-    const uuid = crypto.randomUUID();
-    const days = 1;
-    const bandwidthGb = 2.0;
-    const expiresAt = new Date(Date.now() + days * 24 * 3600 * 1000).toISOString();
-
-    const masterConfig = loadMasterConfig();
-    const protocolConfigs = loadProtocolConfigs();
-    const profile = protocolConfigs[0];
-
-    const trialToken: ClientToken = {
-      id: 'tok_' + crypto.randomUUID(),
-      token: tokenStr,
-      clientUuid: uuid,
-      resellerId: 'trial_system',
-      resellerName: 'Essai Automatique',
-      plan: 'Essai Gratuit 24h',
-      bandwidthGb,
-      bandwidthUsedGb: 0,
-      expiresAt,
-      days,
-      deviceLimit: 1,
-      deviceIds: req.body?.deviceId ? [String(req.body.deviceId).trim()] : [],
-      connectionCount: 0,
-      lastSeenAt: null,
-      lastSeenIp: null,
-      status: 'active',
-      configurationId: profile?.id,
-      configurationName: profile?.name,
-      configurationSnapshot: profile,
-      customerNote: req.body?.name || 'Essai Client',
-      encryptedLink: '',
-      createdAt: new Date().toISOString()
-    };
-    trialToken.encryptedLink = encryptConfig({ token: tokenStr, v: 2 }, masterConfig.secretPassphrase);
-    trialToken.directLink = profile ? buildDirectProtocolUrl(trialToken, profile) : undefined;
-
-    tokens.push(trialToken);
-    saveTokens(tokens);
-
-    res.json({
-      ok: true,
-      token: trialToken.token,
-      uuid: trialToken.clientUuid,
-      expiresAt: trialToken.expiresAt,
-      bandwidthGb: trialToken.bandwidthGb,
-      subUrl: `/sub/${trialToken.token}`,
-      variants: generateUserVlessVariants(trialToken)
+  app.post(['/api/users/quick-trial', '/api/v1/users/quick-trial'], (_req, res) => {
+    res.status(410).json({
+      ok: false,
+      error: 'Les essais gratuits via cette ancienne route sont désactivés. Le dispositif anti-fraude doit être activé avant toute émission.'
     });
   });
 
   // ==========================================
   // 11. NETWORK PROBE & SYSTEM DIAGNOSTICS & AUDIT LOGS
   // ==========================================
-  app.post(['/api/probe', '/api/v1/probe'], async (req, res) => {
-    const target = String(req.body?.target_server || req.body?.target || '192.179.18.100:443').trim();
-    const sni = String(req.body?.sni || 'crashlyticsreports-pa.googleapis.com').trim();
-    const result = await probeEndpoint(target, sni);
-    res.json(result);
+  app.post(['/api/probe', '/api/v1/probe'], authenticate, async (req, res) => {
+    if (!requireSuperAdmin(req, res)) return;
+    const target = String(req.body?.target_server || req.body?.target || '').trim();
+    const sni = String(req.body?.sni || '').trim();
+    const match = /^([A-Za-z0-9.-]+)(?::([0-9]{1,5}))?$/.exec(target);
+    if (!match || !isValidPublicHost(match[1]) || (sni && !isValidPublicHost(sni))) {
+      res.status(400).json({ ok: false, error: 'La cible et le SNI doivent être des noms DNS publics valides.' });
+      return;
+    }
+    const port = match[2] ? Number(match[2]) : 443;
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      res.status(400).json({ ok: false, error: 'Port réseau invalide.' });
+      return;
+    }
+    try {
+      const addresses = await dnsLookup(match[1], { all: true, verbatim: true });
+      const isPublicIpv4 = (address: string): boolean => {
+        const parts = address.split('.').map(Number);
+        if (parts.length !== 4 || parts.some(part => !Number.isInteger(part) || part < 0 || part > 255)) return false;
+        const [a, b, c] = parts;
+        return !(
+          a === 0 || a === 10 || a === 127 || a >= 224 ||
+          (a === 169 && b === 254) ||
+          (a === 172 && b >= 16 && b <= 31) ||
+          (a === 192 && b === 168) ||
+          (a === 100 && b >= 64 && b <= 127) ||
+          (a === 192 && b === 0 && (c === 0 || c === 2)) ||
+          (a === 198 && (b === 18 || b === 19 || (b === 51 && c === 100))) ||
+          (a === 203 && b === 0 && c === 113)
+        );
+      };
+      if (!addresses.length || addresses.some(item => item.family !== 4 || !isPublicIpv4(item.address))) {
+        res.status(400).json({ ok: false, error: 'La cible doit résoudre exclusivement vers des adresses IPv4 publiques.' });
+        return;
+      }
+      // Connect to the exact address that was validated above. Passing the
+      // hostname again would trigger a second DNS lookup and permit rebinding.
+      const result = await probeEndpoint(`${addresses[0].address}:${port}`, sni || match[1]);
+      res.json(result);
+    } catch {
+      res.status(400).json({ ok: false, error: 'Impossible de résoudre une cible publique valide.' });
+    }
   });
 
-  app.get(['/api/system/diagnostics', '/api/v1/system/diagnostics'], authenticate, (_req, res) => {
+  app.get(['/api/system/diagnostics', '/api/v1/system/diagnostics'], authenticate, (req, res) => {
+    if (!requireSuperAdmin(req, res)) return;
     res.json(getSystemDiagnostics());
   });
 
-  app.get(['/api/system/audit-logs', '/api/v1/admin/audit-logs'], authenticate, (_req, res) => {
+  app.get(['/api/system/audit-logs', '/api/v1/admin/audit-logs'], authenticate, (req, res) => {
+    if (!requireSuperAdmin(req, res)) return;
     res.json(loadAuditLogs());
   });
 
-  app.get(['/api/system/backup', '/api/v1/admin/system/backup'], authenticate, (_req, res) => {
+  app.get(['/api/system/backup', '/api/v1/admin/system/backup'], authenticate, (req, res) => {
+    if (!requireSuperAdmin(req, res)) return;
+    const { secretPassphrase: _secretPassphrase, ...safeConfig } = loadMasterConfig();
     res.setHeader('Content-Disposition', `attachment; filename="abessvpn-full-backup-${Date.now()}.json"`);
     res.json({
       users: loadUsers(),
-      tokens: loadTokens(),
-      config: loadMasterConfig(),
+      tokens: loadTokens().map(backupClientToken),
+      config: safeConfig,
       protocolConfigs: loadProtocolConfigs(),
       transactions: loadTransactions(),
       plans: loadPlans(),
@@ -4362,6 +4433,14 @@ async function startServer() {
     const token = tokens.find(t => t.id === req.params.id);
     if (!token) {
       res.status(404).json({ error: 'Token introuvable.' });
+      return;
+    }
+    if (token.protocolType === 'ssh' || token.sshConfig) {
+      res.status(410).json({ ok: false, error: 'Les anciennes licences SSH ne disposent plus de variantes exportables.' });
+      return;
+    }
+    if (!canManageToken((req as any).user as AppUser, token.resellerId, loadUsers())) {
+      res.status(403).json({ error: 'Vous ne pouvez consulter que vos propres licences ou celles de vos sous-revendeurs.' });
       return;
     }
     const protocolConfigs = loadProtocolConfigs();
@@ -4438,33 +4517,15 @@ async function startServer() {
   const autoBackupTimer = setInterval(performAutoBackup, 24 * 3600 * 1000);
   autoBackupTimer.unref();
 
-  // Active Dropbear SSH device limit enforcer daemon (every 30s)
-  const sshLimitTimer = setInterval(enforceSshDeviceLimits, 30 * 1000);
-  sshLimitTimer.unref();
+  // SSH provisioning is retired; do not run a background Dropbear account manager.
 
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`[ABESSVPN MASTER SERVER] Running on port ${PORT}`);
     console.log(`[ABESSVPN MASTER SERVER] Control plane listening on ${PORT}; VPN domain: ${process.env.VPN_DOMAIN}`);
   });
 
-  // Automated background server updater: checks every 6 hours if git remote has updates
-  const autoUpdateTimer = setInterval(async () => {
-    try {
-      const status = await getServerUpdateStatus();
-      if (status.hasUpdate && status.isGitRepo) {
-        console.log(`[AUTO-UPDATE] Mise à jour distante détectée (${status.currentCommit} -> ${status.remoteCommit}). Application automatique...`);
-        const updateResult = await executeServerUpdate();
-        if (updateResult.success) {
-          console.log(`[AUTO-UPDATE] ✅ Serveur mis à jour avec succès vers ${updateResult.currentCommit}`);
-        } else {
-          console.error(`[AUTO-UPDATE] ❌ Échec mise à jour automatique:`, updateResult.output);
-        }
-      }
-    } catch {
-      // background silent error
-    }
-  }, 6 * 3600 * 1000);
-  autoUpdateTimer.unref();
+  // Production updates are never applied in the background. The Super Admin
+  // may inspect update-status and invoke the explicit, build-checked updater.
 
   // Start Integrated Telegram Management Bot (if configured in .env)
   const tgBotToken = process.env.TELEGRAM_BOT_TOKEN?.trim();
