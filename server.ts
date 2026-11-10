@@ -2467,7 +2467,7 @@ async function startServer() {
     const customerNote = req.body?.customerNote?.toString()?.trim() || undefined;
     const customerContact = req.body?.customerContact?.toString()?.trim() || undefined;
 
-    const defaultHost = process.env.VPN_DOMAIN || 'server.nexustunnel.me';
+    const defaultHost = process.env.VPN_DOMAIN || '';
     let encryptedLink = '';
     let directLink = '';
     let sshConfigData: ClientToken['sshConfig'] | undefined = undefined;
@@ -2607,7 +2607,7 @@ async function startServer() {
     for (let i = 0; i < count; i++) {
       const finalToken = generateUnifiedToken();
       const clientUuid = crypto.randomUUID();
-      const defaultHost = process.env.VPN_DOMAIN || 'server.nexustunnel.me';
+      const defaultHost = process.env.VPN_DOMAIN || '';
 
       let encryptedLink = '';
       let directLink = '';
@@ -3367,10 +3367,8 @@ async function startServer() {
 
     const tokens = loadTokens();
     const cleanToken = rawToken.toUpperCase();
-    const found = tokens.find(t => t.token.toUpperCase() === cleanToken || (cleanToken === 'ABESS-SSH-ORANGE-DANY' && t.id === 'tok_ssh_dany'));
-    const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim()
-      || req.socket.remoteAddress
-      || 'unknown';
+    const found = tokens.find(t => t.token.toUpperCase() === cleanToken);
+    const clientIp = req.socket.remoteAddress || 'unknown';
 
     if (!found) {
       res.status(401).json({ valid: false, error: 'Token client non reconnu ou révoqué.' });
@@ -3916,7 +3914,7 @@ async function startServer() {
   // ==========================================
   // 9. ONBOARDING & MEMBERSHIP REQUESTS
   // ==========================================
-  app.post(['/api/membership/request', '/api/v1/membership/request'], (req, res) => {
+  app.post(['/api/membership/request', '/api/v1/membership/request'], publicApiRateLimiter, (req, res) => {
     const { firstName, lastName, countryCode, channel, contactDetail, deviceId, deviceModel, deviceOs, planId, paymentMethod, paymentRef } = req.body;
     if (!firstName || !lastName || !contactDetail) {
       res.status(400).json({ error: 'Prénom, nom et contact requis.' });
@@ -3925,7 +3923,7 @@ async function startServer() {
     const countries = loadAfricanCountries();
     const cCode = String(countryCode || 'CM').toUpperCase();
     const country = countries.find((c: any) => c.code === cCode) || countries[0];
-    const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.socket.remoteAddress || '127.0.0.1';
+    const clientIp = req.socket.remoteAddress || 'unknown';
 
     const plans = loadPlans();
     const plan = plans.find(p => p.id === planId) || plans[0];
@@ -3949,7 +3947,7 @@ async function startServer() {
     }
 
     const newReq: MembershipRequest = {
-      id: `req_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      id: `req_${crypto.randomUUID()}`,
       firstName: String(firstName).trim(),
       lastName: String(lastName).trim(),
       fullName: `${String(firstName).trim()} ${String(lastName).trim()}`,
@@ -3975,7 +3973,7 @@ async function startServer() {
     res.json({ status: 'pending', request: newReq, message: 'Demande enregistrée avec succès. Vous recevrez un accès dès validation.' });
   });
 
-  app.get(['/api/membership/status', '/api/v1/membership/status'], (req, res) => {
+  app.get(['/api/membership/status', '/api/v1/membership/status'], publicApiRateLimiter, (req, res) => {
     const deviceId = req.query.device_id ? String(req.query.device_id).trim() : '';
     const requestId = req.query.request_id ? String(req.query.request_id).trim() : '';
     const requests = loadRequests();
