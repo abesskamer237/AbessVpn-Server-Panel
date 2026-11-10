@@ -428,7 +428,7 @@ jobs:
             exit 1
           fi
           if [ "$ssh_ws_origin" != "$VPS_HOST" ]; then
-            "$HOME/.local/bin/abess-ssh" -p "$VPS_PORT" -o StrictHostKeyChecking=yes "$DEST" 'bash "$HOME/abessvpn-server/scripts/diagnose-ssh-origin.sh"' || true
+            "$HOME/.local/bin/abess-ssh" -p "$VPS_PORT" -o StrictHostKeyChecking=yes "$DEST" 'bash abessvpn-server/scripts/diagnose-ssh-origin.sh' || true
             echo "::error::The running API did not load the deployed SSH_WS_HOST (running public origin: ${ssh_ws_origin}). Refusing to distribute an outdated SSH-WS origin." >&2
             exit 1
           fi
