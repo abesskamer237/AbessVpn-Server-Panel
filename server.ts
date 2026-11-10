@@ -1734,13 +1734,31 @@ async function startServer() {
   app.set('trust proxy', 'uniquelocal');
   app.use(express.json());
 
-  // CORS
+  // Same-origin panel access plus explicit local development or configured origins.
+  const allowedOrigins = new Set<string>([
+    `https://${vpnDomain}`,
+    'http://localhost:5173',
+    'http://127.0.0.1:5173',
+    ...(process.env.CORS_ALLOWED_ORIGINS || '')
+      .split(',')
+      .map(origin => origin.trim())
+      .filter(Boolean)
+  ]);
+
   app.use((req, res, next) => {
-    res.header('Access-Control-Allow-Origin', '*');
+    const origin = req.headers.origin;
+    if (typeof origin === 'string') {
+      if (!allowedOrigins.has(origin)) {
+        res.status(403).json({ error: 'Origine non autorisée.' });
+        return;
+      }
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Vary', 'Origin');
+    }
     res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
     res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
     if (req.method === 'OPTIONS') {
-      res.sendStatus(200);
+      res.sendStatus(204);
       return;
     }
     next();
