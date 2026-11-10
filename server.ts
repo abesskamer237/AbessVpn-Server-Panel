@@ -1303,7 +1303,7 @@ function loadProtocolConfigs(): ProtocolConfig[] {
       if (Array.isArray(parsed) && parsed.length > 0) {
         const valid = parsed.filter((item: any) =>
           item && typeof item.id === 'string' && typeof item.name === 'string' &&
-          isValidPublicHost(item.serverHost) && (isXrayProtocol(item.protocol) || item.protocol === 'ssh')
+          isValidPublicHost(item.serverHost) && isXrayProtocol(item.protocol)
         ).map((item: any) => publicProtocolConfig({
           ...item,
           host: typeof item.host === 'string' ? item.host : '',
@@ -1341,25 +1341,9 @@ function normalizeProtocolConfig(input: any, existing?: ProtocolConfig): Protoco
   if (!isValidPublicHost(serverHost) || (host !== '' && !isValidPublicHost(host))) return null;
 
   const now = new Date().toISOString();
-  if (protocol === 'ssh') {
-    const port = Number(input?.serverPort ?? existing?.serverPort) || 80;
-    return {
-      id: existing?.id || 'cfg_ssh_' + crypto.randomBytes(4).toString('hex'),
-      name,
-      serverHost,
-      host: host || 'm.batch.com',
-      serverPort: port,
-      protocol: 'ssh',
-      transport: 'ws',
-      path: input?.path || '/loic',
-      sniHost: sniHost || serverHost,
-      payload,
-      remarks,
-      createdAt: existing?.createdAt || now,
-      updatedAt: now
-    };
-  }
-
+  // SSH provisioning is retired until a dedicated host-side agent replaces the
+  // unsafe legacy root/password-file integration.
+  if (protocol === 'ssh') return null;
   if (!isXrayProtocol(protocol)) return null;
   if (!isXrayTransport(transport)) return null;
   if (tlsSniValidationError(transport, sniHost)) return null;
@@ -1385,9 +1369,15 @@ function protocolConfigForToken(token: ClientToken, configs = loadProtocolConfig
   }
   return configs[0] || null;
 }
-function safeClientToken(token: ClientToken): Omit<ClientToken, 'configurationSnapshot'> {
-  const { configurationSnapshot: _configurationSnapshot, ...safe } = token;
-  return safe;
+type SafeClientToken = Omit<ClientToken, 'configurationSnapshot' | 'sshConfig'> & {
+  sshConfig?: Omit<NonNullable<ClientToken['sshConfig']>, 'sshPassword'>;
+};
+
+function safeClientToken(token: ClientToken): SafeClientToken {
+  const { configurationSnapshot: _configurationSnapshot, sshConfig, ...safe } = token;
+  if (!sshConfig) return safe;
+  const { sshPassword: _sshPassword, ...safeSshConfig } = sshConfig;
+  return { ...safe, sshConfig: safeSshConfig };
 }
 
 function syncXrayConfig(tokens: ClientToken[] = loadTokens()): boolean {
@@ -3361,6 +3351,15 @@ async function startServer() {
       return;
     }
 
+    if (found.protocolType === 'ssh' || found.sshConfig) {
+      res.status(410).json({
+        valid: false,
+        status: 'unsupported_protocol',
+        error: 'Les anciennes licences SSH sont suspendues. Le provisionneur SSH sécurisé n’est pas disponible sur cette architecture.'
+      });
+      return;
+    }
+
     const pinnedDeviceId = typeof found.allowedDeviceId === 'string' ? found.allowedDeviceId.trim() : '';
     if (pinnedDeviceId && pinnedDeviceId !== deviceId) {
       res.status(403).json({
@@ -3565,32 +3564,12 @@ async function startServer() {
     }
   });
 
-  // Dedicated SSH Config JSON Endpoint
-  app.get(['/api/v1/ssh/config/:token', '/ssh/config/:token'], publicApiRateLimiter, (req, res) => {
-    const rawToken = String(req.params.token || '').trim();
-    if (!rawToken) {
-      res.status(400).json({ error: 'Jeton requis.' });
-      return;
-    }
-    const tokens = loadTokens();
-    const cleanToken = rawToken.toUpperCase();
-    const matched = tokens.find(t => t.token.toUpperCase() === cleanToken);
-    if (!matched) {
-      res.status(404).json({ error: 'Abonnement introuvable.' });
-      return;
-    }
-    const expiresAt = new Date(matched.expiresAt).getTime();
-    if (matched.status !== 'active' || !Number.isFinite(expiresAt) || expiresAt <= Date.now() ||
-        Number(matched.bandwidthUsedGb) >= Number(matched.bandwidthGb)) {
-      res.status(403).json({ error: 'Abonnement inactif, expiré ou quota épuisé.' });
-      return;
-    }
-    const sshJson = generateSshConfigJson(matched);
-    res.setHeader('Content-Type', 'application/json; charset=utf-8');
-    if (req.query.download === '1') {
-      res.setHeader('Content-Disposition', `attachment; filename="${matched.token}-ssh.json"`);
-    }
-    res.send(JSON.stringify(sshJson, null, 2));
+  // Legacy SSH config endpoint retired: it could disclose stored plaintext passwords.
+  app.get(['/api/v1/ssh/config/:token', '/ssh/config/:token'], publicApiRateLimiter, (_req, res) => {
+    res.status(410).json({
+      ok: false,
+      error: 'La distribution des anciennes configurations SSH est désactivée. Aucun mot de passe SSH ne sera renvoyé par cette API.'
+    });
   });
 
   // Presets of tested SSH HTTP Payloads (Orange Cameroon, MTN, Generic)
@@ -4347,33 +4326,15 @@ async function startServer() {
   const autoBackupTimer = setInterval(performAutoBackup, 24 * 3600 * 1000);
   autoBackupTimer.unref();
 
-  // Active Dropbear SSH device limit enforcer daemon (every 30s)
-  const sshLimitTimer = setInterval(enforceSshDeviceLimits, 30 * 1000);
-  sshLimitTimer.unref();
+  // SSH provisioning is retired; do not run a background Dropbear account manager.
 
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`[ABESSVPN MASTER SERVER] Running on port ${PORT}`);
     console.log(`[ABESSVPN MASTER SERVER] Control plane listening on ${PORT}; VPN domain: ${process.env.VPN_DOMAIN}`);
   });
 
-  // Automated background server updater: checks every 6 hours if git remote has updates
-  const autoUpdateTimer = setInterval(async () => {
-    try {
-      const status = await getServerUpdateStatus();
-      if (status.hasUpdate && status.isGitRepo) {
-        console.log(`[AUTO-UPDATE] Mise à jour distante détectée (${status.currentCommit} -> ${status.remoteCommit}). Application automatique...`);
-        const updateResult = await executeServerUpdate();
-        if (updateResult.success) {
-          console.log(`[AUTO-UPDATE] ✅ Serveur mis à jour avec succès vers ${updateResult.currentCommit}`);
-        } else {
-          console.error(`[AUTO-UPDATE] ❌ Échec mise à jour automatique:`, updateResult.output);
-        }
-      }
-    } catch {
-      // background silent error
-    }
-  }, 6 * 3600 * 1000);
-  autoUpdateTimer.unref();
+  // Production updates are never applied in the background. The Super Admin
+  // may inspect update-status and invoke the explicit, build-checked updater.
 
   // Start Integrated Telegram Management Bot (if configured in .env)
   const tgBotToken = process.env.TELEGRAM_BOT_TOKEN?.trim();
