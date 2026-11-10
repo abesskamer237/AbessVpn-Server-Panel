@@ -398,9 +398,20 @@ jobs:
           REMOTE
           # Verify the direct origin from the GitHub runner too, not just from
           # the VPS itself (a provider firewall can block external HTTP).
-          ssh_ws_external="$(curl --http1.1 --silent --show-error --max-time 5 -D - -o /dev/null -H 'Connection: Upgrade' -H 'Upgrade: websocket' "http://${VPS_HOST}/ws-ssh" 2>/dev/null || true)"
-          if ! printf '%s' "$ssh_ws_external" | grep -Eq '^HTTP/1[.]1 101'; then
-            echo '::error::SSH-WS port 80 is not reachable from GitHub. Check the public VPS IP and the provider firewall.' >&2
+          ssh_ws_external_ready=0
+          for attempt in 1 2 3; do
+            ssh_ws_external="$(curl --noproxy '*' --http1.1 --silent --show-error --connect-timeout 8 --max-time 10 -D - -o /dev/null -H 'Connection: Upgrade' -H 'Upgrade: websocket' "http://${VPS_HOST}/ws-ssh" 2>/tmp/abess-ws-curl-error || true)"
+            if printf '%s' "$ssh_ws_external" | grep -Eq '^HTTP/1[.]1 101'; then
+              ssh_ws_external_ready=1
+              break
+            fi
+            # Report only the status, never credentials or response bodies.
+            printf 'External SSH-WS attempt %s: %s\n' "$attempt" "$(printf '%s' "$ssh_ws_external" | head -n 1 | tr -d '\r')"
+            sleep 3
+          done
+          if [ "$ssh_ws_external_ready" -ne 1 ]; then
+            curl_reason="$(sed -E 's/([0-9]{1,3}\.){3}[0-9]{1,3}/[VPS IP]/g' /tmp/abess-ws-curl-error | tr '\n' ' ')"
+            echo "::error::SSH-WS port 80 external verification failed: ${curl_reason:-HTTP Upgrade rejected}. Check the public VPS IP and the provider firewall." >&2
             exit 1
           fi
           echo 'External SSH-WS HTTP Upgrade on port 80 verified.'
