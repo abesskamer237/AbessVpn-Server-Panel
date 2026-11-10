@@ -217,16 +217,16 @@ jobs:
           DEST="${VPS_USER}@${VPS_HOST}"
           "$HOME/.local/bin/abess-ssh" -p "$VPS_PORT" -o StrictHostKeyChecking=yes "$DEST" 'bash -s' <<'REMOTE'
           set -euo pipefail
-          command -v docker >/dev/null 2>&1 || { echo "Docker is not installed on the VPS." >&2; exit 1; }
-          docker compose version >/dev/null 2>&1 || { echo "Docker Compose plugin is missing." >&2; exit 1; }
-          command -v rsync >/dev/null 2>&1 || { echo "rsync is not installed on the VPS." >&2; exit 1; }
-          command -v ss >/dev/null 2>&1 || { echo "iproute2/ss is not installed on the VPS." >&2; exit 1; }
-          command -v curl >/dev/null 2>&1 || { echo "curl is not installed on the VPS." >&2; exit 1; }
-          docker info >/dev/null 2>&1 || { echo "SSH user must be able to run Docker non-interactively." >&2; exit 1; }
+          command -v docker >/dev/null 2>&1 || { echo "::error::Docker is not installed on the VPS." >&2; exit 1; }
+          docker compose version >/dev/null 2>&1 || { echo "::error::Docker Compose plugin is missing." >&2; exit 1; }
+          command -v rsync >/dev/null 2>&1 || { echo "::error::rsync is not installed on the VPS." >&2; exit 1; }
+          command -v ss >/dev/null 2>&1 || { echo "::error::iproute2/ss is not installed on the VPS." >&2; exit 1; }
+          command -v curl >/dev/null 2>&1 || { echo "::error::curl is not installed on the VPS." >&2; exit 1; }
+          docker info >/dev/null 2>&1 || { echo "::error::SSH user must be able to run Docker non-interactively." >&2; exit 1; }
           mkdir -p "$HOME/abessvpn-server"
-          test -w "$HOME/abessvpn-server" || { echo "Cannot write to ~/abessvpn-server." >&2; exit 1; }
+          test -w "$HOME/abessvpn-server" || { echo "::error::Cannot write to ~/abessvpn-server." >&2; exit 1; }
           if [ ! -f "$HOME/abessvpn-server/.env" ] && docker volume inspect abessvpn-server_abessvpn_data >/dev/null 2>&1; then
-            echo "ABESS persistent data volume exists but the deployment .env file is missing. Restore the original .env before deploying to avoid changing the master encryption key or losing the initial admin credential." >&2
+            echo "::error::ABESS persistent data volume exists but the deployment .env file is missing. Restore the original .env before deploying to avoid changing the master encryption key or losing the initial admin credential." >&2
             exit 1
           fi
 
@@ -236,7 +236,7 @@ jobs:
           fi
           busy="$(ss -ltnH 2>/dev/null | awk '$4 ~ /:(80|443)$/ {print $4}' || true)"
           if [ -n "$busy" ] && [ -z "$existing_caddy" ]; then
-            echo "Ports 80/443 are occupied by another service. Deployment stopped to protect it." >&2
+            echo "::error::Ports 80/443 are occupied by another service. Deployment stopped to protect it." >&2
             echo "$busy" >&2
             exit 1
           fi
@@ -258,8 +258,8 @@ jobs:
             --exclude '.git/' \
             --exclude 'node_modules/' \
             --exclude 'dist/' \
-            --exclude 'data/'
-            --exclude 'deployment-backups/'
+            --exclude 'data/' \
+            --exclude 'deployment-backups/' \
             --exclude '.rollback.yml' \
             --exclude '.env' \
             --exclude '.deploy.env' \
