@@ -17,7 +17,7 @@ The health route `GET /api/v1/ping` only reports `dataPlane: "ready"` after the 
 Requirements: Node.js 22+ and npm.
 
 ```bash
-npm install
+npm ci
 npm run lint
 npm run build
 npm run dev
@@ -161,3 +161,7 @@ Seuls les identifiants listés dans `TELEGRAM_ADMIN_IDS` sont autorisés. La com
 
 The API allows the same-origin browser panel at `https://VPN_DOMAIN` and local Vite development origins. If you host the admin panel on another browser origin, add that exact origin to `CORS_ALLOWED_ORIGINS` as a comma-separated list. Do not use a wildcard.
 
+
+## Interface et vérifications visuelles
+
+Le panneau propose les thèmes clair/sombre, une navigation adaptée au mobile et des animations respectant les préférences d’accessibilité. Pour exécuter les tests navigateur isolés : `npx playwright install chromium`, puis `npm run test:panel`. Pour les tests de sécurité API : `node scripts/test-security.mjs`. Consulter `AUDIT.md` pour les résultats et limites, et `docs/CLOUD_ENVIRONMENT.md` pour la configuration cloud.

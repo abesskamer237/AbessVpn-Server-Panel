@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import QRCode from 'qrcode';
+import { WorkspaceWelcome } from './components/WorkspaceWelcome';
 import {
   Shield,
   Server,
@@ -260,8 +261,8 @@ interface SystemDiagnostics {
 }
 
 const EMPTY_PROTOCOL_CONFIG: MasterConfig = {
-  name: '', serverHost: 'server.nexustunnel.me', host: '', serverPort: 443, protocol: 'vless',
-  transport: 'ws', path: '/@abess237', sniHost: 'server.nexustunnel.me', uuid: '',
+  name: '', serverHost: '', host: '', serverPort: 443, protocol: 'vless',
+  transport: 'ws', path: '/@abess237', sniHost: '', uuid: '',
   payload: '', remarks: '',
   secretPassphrase: '', systemName: 'AbessVpn', contactTelegram: '@abess237'
 };
@@ -276,7 +277,7 @@ function generateUnifiedToken(): string {
 }
 
 export default function App() {
-  // Theme State: "light" (Noir sur Blanc) par défaut, ou "dark" (Mode Sombre)
+  // Theme State: "light" (Mode clair) par défaut, ou "dark" (Mode sombre)
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     const saved = localStorage.getItem('abess_panel_theme');
     return saved === 'dark' ? 'dark' : 'light';
@@ -319,6 +320,11 @@ export default function App() {
   const [annShowMode, setAnnShowMode] = useState<'EVERY_LAUNCH' | 'ONCE_PER_USER'>('ONCE_PER_USER');
   const [annLoading, setAnnLoading] = useState<boolean>(false);
   const [previewAnnouncement, setPreviewAnnouncement] = useState<Announcement | null>(null);
+
+  const [refreshing, setRefreshing] = useState(false);
+  const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const refreshInFlight = useRef(false);
 
   // Stats & Lists
   const [stats, setStats] = useState<any>(null);
@@ -463,20 +469,32 @@ export default function App() {
         setAuthToken(savedToken);
         setCurrentUser(JSON.parse(savedUser));
       } catch {
-        localStorage.clear();
+        localStorage.removeItem('abess_admin_token');
+        localStorage.removeItem('abess_admin_user');
       }
     }
   }, []);
 
   // Fetch all dashboard data when user is logged in
   const refreshData = async () => {
-    if (!authToken) return;
+    if (!authToken || refreshInFlight.current) return;
+    refreshInFlight.current = true;
+    setRefreshing(true);
 
     try {
       const headers = { 'Authorization': `Bearer ${authToken}` };
 
       // Sync Current User profile & real-time credits
       const meRes = await fetch('/api/v1/auth/me', { headers });
+      if (meRes.status === 401 || meRes.status === 403) {
+        setAuthToken('');
+        setCurrentUser(null);
+        localStorage.removeItem('abess_admin_token');
+        localStorage.removeItem('abess_admin_user');
+        setLoginError('Votre session a expiré. Veuillez vous reconnecter.');
+        return;
+      }
+      if (!meRes.ok) throw new Error('Connexion au serveur interrompue. Réessayez.');
       if (meRes.ok) {
         const meData = await meRes.json();
         setCurrentUser(meData);
@@ -485,7 +503,8 @@ export default function App() {
 
       // Stats
       const statsRes = await fetch('/api/v1/admin/stats', { headers });
-      if (statsRes.ok) setStats(await statsRes.json());
+      if (!statsRes.ok) throw new Error('Les statistiques ne sont pas disponibles. Réessayez.');
+      setStats(await statsRes.json());
 
       // Tokens (Admin or Reseller specific)
       const tokensRes = await fetch('/api/v1/admin/tokens', { headers });
@@ -525,11 +544,17 @@ export default function App() {
           setAnnouncements(annData.announcements || []);
         }
       }
-    } catch {
+      setUpdatedAt(new Date());
+      setSyncError(null);
+    } catch (error) {
+      setSyncError(error instanceof Error ? error.message : 'Connexion au serveur indisponible.');
       if (!masterConfig) {
         setConfigLoadError('Impossible de joindre l’API pour charger les données du panneau.');
         setConfigLoading(false);
       }
+    } finally {
+      refreshInFlight.current = false;
+      setRefreshing(false);
     }
   };
 
@@ -611,6 +636,12 @@ export default function App() {
 
   // Handle Logout
   const handleLogout = () => {
+    if (authToken) {
+      void fetch('/api/v1/auth/logout', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${authToken}` },
+      }).catch(() => addLog('[LOGOUT] Révocation serveur impossible ; la session expirera sous 24 h.'));
+    }
     setAuthToken('');
     setCurrentUser(null);
     localStorage.removeItem('abess_admin_token');
@@ -1336,8 +1367,24 @@ export default function App() {
   // ==========================================
   if (!currentUser) {
     return (
-      <div className="min-h-screen bg-[#03060e] text-emerald-400 font-mono flex items-center justify-center p-4 selection:bg-emerald-500 selection:text-black">
-        <div className="w-full max-w-md bg-[#060c18] border border-emerald-900/80 rounded-3xl p-6 sm:p-8 shadow-2xl relative overflow-hidden space-y-6">
+      <div className="login-page min-h-screen bg-[#03060e] text-emerald-400 font-sans selection:bg-emerald-500 selection:text-black">
+        <aside className="login-story" aria-label="Bienvenue sur AbessVPN">
+          <div className="login-wordmark"><Shield size={25} aria-hidden="true" /> ABESS<span>VPN</span><span className="brand-edition">BUSINESS</span></div>
+          <div className="login-story-content">
+            <span className="eyebrow">UNE CONNEXION. TOUTES LES POSSIBILITÉS.</span>
+            <h2>Votre réseau.<br />Votre <span>ambition.</span></h2>
+            <p>Une plateforme pour piloter vos licences, accompagner vos revendeurs et garder le contrôle de votre activité.</p>
+            <div className="login-features">
+              <span><Key size={16} aria-hidden="true" /> Gestion des licences</span>
+              <span><Users size={16} aria-hidden="true" /> Réseau de revendeurs</span>
+              <span><Activity size={16} aria-hidden="true" /> Suivi des quotas</span>
+            </div>
+          </div>
+          <div className="login-orbit" aria-hidden="true"><div className="orbit-ring orbit-ring-two" /><div className="orbit-ring" /><div className="orbit-core"><Shield size={58} strokeWidth={1.2} /></div></div>
+          <p className="login-story-footer">L’essentiel de votre réseau, au même endroit.</p>
+        </aside>
+        <div className="login-form-area">
+        <div className="login-card w-full max-w-md bg-[#060c18] border border-emerald-900/80 rounded-3xl p-6 sm:p-8 relative overflow-hidden space-y-6">
           <div className="flex justify-end">
             <button
               type="button"
@@ -1348,12 +1395,12 @@ export default function App() {
               {theme === 'light' ? (
                 <>
                   <Moon className="w-3 h-3 text-slate-700" />
-                  <span>Mode Sombre</span>
+                  <span>Mode sombre</span>
                 </>
               ) : (
                 <>
                   <Sun className="w-3 h-3 text-amber-400" />
-                  <span>Noir sur Blanc</span>
+                  <span>Mode clair</span>
                 </>
               )}
             </button>
@@ -1364,12 +1411,8 @@ export default function App() {
                 <Shield className="w-7 h-7 text-emerald-400 animate-pulse" />
               </div>
             </div>
-            <h1 className="text-xl font-black tracking-wider text-white">
-              Abess<span className="text-emerald-400">Vpn</span> Server
-            </h1>
-            <p className="text-xs text-slate-400">
-              Portail Authentifié Super Admin &amp; Revendeurs
-            </p>
+            <h1 className="text-2xl font-bold tracking-tight text-white">Heureux de vous revoir</h1>
+            <p className="text-sm text-slate-400">Connectez-vous à votre espace de gestion.</p>
           </div>
 
           {loginError && (
@@ -1381,21 +1424,25 @@ export default function App() {
 
           <form onSubmit={handleLogin} className="space-y-4 text-xs">
             <div>
-              <label className="block text-slate-300 font-bold mb-1 uppercase text-[11px]">Adresse Email</label>
+              <label htmlFor="login-email" className="block text-slate-300 font-semibold mb-2 text-xs">Adresse email</label>
               <input
+                id="login-email"
                 type="email"
+                autoComplete="username"
                 value={loginEmail}
                 onChange={(e) => setLoginEmail(e.target.value)}
-                placeholder="rigomanga4@gmail.com"
+                placeholder="admin@votre-domaine.com"
                 className="w-full bg-[#03060e] border border-emerald-950 rounded-xl px-4 py-3 text-slate-100 focus:outline-none focus:border-emerald-400 font-sans"
                 required
               />
             </div>
 
             <div>
-              <label className="block text-slate-300 font-bold mb-1 uppercase text-[11px]">Mot de Passe</label>
+              <label htmlFor="login-password" className="block text-slate-300 font-semibold mb-2 text-xs">Mot de passe</label>
               <div className="relative">
                 <input
+                  id="login-password"
+                  autoComplete="current-password"
                   type={showPassword ? 'text' : 'password'}
                   value={loginPassword}
                   onChange={(e) => setLoginPassword(e.target.value)}
@@ -1405,6 +1452,8 @@ export default function App() {
                 />
                 <button
                   type="button"
+                  aria-label={showPassword ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}
+                  aria-pressed={showPassword}
                   onClick={() => setShowPassword(!showPassword)}
                   className="absolute right-3 top-3.5 text-slate-500 hover:text-slate-300"
                 >
@@ -1419,39 +1468,12 @@ export default function App() {
               className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 text-black font-black rounded-xl text-xs flex items-center justify-center gap-2 shadow-[0_0_20px_rgba(16,185,129,0.3)] transition"
             >
               <Lock className={`w-4 h-4 ${loginLoading ? 'animate-spin' : ''}`} />
-              <span>{loginLoading ? 'Connexion en cours...' : 'SE CONNECTER AU SERVEUR'}</span>
+              <span>{loginLoading ? 'Connexion en cours...' : 'Se connecter'}</span>
             </button>
           </form>
-
-          {/* Quick Demo Credentials for Fast Testing */}
-          <div className="pt-4 border-t border-emerald-950/80 space-y-2 text-[11px]">
-            <span className="text-slate-500 font-bold uppercase block text-[10px]">Identifiants Configurés :</span>
-            <div className="flex flex-col gap-1.5">
-              <button
-                type="button"
-                onClick={() => {
-                  setLoginEmail('rigomanga4@gmail.com');
-                  setLoginPassword('abess237');
-                }}
-                className="p-2 rounded-lg bg-emerald-950/30 border border-emerald-500/30 text-left hover:bg-emerald-950/60 transition"
-              >
-                <div className="font-bold text-emerald-300">👑 Super Admin Principal</div>
-                <div className="text-slate-400 text-[10px]">rigomanga4@gmail.com • MDP: abess237</div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setLoginEmail('revendeur@abessvpn.com');
-                  setLoginPassword('revendeur123');
-                }}
-                className="p-2 rounded-lg bg-cyan-950/30 border border-cyan-500/30 text-left hover:bg-cyan-950/60 transition"
-              >
-                <div className="font-bold text-cyan-300">💼 Revendeur Démo (250 Go)</div>
-                <div className="text-slate-400 text-[10px]">revendeur@abessvpn.com • MDP: revendeur123</div>
-              </button>
-            </div>
-          </div>
+          <p className="login-help"><Lock size={12} aria-hidden="true" /> Accès réservé aux administrateurs et revendeurs.</p>
+        </div>
+        <p className="login-copyright">ABESSVPN · Votre espace professionnel</p>
         </div>
       </div>
     );
@@ -1461,8 +1483,9 @@ export default function App() {
   // AUTHENTICATED PANEL
   // ==========================================
   return (
-    <div className="min-h-screen bg-[#03060e] text-emerald-400 font-mono flex flex-col selection:bg-emerald-500 selection:text-black">
-      {/* Top Bar with DEFCON & Active User Banner */}
+    <div className="panel-app min-h-screen bg-[#03060e] text-emerald-400 font-sans flex flex-col selection:bg-emerald-500 selection:text-black">
+      <a className="skip-link" href="#main-content">Aller au contenu</a>
+      {/* Account bar */}
       <div className="border-b border-emerald-950 bg-black/90 px-4 py-2 text-xs flex flex-wrap items-center justify-between gap-3 text-emerald-400">
         <div className="flex items-center gap-3">
           <span className="flex h-2.5 w-2.5 relative">
@@ -1470,7 +1493,7 @@ export default function App() {
             <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
           </span>
           <span className="font-bold tracking-widest text-white">
-            ABESS<span className="text-emerald-400">VPN</span> ENTERPRISE SERVER
+            ABESS<span className="text-emerald-400">VPN</span> BUSINESS
           </span>
           <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
             currentUser.role === 'SUPER_ADMIN' ? 'bg-amber-950 text-amber-300 border border-amber-500/50' : 'bg-cyan-950 text-cyan-300 border border-cyan-500/50'
@@ -1499,17 +1522,17 @@ export default function App() {
                 ? 'bg-slate-100 hover:bg-slate-200 text-slate-800 border-slate-300'
                 : 'bg-slate-900 hover:bg-slate-800 text-amber-300 border-amber-500/40'
             }`}
-            title="Basculer entre Noir sur Blanc et Mode Sombre"
+            title="Basculer entre Mode clair et Mode sombre"
           >
             {theme === 'light' ? (
               <>
                 <Moon className="w-3.5 h-3.5 text-slate-700" />
-                <span>Mode Sombre</span>
+                <span>Mode sombre</span>
               </>
             ) : (
               <>
                 <Sun className="w-3.5 h-3.5 text-amber-400" />
-                <span>Noir sur Blanc</span>
+                <span>Mode clair</span>
               </>
             )}
           </button>
@@ -1536,9 +1559,9 @@ export default function App() {
             <div>
               <div className="flex items-center gap-2">
                 <h1 className="text-lg font-black tracking-wider text-white">
-                  Panneau de Contrôle Abess<span className="text-emerald-400">Vpn</span>
+                  Votre centre de gestion
                 </h1>
-                <span className="text-xs text-slate-500">v2026.4</span>
+                <span className="text-[10px] text-emerald-400 border border-emerald-500/30 rounded-full px-2 py-0.5">CONSOLE</span>
               </div>
               <p className="text-xs text-slate-400">
                 {currentUser.role === 'SUPER_ADMIN'
@@ -1560,53 +1583,54 @@ export default function App() {
               className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-black font-black rounded-xl text-xs flex items-center gap-1.5 shadow-[0_0_15px_rgba(16,185,129,0.3)] transition"
             >
               <Plus className="w-4 h-4" />
-              <span>Générer un Token Client</span>
+              <span>Nouvelle licence</span>
             </button>
           </div>
         </div>
 
         {/* Navigation Tabs */}
         <div className="max-w-7xl mx-auto px-4 sm:px-6">
-          <nav className="flex space-x-1 sm:space-x-2 border-t border-emerald-900/40 overflow-x-auto py-1 scrollbar-none text-xs">
+          <nav aria-label="Navigation principale" className="panel-navigation flex space-x-1 sm:space-x-2 border-t border-emerald-900/40 overflow-x-auto py-1 scrollbar-none text-xs">
             {[
-              { id: 'overview', label: '📊 Tableau de Bord', icon: Activity },
+              { id: 'overview', label: 'Tableau de Bord', icon: Activity },
               {
                 id: 'resellers',
-                label: currentUser.role === 'SUPER_ADMIN' ? '👥 Gestion des Revendeurs' : '👥 Mes Sous-Revendeurs',
+                label: currentUser.role === 'SUPER_ADMIN' ? 'Gestion des Revendeurs' : 'Mes Sous-Revendeurs',
                 icon: Users
               },
               ...(currentUser.role === 'SUPER_ADMIN'
                 ? [
-                    { id: 'infrastructure', label: '🔒 Infrastructure Maître', icon: Database },
+                    { id: 'infrastructure', label: 'Infrastructure Maître', icon: Database },
                   ]
                 : []),
-              { id: 'tokens', label: '🔑 Clients & Licences', icon: Key },
-              { id: 'plans', label: '💳 Plans & Tarifs', icon: Tag },
+              { id: 'tokens', label: 'Clients & Licences', icon: Key },
+              { id: 'plans', label: 'Plans & Tarifs', icon: Tag },
               ...(currentUser.role === 'SUPER_ADMIN'
                 ? [
                     {
                       id: 'requests',
-                      label: `📋 Adhésions${requests.filter(r => r.status === 'PENDING').length > 0 ? ` (${requests.filter(r => r.status === 'PENDING').length})` : ''}`,
+                      label: `Adhésions${requests.filter(r => r.status === 'PENDING').length > 0 ? ` (${requests.filter(r => r.status === 'PENDING').length})` : ''}`,
                       icon: PhoneCall
                     },
-                    { id: 'diagnostics', label: '🩺 Diagnostics & Sonde', icon: Gauge },
+                    { id: 'diagnostics', label: 'Diagnostics & Sonde', icon: Gauge },
                     {
                       id: 'announcements',
-                      label: `📢 Annonces Réseau${announcements.filter(a => a.isActive).length > 0 ? ` (${announcements.filter(a => a.isActive).length})` : ''}`,
+                      label: `Annonces Réseau${announcements.filter(a => a.isActive).length > 0 ? ` (${announcements.filter(a => a.isActive).length})` : ''}`,
                       icon: Megaphone
                     },
                   ]
                 : []),
-              { id: 'transactions', label: '📜 Registre & Crédits', icon: History },
-              { id: 'logs', label: '💻 Journal & Télémétrie', icon: Terminal },
+              { id: 'transactions', label: 'Registre & Crédits', icon: History },
+              { id: 'logs', label: 'Journal & Télémétrie', icon: Terminal },
             ].map((tab) => {
               const Icon = tab.icon;
               const isActive = activeTab === tab.id;
               return (
                 <button
                   key={tab.id}
+                  aria-current={isActive ? 'page' : undefined}
                   onClick={() => setActiveTab(tab.id as typeof activeTab)}
-                  className={`flex items-center gap-2 px-3.5 py-2 rounded-lg transition whitespace-nowrap font-bold ${
+                  className={`panel-tab flex items-center gap-2 px-3.5 py-2 rounded-lg transition whitespace-nowrap font-bold ${
                     isActive
                       ? 'bg-emerald-950/90 text-emerald-300 border border-emerald-500/50 shadow-[0_0_15px_rgba(16,185,129,0.25)]'
                       : 'text-slate-400 hover:text-emerald-400 hover:bg-emerald-950/20'
@@ -1622,13 +1646,14 @@ export default function App() {
       </header>
 
       {/* Main Body */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 flex-1 w-full space-y-6">
+      <main id="main-content" className="max-w-7xl mx-auto px-4 sm:px-6 py-6 flex-1 w-full space-y-6">
 
         {/* ========================================================================= */}
         {/* TAB 1: OVERVIEW METRICS */}
         {/* ========================================================================= */}
         {activeTab === 'overview' && (
           <div className="space-y-6 animate-fade-in">
+            <WorkspaceWelcome name={currentUser.name} refreshing={refreshing} updatedAt={updatedAt} error={syncError} onRefresh={() => void refreshData()} onOpenLicences={() => setActiveTab('tokens')} />
             {currentUser.role === 'SUPER_ADMIN' ? (
               // Super Admin Global Stats
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-xs font-mono">
@@ -1647,7 +1672,7 @@ export default function App() {
                     <CreditCard className="w-4 h-4 text-cyan-400" />
                   </div>
                   <div className="text-2xl font-black text-cyan-300 font-mono">
-                    {stats?.totalCreditsInCirculation ?? 250} Go
+                    {stats?.totalCreditsInCirculation ?? '—'} Go
                   </div>
                   <span className="text-[10px] text-slate-400">Solde total alloué aux revendeurs</span>
                 </div>
@@ -1669,9 +1694,9 @@ export default function App() {
                     <HardDrive className="w-4 h-4 text-amber-400" />
                   </div>
                   <div className="text-2xl font-black text-amber-300 font-mono">
-                    {stats?.totalBandwidthAllocated ?? 600} Go
+                    {stats?.totalBandwidthAllocated ?? '—'} Go
                   </div>
-                  <span className="text-[10px] text-slate-400">Consommation : {stats?.totalBandwidthConsumed ?? 3.42} Go</span>
+                  <span className="text-[10px] text-slate-400">Consommation : {stats?.totalBandwidthConsumed ?? '—'} Go</span>
                 </div>
               </div>
             ) : (
@@ -3233,12 +3258,12 @@ export default function App() {
                           <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-slate-900 border border-slate-700 text-slate-300">
                             {ann.targetPlatform === 'ALL' && '🌐 Android + Windows'}
                             {ann.targetPlatform === 'ANDROID' && '📱 Android uniquement'}
-                            {ann.targetPlatform === 'WINDOWS' && '💻 Windows PC uniquement'}
+                            {ann.targetPlatform === 'WINDOWS' && 'Windows PC uniquement'}
                           </span>
 
                           {ann.isMandatory && (
                             <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-red-600/30 border border-red-500 text-red-200 animate-pulse">
-                              🔒 OBLIGATOIRE (Écran Bloqué)
+                              OBLIGATOIRE (Écran Bloqué)
                             </span>
                           )}
 
@@ -4196,7 +4221,7 @@ export default function App() {
                   >
                     <option value="ALL">🌐 Tous les Utilisateurs (Android + Windows)</option>
                     <option value="ANDROID">📱 Application Android uniquement</option>
-                    <option value="WINDOWS">💻 Logiciel Windows PC uniquement</option>
+                    <option value="WINDOWS">Logiciel Windows PC uniquement</option>
                   </select>
                 </div>
               </div>
@@ -4370,7 +4395,7 @@ export default function App() {
       {/* Footer */}
       <footer className="border-t border-emerald-950 bg-black px-4 py-3 text-center text-xs text-slate-500 font-mono">
         <p>
-          AbessVpn Enterprise Server • Super Admin : <code className="text-slate-400">rigomanga4@gmail.com</code> • Moteur WebSocket sur <code className="text-emerald-400">/@abess237</code>
+          AbessVpn Enterprise Server • Moteur WebSocket sur <code className="text-emerald-400">/@abess237</code>
         </p>
       </footer>
     </div>

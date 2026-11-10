@@ -23,10 +23,13 @@ jobs:
           node-version: 22
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
       - name: Self-test offline MASTER_SECRET rotation utility
         run: node scripts/rotate-master-secret.mjs --self-test
 
+
+      - name: Security regression tests
+        run: node scripts/test-security.mjs
 
       - name: TypeScript check
         run: npm run lint
@@ -34,6 +37,12 @@ jobs:
       - name: Build admin panel
         run: npm run build
 
+
+      - name: Install Chromium for panel tests
+        run: npx playwright install --with-deps chromium
+
+      - name: Verify panel workflows and mobile layout
+        run: npx playwright test
 
       - name: Validate Xray watcher shell syntax
         run: sh -n docker/xray/watch-config.sh

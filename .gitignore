@@ -17,3 +17,7 @@ data/*
 # Large distribution binaries served locally
 static/*.exe
 static/*.apk
+
+# Browser test artifacts
+test-results/
+playwright-report/

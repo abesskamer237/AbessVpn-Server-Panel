@@ -695,6 +695,41 @@ function saveUsers(users: AppUser[]) {
   writeJsonAtomically(usersFile, users);
 }
 
+// Reject corrupt reseller graphs before a restore can lock administrators out
+// or make hierarchy traversals loop indefinitely.
+function validRestoredUsers(value: unknown): value is AppUser[] {
+  if (!Array.isArray(value) || value.length === 0) return false;
+  const byId = new Map<string, AppUser>();
+  const emails = new Set<string>();
+  for (const user of value) {
+    if (!user || typeof user.id !== 'string' || !user.id.trim() || byId.has(user.id) ||
+        typeof user.email !== 'string' || !user.email.trim() ||
+        typeof user.passwordHash !== 'string' || !user.passwordHash ||
+        typeof user.name !== 'string' ||
+        !['SUPER_ADMIN', 'RESELLER'].includes(user.role) ||
+        !['active', 'suspended'].includes(user.status) ||
+        !Number.isFinite(user.credits) || user.credits < 0) return false;
+    const email = user.email.trim().toLowerCase();
+    if (emails.has(email)) return false;
+    emails.add(email);
+    byId.set(user.id, user);
+  }
+  if (!value.some(user => user.role === 'SUPER_ADMIN' && user.status === 'active')) return false;
+  for (const user of value) {
+    if (user.role === 'SUPER_ADMIN' && user.parentId) return false;
+    const visited = new Set<string>([user.id]);
+    let parentId = user.parentId;
+    while (parentId) {
+      if (typeof parentId !== 'string' || visited.has(parentId)) return false;
+      visited.add(parentId);
+      const parent = byId.get(parentId);
+      if (!parent) return false;
+      parentId = parent.parentId;
+    }
+  }
+  return true;
+}
+
 // Tokens Storage
 function loadTokens(): ClientToken[] {
   if (fs.existsSync(tokensFile)) {
@@ -1348,7 +1383,7 @@ export function getSystemDiagnostics() {
       totalBandwidthUsedGb: Number(totalBandwidthUsedGb.toFixed(2)),
       plansCount: plans.length,
       pendingRequestsCount: requests.filter(r => r.status === 'PENDING').length,
-      xrayStatus: fs.existsSync(xrayStatusFile) ? 'ready' : 'not-ready',
+      xrayStatus: isXrayReady() ? 'ready' : 'not-ready',
       dropbearStatus,
       wsDropbearStatus,
       activeSshConnections,
@@ -1578,6 +1613,21 @@ function readXrayUsageState(): XrayUsageState {
     // First run or invalid state; start a clean baseline.
   }
   return { generation: '', lastCounters: {} };
+}
+
+// A readiness marker alone can survive a sidecar crash. Require a recent
+// stats heartbeat from the same Xray process generation before advertising it.
+function isXrayReady(): boolean {
+  try {
+    const generation = fs.readFileSync(xrayStatusFile, 'utf8').trim();
+    const snapshot = JSON.parse(fs.readFileSync(xrayStatsFile, 'utf8'));
+    const observedAt = Date.parse(snapshot.observedAt);
+    const age = Date.now() - observedAt;
+    return generation.length > 0 && snapshot.generation === generation &&
+      Array.isArray(snapshot.stat) && Number.isFinite(age) && age >= -5000 && age <= 15000;
+  } catch {
+    return false;
+  }
 }
 
 function reconcileXrayUsage(): boolean {
@@ -1819,6 +1869,7 @@ async function startServer() {
     `https://${vpnDomain}`,
     'http://localhost:5173',
     'http://127.0.0.1:5173',
+    ...(!isProduction ? [`http://localhost:${PORT}`, `http://127.0.0.1:${PORT}`] : []),
     ...(process.env.CORS_ALLOWED_ORIGINS || '')
       .split(',')
       .map(origin => origin.trim())
@@ -1887,9 +1938,8 @@ async function startServer() {
       service: 'abessvpn-master',
       uptimeSeconds: Math.floor(process.uptime()),
       timestamp: new Date().toISOString(),
-      // The current WebSocket implementation is only a handshake placeholder.
-      // Do not advertise the data plane as ready until it is replaced by Xray-core.
-      dataPlane: fs.existsSync(xrayStatusFile) ? 'ready' : 'not-ready'
+      // Verify a fresh sidecar heartbeat; stale marker files do not prove readiness.
+      dataPlane: isXrayReady() ? 'ready' : 'not-ready'
     });
   });
 
@@ -1954,7 +2004,7 @@ async function startServer() {
       saveTokens(tokens);
     }
 
-    if (!fs.existsSync(xrayStatusFile)) {
+    if (!isXrayReady()) {
       res.status(503).json({
         ok: false,
         error: 'Le moteur Xray-core n’est pas prêt.',
@@ -2095,10 +2145,19 @@ async function startServer() {
     }
 
     // Verify if any parent reseller in the hierarchy is suspended
+    const visitedParents = new Set<string>([user.id]);
     let currentParentId = user.parentId;
     while (currentParentId) {
+      if (visitedParents.has(currentParentId)) {
+        res.status(403).json({ error: 'Hiérarchie revendeur invalide.' });
+        return;
+      }
+      visitedParents.add(currentParentId);
       const parentUser = users.find(u => u.id === currentParentId);
-      if (!parentUser) break;
+      if (!parentUser) {
+        res.status(403).json({ error: 'Branche revendeur parente introuvable.' });
+        return;
+      }
       if (parentUser.status !== 'active') {
         res.status(403).json({ error: `La branche revendeur parente (${parentUser.name}) est actuellement suspendue.` });
         return;
@@ -2134,6 +2193,11 @@ async function startServer() {
     });
   });
 
+  app.post('/api/v1/auth/logout', authenticate, (req, res) => {
+    activeSessions.delete(req.headers.authorization!.slice('Bearer '.length));
+    res.sendStatus(204);
+  });
+
   app.get('/api/v1/auth/me', authenticate, (req, res) => {
     const user: AppUser = (req as any).user;
     res.json({
@@ -2151,10 +2215,17 @@ async function startServer() {
 
   // Helper: recursive list of all sub-reseller IDs
   function getSubResellerIdsRecursive(parentId: string, allUsers: AppUser[]): string[] {
-    const directChildren = allUsers.filter(u => u.role === 'RESELLER' && u.parentId === parentId);
-    let ids: string[] = directChildren.map(c => c.id);
-    for (const child of directChildren) {
-      ids = ids.concat(getSubResellerIdsRecursive(child.id, allUsers));
+    const visited = new Set<string>([parentId]);
+    const pending = [parentId];
+    const ids: string[] = [];
+    while (pending.length > 0) {
+      const current = pending.pop()!;
+      for (const child of allUsers) {
+        if (child.role !== 'RESELLER' || child.parentId !== current || visited.has(child.id)) continue;
+        visited.add(child.id);
+        ids.push(child.id);
+        pending.push(child.id);
+      }
     }
     return ids;
   }
@@ -2993,7 +3064,7 @@ async function startServer() {
     }
 
     const payload = req.body;
-    if (!payload || !Array.isArray(payload.users) || !Array.isArray(payload.tokens)) {
+    if (!payload || !validRestoredUsers(payload.users) || !Array.isArray(payload.tokens)) {
       res.status(400).json({ error: 'Fichier de sauvegarde invalide (structure users/tokens manquante).' });
       return;
     }
@@ -3018,6 +3089,7 @@ async function startServer() {
     saveTokens(payload.tokens);
     if (Array.isArray(payload.transactions)) writeJsonAtomically(transactionsFile, payload.transactions);
 
+    activeSessions.clear();
     res.json({
       success: true,
       message: 'Sauvegarde restaurée avec succès. Un instantané de sécurité a été créé.',
@@ -4408,7 +4480,8 @@ async function startServer() {
       return;
     }
     const payload = req.body;
-    if (!payload || typeof payload !== 'object') {
+    if (!payload || typeof payload !== 'object' ||
+        (payload.users !== undefined && !validRestoredUsers(payload.users))) {
       res.status(400).json({ error: 'Fichier de sauvegarde invalide.' });
       return;
     }
@@ -4425,6 +4498,7 @@ async function startServer() {
       action: 'SYSTEM_RESTORE',
       details: 'Restauration complète de la base de données.'
     });
+    activeSessions.clear();
     res.json({ ok: true, message: 'Base de données restaurée avec succès.' });
   });
 
@@ -4567,4 +4641,7 @@ async function startServer() {
   });
 }
 
-startServer().catch(console.error);
+startServer().catch(error => {
+  console.error(error);
+  process.exit(1);
+});
