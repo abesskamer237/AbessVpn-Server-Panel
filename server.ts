@@ -1096,66 +1096,35 @@ export function generateUnifiedToken(): string {
   const chars = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
   let rand = '';
   for (let i = 0; i < 11; i++) {
-    rand += chars[Math.floor(Math.random() * chars.length)];
+    rand += chars[crypto.randomInt(chars.length)];
   }
   return `ABESS-${rand}`;
 }
 
 export const DEFAULT_SSH_PAYLOAD = "GET / HTTP/1.1[crlf]FoxNews.com;www.epicgames.com;us.shop.battle.net;unity3d.com;www.icloud.com;www.bing.com;www.samsung.com;store.nintendo.com.br;www.garena.com;n41-06-05.opera-mini.net[crlf]Host: m.batch.com[crlf][crlf]X / HTTP/1.1[crlf]FoxNews.com;www.epicgames.com;us.shop.battle.net;unity3d.com;www.icloud.com;www.bing.com;www.samsung.com;store.nintendo.com.br;www.garena.com;n41-06-05.opera-mini.net[crlf]Host: [host][crlf][crlf]GET /loic HTTP/1.1[crlf]Host: dbl5i9lrmmeui.cloudfront.net[crlf]Backend: crashlyticsreports-pa.googleapis.com[crlf]Upgrade: websocket[crlf]Connection: Upgrade[crlf]User-agent:[ua][crlf][crlf]";
 
-export function createLinuxSshAccount(username: string, password: string, days = 30): boolean {
-  try {
-    const cleanUser = String(username || '').trim().toLowerCase();
-    if (!/^[a-zA-Z0-9_-]{3,32}$/.test(cleanUser)) return false;
-    const expiryDate = new Date(Date.now() + Math.max(1, days) * 86400000).toISOString().split('T')[0];
-    const check = execSync(`id ${cleanUser} 2>/dev/null || true`, { encoding: 'utf8' });
-    if (!check.includes('uid=')) {
-      execSync(`sudo useradd -e ${expiryDate} -s /bin/false -M ${cleanUser}`, { encoding: 'utf8' });
-    } else {
-      execSync(`sudo chage -E ${expiryDate} ${cleanUser}`, { encoding: 'utf8' });
-    }
-    const proc = spawn('sudo', ['chpasswd'], { stdio: ['pipe', 'ignore', 'ignore'] });
-    proc.stdin.write(`${cleanUser}:${password}\n`);
-    proc.stdin.end();
-    try {
-      fs.appendFileSync('/etc/ssh/vpn_users.db', `${cleanUser}:${password}:${expiryDate}\n`);
-    } catch {}
-    return true;
-  } catch (e) {
-    console.error('Error creating Linux SSH account:', e);
-    return false;
-  }
+/**
+ * Host-level SSH account management is unavailable in the containerized
+ * control plane. A dedicated host-side provisioner with a narrow authenticated
+ * interface is required. This process must never run sudo useradd/chpasswd or
+ * persist plaintext SSH passwords on the host.
+ */
+export function createLinuxSshAccount(_username: string, _password: string, _days = 30): boolean {
+  return false;
 }
 
-export function deleteLinuxSshAccount(username: string): boolean {
-  try {
-    const cleanUser = String(username || '').trim().toLowerCase();
-    if (!/^[a-zA-Z0-9_-]{3,32}$/.test(cleanUser)) return false;
-    execSync(`sudo userdel -f ${cleanUser} 2>/dev/null || true`, { encoding: 'utf8' });
-    try {
-      if (fs.existsSync('/etc/ssh/vpn_users.db')) {
-        const lines = fs.readFileSync('/etc/ssh/vpn_users.db', 'utf8').split('\n');
-        fs.writeFileSync('/etc/ssh/vpn_users.db', lines.filter(l => !l.startsWith(`${cleanUser}:`)).join('\n'));
-      }
-    } catch {}
-    return true;
-  } catch {
-    return false;
-  }
+export function deleteLinuxSshAccount(_username: string): boolean {
+  return false;
 }
 
 export function generateSshConfigJson(token: ClientToken): Record<string, unknown> {
-  const master = loadMasterConfig();
-  const host = master.serverHost || process.env.VPN_DOMAIN || 'server.nexustunnel.me';
-  const ssh = token.sshConfig || {
-    sshConfigType: 'SSH-Payload',
-    remarks: token.plan || '𖤍 ORANGE🍊〆DANNY 𖤍',
-    sshHost: host,
-    sshPort: 80,
-    sshUsername: 'dany',
-    sshPassword: '#12345',
-    payload: DEFAULT_SSH_PAYLOAD
-  };
+  const ssh = token.sshConfig;
+  if (!ssh || !ssh.sshHost || !ssh.sshUsername || !ssh.sshPassword) {
+    return {
+      configs: [],
+      error: 'Cette ancienne licence SSH ne contient pas de paramètres provisionnés valides.'
+    };
+  }
   return {
     configs: [
       {
@@ -2462,7 +2431,17 @@ async function startServer() {
     const isSsh = String(req.body?.protocolType || req.body?.protocol || req.body?.type || '').toLowerCase() === 'ssh' ||
                   (selected && selected.protocol === 'ssh');
     const profile = selected || (configs.length === 1 && !configurationId ? configs[0] : undefined);
-    if (!profile && !isSsh) {
+    if (isSsh || profile?.protocol === 'ssh') {
+      res.status(503).json({
+        error: 'La création de licences SSH est suspendue : aucun provisionneur SSH sécurisé n’est connecté au control plane. Utilisez un profil VLESS opérationnel.'
+      });
+      return;
+    }
+    if (profile && !isXrayProtocol(profile.protocol)) {
+      res.status(400).json({ error: 'Seul le protocole VLESS est provisionné par ce serveur.' });
+      return;
+    }
+    if (!profile) {
       res.status(409).json({
         error: configs.length === 0
           ? 'Aucune configuration VPN n’est disponible. Le Super Administrateur doit en créer une dans Infrastructure.'
@@ -2622,6 +2601,12 @@ async function startServer() {
     const profile = (configId ? configs.find(c => c.id === configId) : null) || configs[0] || legacyProtocolConfig();
     if (!profile) {
       res.status(400).json({ error: 'Aucun protocole de connexion configuré.' });
+      return;
+    }
+    if (!isXrayProtocol(profile.protocol)) {
+      res.status(503).json({
+        error: 'La génération de lots SSH/autres protocoles est suspendue : seul VLESS est provisionné par le moteur Xray actuel.'
+      });
       return;
     }
 
