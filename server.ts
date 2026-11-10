@@ -4012,9 +4012,26 @@ async function startServer() {
     const bandwidthGb = selectedPlan.quotaGb;
     const expiresAt = new Date(Date.now() + days * 24 * 3600 * 1000).toISOString();
 
-    const masterConfig = loadMasterConfig();
     const protocolConfigs = loadProtocolConfigs();
     const profile = protocolConfigs[0];
+    if (!profile || !isXrayProtocol(profile.protocol)) {
+      res.status(503).json({
+        error: 'Impossible d’approuver cette demande : aucun profil VLESS provisionnable n’est configuré.'
+      });
+      return;
+    }
+    const profileSniError = tlsSniValidationError(profile.transport, profile.sniHost);
+    if (!isValidPublicHost(profile.serverHost) || profileSniError) {
+      res.status(503).json({
+        error: profileSniError || 'Le profil VLESS ne possède pas une destination publique valide.'
+      });
+      return;
+    }
+    const masterSecret = process.env.MASTER_SECRET || loadMasterConfig().secretPassphrase;
+    if (!masterSecret || masterSecret.length < 32) {
+      res.status(503).json({ error: 'MASTER_SECRET est absent ou invalide. La demande n’a pas été approuvée.' });
+      return;
+    }
 
     const dummyToken: ClientToken = {
       id: 'tok_' + crypto.randomUUID(),
@@ -4034,16 +4051,17 @@ async function startServer() {
       lastSeenAt: null,
       lastSeenIp: null,
       status: 'active',
-      configurationId: profile?.id,
-      configurationName: profile?.name,
-      configurationSnapshot: profile,
+      configurationId: profile.id,
+      configurationName: profile.name,
+      configurationSnapshot: publicProtocolConfig(profile),
+      protocolType: 'vless',
       customerNote: reqItem.fullName,
       customerContact: reqItem.contactDetail,
       encryptedLink: '',
       createdAt: new Date().toISOString()
     };
-    dummyToken.encryptedLink = encryptConfig({ token: tokenStr, v: 2 }, masterConfig.secretPassphrase);
-    dummyToken.directLink = profile ? buildDirectProtocolUrl(dummyToken, profile) : undefined;
+    dummyToken.encryptedLink = encryptConfig({ token: tokenStr, v: 2 }, masterSecret);
+    dummyToken.directLink = buildDirectProtocolUrl(dummyToken, profile);
 
     tokens.push(dummyToken);
     saveTokens(tokens);
