@@ -1425,10 +1425,14 @@ function safeClientToken(token: ClientToken): SafeClientToken {
 function syncXrayConfig(tokens: ClientToken[] = loadTokens()): boolean {
   const masterConfig = loadMasterConfig();
   const now = Date.now();
-  const activeTokens = tokens.filter(token => token.status === 'active' &&
+  const activeTokens = tokens.filter(token =>
+    token.protocolType !== 'ssh' &&
+    !token.sshConfig &&
+    token.status === 'active' &&
     Number.isFinite(new Date(token.expiresAt).getTime()) && new Date(token.expiresAt).getTime() > now &&
     Number(token.bandwidthUsedGb) < Number(token.bandwidthGb) &&
-    typeof token.clientUuid === 'string' && token.clientUuid.length > 0);
+    typeof token.clientUuid === 'string' && token.clientUuid.length > 0
+  );
   const users = activeTokens.map(token => ({
     id: token.clientUuid as string,
     email: xrayUserEmail(token),
@@ -3654,6 +3658,10 @@ async function startServer() {
       res.status(404).send('Abonnement introuvable.');
       return;
     }
+    if (matched.protocolType === 'ssh' || matched.sshConfig) {
+      res.status(410).send('Les anciennes licences SSH sont suspendues. Aucun identifiant SSH ne sera distribué.');
+      return;
+    }
 
     const subscriptionExpiry = new Date(matched.expiresAt).getTime();
     const subscriptionInvalid = matched.status !== 'active' ||
@@ -3662,16 +3670,6 @@ async function startServer() {
       Number(matched.bandwidthUsedGb) >= Number(matched.bandwidthGb);
     if (subscriptionInvalid) {
       res.status(403).send('Compte inactif, expiré ou quota dépassé.');
-      return;
-    }
-
-    if (matched.protocolType === 'ssh' || matched.sshConfig) {
-      const sshJson = generateSshConfigJson(matched);
-      res.setHeader('Content-Type', 'application/json; charset=utf-8');
-      if (req.query.download === '1') {
-        res.setHeader('Content-Disposition', `attachment; filename="${matched.token}-ssh.json"`);
-      }
-      res.send(JSON.stringify(sshJson, null, 2));
       return;
     }
 
@@ -4294,6 +4292,10 @@ async function startServer() {
     const token = tokens.find(t => t.id === req.params.id);
     if (!token) {
       res.status(404).json({ error: 'Token introuvable.' });
+      return;
+    }
+    if (token.protocolType === 'ssh' || token.sshConfig) {
+      res.status(410).json({ ok: false, error: 'Les anciennes licences SSH ne disposent plus de variantes exportables.' });
       return;
     }
     if (!canManageToken((req as any).user as AppUser, token.resellerId, loadUsers())) {
