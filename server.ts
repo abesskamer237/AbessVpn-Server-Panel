@@ -1032,7 +1032,7 @@ export function generateXrayClientJson(token: ClientToken, profile?: ProtocolCon
         break;
       case 'grpc':
         streamSettings.grpcSettings = {
-          serviceName: cleanPath.replace(/^\\/+/, ''),
+          serviceName: cleanPath.startsWith('/') ? cleanPath.slice(1) : cleanPath,
           multiMode: false
         };
         break;
