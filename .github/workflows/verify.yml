@@ -785,6 +785,9 @@ jobs:
           const redactedLegacyToken = redactedBackupJson.tokens.find(token => token.id === 'ci-legacy-ssh-token');
           assert.ok(redactedLegacyToken);
           assert.ok(!('sshPassword' in redactedLegacyToken.sshConfig), 'legacy SSH passwords must not appear in API backups');
+          const backedUpLicenceA = redactedBackupJson.tokens.find(token => token.id === licenceA.id);
+          assert.ok(backedUpLicenceA?.configurationSnapshot, 'backups must preserve immutable per-licence protocol snapshots');
+          assert.equal(backedUpLicenceA.configurationSnapshot.serverHost, 'profile.example.test');
 
           const legacySshActivation = await fetch(`${base}/api/v1/auth/token`, {
             method: 'POST',
