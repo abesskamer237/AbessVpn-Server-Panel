@@ -411,7 +411,9 @@ jobs:
           done
           if [ "$ssh_ws_external_ready" -ne 1 ]; then
             curl_reason="$(sed -E 's/([0-9]{1,3}\.){3}[0-9]{1,3}/[VPS IP]/g' /tmp/abess-ws-curl-error | tr '\n' ' ')"
-            echo "::error::SSH-WS port 80 external verification failed: ${curl_reason:-HTTP Upgrade rejected}. Check the public VPS IP and the provider firewall." >&2
+            http_status="$(printf '%s' "$ssh_ws_external" | head -n 1 | tr -d '\r')"
+            http_server="$(printf '%s' "$ssh_ws_external" | sed -n 's/^[Ss]erver: //p' | tr -d '\r')"
+            echo "::error::SSH-WS port 80 external verification failed: ${http_status:-no HTTP response}; server=${http_server:-unknown}; ${curl_reason:-HTTP Upgrade rejected}." >&2
             exit 1
           fi
           echo 'External SSH-WS HTTP Upgrade on port 80 verified.'
