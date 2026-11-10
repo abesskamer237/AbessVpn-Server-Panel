@@ -1634,7 +1634,7 @@ const publicRateLimits = new Map<string, PublicRateBucket>();
 
 function publicApiRateLimiter(req: express.Request, res: express.Response, next: express.NextFunction) {
   // Do not trust caller-supplied X-Forwarded-For for abuse controls.
-  const ip = req.socket.remoteAddress || 'unknown';
+  const ip = req.ip || 'unknown';
   const now = Date.now();
   let bucket = publicRateLimits.get(ip);
   if (bucket?.blockedUntil && bucket.blockedUntil > now) {
@@ -1728,6 +1728,10 @@ async function startServer() {
   syncXrayConfig(startupTokens);
 
   const app = express();
+  // The API is reachable only through the private Docker network in production.
+  // Trust private Caddy proxy hops so req.ip resolves the visitor address without
+  // trusting X-Forwarded-For from arbitrary public peers.
+  app.set('trust proxy', 'uniquelocal');
   app.use(express.json());
 
   // CORS
@@ -1862,7 +1866,7 @@ async function startServer() {
     }
 
     found.lastSeenAt = new Date(now).toISOString();
-    found.lastSeenIp = req.socket.remoteAddress || 'unknown';
+    found.lastSeenIp = req.ip || 'unknown';
     saveTokens(tokens);
 
     res.json({
@@ -1943,7 +1947,7 @@ async function startServer() {
   // ==========================================
   app.post('/api/v1/auth/login', (req, res) => {
     // X-Forwarded-For is untrusted unless a trusted proxy is explicitly configured.
-    const clientIp = req.socket.remoteAddress || 'unknown';
+    const clientIp = req.ip || 'unknown';
 
     const rateCheck = checkLoginRateLimit(clientIp);
     if (!rateCheck.allowed) {
@@ -3332,7 +3336,7 @@ async function startServer() {
     const tokens = loadTokens();
     const cleanToken = rawToken.toUpperCase();
     const found = tokens.find(t => t.token.toUpperCase() === cleanToken);
-    const clientIp = req.socket.remoteAddress || 'unknown';
+    const clientIp = req.ip || 'unknown';
 
     if (!found) {
       res.status(401).json({ valid: false, error: 'Token client non reconnu ou révoqué.' });
@@ -3887,7 +3891,7 @@ async function startServer() {
     const countries = loadAfricanCountries();
     const cCode = String(countryCode || 'CM').toUpperCase();
     const country = countries.find((c: any) => c.code === cCode) || countries[0];
-    const clientIp = req.socket.remoteAddress || 'unknown';
+    const clientIp = req.ip || 'unknown';
 
     const plans = loadPlans();
     const plan = plans.find(p => p.id === planId) || plans[0];
