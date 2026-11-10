@@ -2483,6 +2483,7 @@ async function startServer() {
     }
 
     const users = loadUsers();
+    const originalUsersSnapshot = users.map(account => ({ ...account }));
     const target = users.find(u => u.id === req.params.id && u.role === 'RESELLER');
     if (!target) {
       res.status(404).json({ error: 'Revendeur introuvable.' });
@@ -2539,7 +2540,7 @@ async function startServer() {
     } catch {
       try {
         saveTokens(branchTokens);
-        saveUsers(users);
+        saveUsers(originalUsersSnapshot);
       } catch (rollbackError) {
         console.error('[RESELLER DELETE] Rollback failed; restore the latest data backup before further writes.', rollbackError);
       }
