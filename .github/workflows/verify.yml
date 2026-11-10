@@ -307,6 +307,11 @@ jobs:
             '/api/system/audit-logs',
             { Authorization: `Bearer ${login.token}` },
           );
+          await assertCorruptStoreFailsClosed(
+            'config.json',
+            '/api/v1/admin/server-config',
+            { Authorization: `Bearer ${login.token}` },
+          );
 
           const adminBackup = await fetch(`${base}/api/v1/admin/backup`, {
             headers: { Authorization: `Bearer ${login.token}` },
