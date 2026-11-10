@@ -73,6 +73,22 @@ Do not paste secrets into chat, source code, workflow files, or commits. For pas
 
 The `ADMIN_INITIAL_PASSWORD` and `MASTER_SECRET` secrets are optional. If they are absent, the workflow generates them with cryptographically secure randomness. On a **first deployment**, the generated administrator email/password is saved in `~/abessvpn-server/INITIAL_ADMIN_CREDENTIALS.txt` on the VPS with owner-only permissions; after the successful deployment, connect to the VPS and read that file, then save the password in a password manager and delete the file. The generated master secret is saved in `~/abessvpn-server/.env` with mode `600`. The workflow preserves both values across later deployments, so existing accounts and encrypted `abess://` links continue to work. Back up `.env` separately and securely: application-data backups intentionally omit `MASTER_SECRET`, which must remain in the server environment. Do not rotate `MASTER_SECRET` after links have been issued without running a dedicated re-encryption migration. Changing `ADMIN_INITIAL_PASSWORD` later does not reset an administrator already stored in the persistent user database.
 
+#### Rotation contrôlée du MASTER_SECRET
+
+Le secret a pu être exposé par une ancienne route de sauvegarde désormais protégée. Après avoir créé une sauvegarde complète du volume Docker et du fichier `.env`, arrête le service API (ne laisse aucun processus écrire dans `data/tokens.json`), puis exécute depuis le dossier du dépôt :
+
+```bash
+node scripts/rotate-master-secret.mjs --self-test
+export DATA_DIR=/chemin/vers/abessvpn-server/data
+export MASTER_SECRET_OLD='ancienne-valeur'
+export MASTER_SECRET_NEW='nouvelle-valeur-aleatoire-de-32-caracteres-minimum'
+node scripts/rotate-master-secret.mjs
+```
+
+Le script re-chiffre les liens stockés (AES-GCM et anciens liens AES-CBC), retire les mots de passe SSH historiques, écrit une sauvegarde de pré-rotation chiffrée avec le nouveau secret et supprime le secret du fichier `config.json`. Ensuite, remplace `MASTER_SECRET` dans le `.env` par la nouvelle valeur et redémarre le service API.
+
+Les anciens QR codes/liens `abess://` déjà distribués à l'extérieur de la base restent chiffrés avec l'ancien secret : les clients concernés devront importer leur licence avec leur token ou recevoir un nouveau lien. Ne supprime pas l'ancienne sauvegarde chiffrée tant que la restauration n'a pas été testée.
+
 **Configure the Android build too:** in `abesskamer237/AbessVpn-Cyber`, add the repository variable `VPN_DOMAIN` with the same control-plane hostname (for example `panneau.pagnol.xyz`). The build compiles `ABESS_API_BASE_URL=https://VPN_DOMAIN`; if the variable is missing, the workflow stops instead of using obsolete demo hosts. Then run **Actions → Build APK Release (68MB Universal) → Run workflow** to build an APK bound to this server.
 
 ### 4. Launch the deployment
