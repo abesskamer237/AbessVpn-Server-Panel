@@ -252,6 +252,12 @@ jobs:
           assert.ok(!('secretPassphrase' in systemBackupJson.config), 'system backup must redact MASTER_SECRET');
 
           // The API's Caddy/domain variable must not silently become the VPN endpoint or TLS SNI.
+          // Simulate a config.json written by the retired implementation.
+          const legacyConfigFile = `${dataDir}/config.json`;
+          const legacyConfigFixture = JSON.parse(fs.readFileSync(legacyConfigFile, 'utf8'));
+          legacyConfigFixture.secretPassphrase = 'CI-LEGACY-MASTER-SECRET-FIXTURE';
+          fs.writeFileSync(legacyConfigFile, JSON.stringify(legacyConfigFixture, null, 2));
+
           const initialMasterConfigResponse = await fetch(`${base}/api/v1/admin/server-config`, {
             headers: { Authorization: `Bearer ${login.token}` },
           });
