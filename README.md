@@ -139,3 +139,9 @@ Seuls les identifiants listés dans `TELEGRAM_ADMIN_IDS` sont autorisés. La com
 - ⚙️ **Supervision Xray (`/xray`, `/reload`) :** Contrôle et rechargement de la configuration VLESS provisionnée par le serveur.
 - 💾 **Sauvegarde Système 1-Clic (`/backup`) :** Téléchargement instantané d'une archive JSON complète de la base de données directement dans la conversation Telegram.
 - ⚠️ **Alertes Automatiques Proactives :** Notification immédiate des administrateurs dès qu'un utilisateur atteint 90% ou 100% de son quota, ou arrive à expiration.
+
+
+## Browser CORS
+
+The API allows the same-origin browser panel at `https://VPN_DOMAIN` and local Vite development origins. If you host the admin panel on another browser origin, add that exact origin to `CORS_ALLOWED_ORIGINS` as a comma-separated list. Do not use a wildcard.
+
