@@ -1422,6 +1422,19 @@ function safeClientToken(token: ClientToken): SafeClientToken {
   return { ...safe, sshConfig: safeSshConfig };
 }
 
+// Backups are Super Admin-only recovery artifacts: retain each token's immutable
+// protocol snapshot, but never serialize a historical clear-text SSH password.
+type BackupClientToken = Omit<ClientToken, 'sshConfig'> & {
+  sshConfig?: Omit<NonNullable<ClientToken['sshConfig']>, 'sshPassword'>;
+};
+
+function backupClientToken(token: ClientToken): BackupClientToken {
+  const { sshConfig, ...fullToken } = token;
+  if (!sshConfig) return fullToken;
+  const { sshPassword: _sshPassword, ...safeSshConfig } = sshConfig;
+  return { ...fullToken, sshConfig: safeSshConfig };
+}
+
 function syncXrayConfig(tokens: ClientToken[] = loadTokens()): boolean {
   const masterConfig = loadMasterConfig();
   const now = Date.now();
@@ -2833,7 +2846,7 @@ async function startServer() {
       masterConfig: safeMasterConfig,
       protocolConfigs: loadProtocolConfigs(),
       users: loadUsers().map(u => ({ ...u, passwordHash: u.passwordHash })),
-      tokens: loadTokens().map(safeClientToken),
+      tokens: loadTokens().map(backupClientToken),
       transactions: loadTransactions()
     };
 
@@ -2865,7 +2878,7 @@ async function startServer() {
       masterConfig: safeMasterConfig,
       protocolConfigs: loadProtocolConfigs(),
       users: loadUsers(),
-      tokens: loadTokens().map(safeClientToken),
+      tokens: loadTokens().map(backupClientToken),
       transactions: loadTransactions()
     };
     writeJsonAtomically(safetyBackupPath, currentSnapshot);
@@ -2899,7 +2912,7 @@ async function startServer() {
         })(),
         protocolConfigs: loadProtocolConfigs(),
         users: loadUsers().map(u => ({ ...u, passwordHash: u.passwordHash })),
-        tokens: loadTokens().map(safeClientToken),
+        tokens: loadTokens().map(backupClientToken),
         transactions: loadTransactions()
       };
       writeJsonAtomically(backupFile, backupData);
@@ -4248,7 +4261,7 @@ async function startServer() {
     res.setHeader('Content-Disposition', `attachment; filename="abessvpn-full-backup-${Date.now()}.json"`);
     res.json({
       users: loadUsers(),
-      tokens: loadTokens().map(safeClientToken),
+      tokens: loadTokens().map(backupClientToken),
       config: safeConfig,
       protocolConfigs: loadProtocolConfigs(),
       transactions: loadTransactions(),
