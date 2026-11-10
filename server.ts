@@ -485,19 +485,46 @@ export async function getServerUpdateStatus(): Promise<ServerUpdateStatus> {
 }
 
 export async function executeServerUpdate(): Promise<{ success: boolean; output: string; currentCommit: string }> {
-  try {
-    if (!fs.existsSync(path.resolve(__dirname, '.git'))) {
-      return { success: false, output: 'Dépôt git absent', currentCommit: 'unknown' };
-    }
-    const { stdout: pullOut } = await execAsync('git pull origin main', { cwd: __dirname, timeout: 30000 });
-    const { stdout: newCommit } = await execAsync('git rev-parse --short HEAD', { cwd: __dirname });
+  if (!fs.existsSync(path.resolve(__dirname, '.git'))) {
+    return { success: false, output: 'Dépôt git absent', currentCommit: 'unknown' };
+  }
 
-    syncXrayConfig();
+  let previousCommit = 'unknown';
+  try {
+    const { stdout: workingTree } = await execAsync('git status --porcelain', { cwd: __dirname, timeout: 10000 });
+    if (workingTree.trim()) {
+      return {
+        success: false,
+        output: 'Mise à jour annulée : des modifications locales existent dans le dépôt. Sauvegardez-les ou nettoyez le dépôt avant de continuer.',
+        currentCommit: (await execAsync('git rev-parse --short HEAD', { cwd: __dirname })).stdout.trim()
+      };
+    }
+
+    previousCommit = (await execAsync('git rev-parse HEAD', { cwd: __dirname })).stdout.trim();
+    await execAsync('git fetch --quiet origin main', { cwd: __dirname, timeout: 30000 });
+    const targetCommit = (await execAsync('git rev-parse origin/main', { cwd: __dirname, timeout: 10000 })).stdout.trim();
+    if (!/^[0-9a-f]{40}$/i.test(targetCommit)) {
+      throw new Error('Commit distant invalide.');
+    }
+    if (targetCommit === previousCommit) {
+      return { success: true, output: 'Le serveur est déjà à jour.', currentCommit: targetCommit.slice(0, 7) };
+    }
+
+    await execAsync(`git merge --ff-only ${targetCommit}`, { cwd: __dirname, timeout: 30000 });
 
     try {
-      await execAsync('npm run build', { cwd: __dirname, timeout: 60000 });
-    } catch (buildErr) {
-      console.error('[AUTO-UPDATE] Note build frontend:', buildErr);
+      await execAsync('npm run build', { cwd: __dirname, timeout: 120000 });
+      syncXrayConfig();
+    } catch (buildOrConfigError) {
+      const reason = buildOrConfigError instanceof Error ? buildOrConfigError.message : String(buildOrConfigError);
+      await execAsync(`git reset --hard ${previousCommit}`, { cwd: __dirname, timeout: 30000 });
+      await execAsync('npm run build', { cwd: __dirname, timeout: 120000 });
+      syncXrayConfig();
+      return {
+        success: false,
+        output: `Mise à jour annulée et commit précédent restauré après échec du build/configuration : ${reason}`,
+        currentCommit: previousCommit.slice(0, 7)
+      };
     }
 
     logTransaction({
@@ -507,19 +534,19 @@ export async function executeServerUpdate(): Promise<{ success: boolean; output:
       amountGb: 0,
       balanceBefore: 0,
       balanceAfter: 0,
-      note: `Mise à jour serveur vers commit ${newCommit.trim()}`
+      note: `Mise à jour serveur validée de ${previousCommit.slice(0, 7)} vers ${targetCommit.slice(0, 7)}`
     });
 
     return {
       success: true,
-      output: pullOut.trim(),
-      currentCommit: newCommit.trim()
+      output: `Mise à jour et build validés : ${targetCommit.slice(0, 7)}`,
+      currentCommit: targetCommit.slice(0, 7)
     };
   } catch (err: unknown) {
     return {
       success: false,
       output: err instanceof Error ? err.message : String(err),
-      currentCommit: 'error'
+      currentCommit: previousCommit === 'unknown' ? 'error' : previousCommit.slice(0, 7)
     };
   }
 }
@@ -1658,12 +1685,7 @@ function publicApiRateLimiter(req: express.Request, res: express.Response, next:
   const ip = req.socket.remoteAddress || 'unknown';
   const now = Date.now();
   let bucket = publicRateLimits.get(ip);
-  if (!bucket || now >= bucket.resetAt) {
-    bucket = { count: 1, resetAt: now + 60000, blockedUntil: 0 };
-    publicRateLimits.set(ip, bucket);
-    return next();
-  }
-  if (bucket.blockedUntil > now) {
+  if (bucket?.blockedUntil && bucket.blockedUntil > now) {
     const retryAfter = Math.ceil((bucket.blockedUntil - now) / 1000);
     res.set('Retry-After', String(retryAfter));
     return res.status(429).json({
@@ -1671,6 +1693,11 @@ function publicApiRateLimiter(req: express.Request, res: express.Response, next:
       error: `Trop de requêtes. Veuillez patienter ${retryAfter} secondes.`,
       status: 'rate_limited'
     });
+  }
+  if (!bucket || now >= bucket.resetAt) {
+    bucket = { count: 1, resetAt: now + 60000, blockedUntil: 0 };
+    publicRateLimits.set(ip, bucket);
+    return next();
   }
   bucket.count++;
   if (bucket.count > 60) {
