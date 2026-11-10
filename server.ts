@@ -2023,8 +2023,29 @@ async function startServer() {
     const users = loadUsers();
     const user = users.find(u => u.id === session.userId && u.status === 'active');
     if (!user) {
+      activeSessions.delete(token);
       res.status(401).json({ error: 'Compte suspendu ou introuvable.' });
       return;
+    }
+
+    // Re-check the entire reseller ancestry on every request. Suspending a
+    // parent immediately disables already-issued sessions of its descendants.
+    const visitedParents = new Set<string>([user.id]);
+    let parentId = user.parentId;
+    while (parentId) {
+      if (visitedParents.has(parentId)) {
+        activeSessions.delete(token);
+        res.status(403).json({ error: 'Hiérarchie revendeur invalide.' });
+        return;
+      }
+      visitedParents.add(parentId);
+      const parent = users.find(candidate => candidate.id === parentId);
+      if (!parent || parent.status !== 'active') {
+        activeSessions.delete(token);
+        res.status(401).json({ error: 'Votre branche revendeur parente est suspendue ou introuvable. Reconnexion refusée.' });
+        return;
+      }
+      parentId = parent.parentId;
     }
 
     (req as any).user = user;
