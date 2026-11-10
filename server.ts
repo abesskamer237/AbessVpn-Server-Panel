@@ -1654,7 +1654,8 @@ interface PublicRateBucket {
 const publicRateLimits = new Map<string, PublicRateBucket>();
 
 function publicApiRateLimiter(req: express.Request, res: express.Response, next: express.NextFunction) {
-  const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.socket.remoteAddress || '127.0.0.1';
+  // Do not trust caller-supplied X-Forwarded-For for abuse controls.
+  const ip = req.socket.remoteAddress || 'unknown';
   const now = Date.now();
   let bucket = publicRateLimits.get(ip);
   if (!bucket || now >= bucket.resetAt) {
@@ -1858,9 +1859,7 @@ async function startServer() {
     }
 
     found.lastSeenAt = new Date(now).toISOString();
-    found.lastSeenIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim()
-      || req.socket.remoteAddress
-      || 'unknown';
+    found.lastSeenIp = req.socket.remoteAddress || 'unknown';
     saveTokens(tokens);
 
     res.json({
@@ -1940,9 +1939,8 @@ async function startServer() {
   // 1. AUTHENTICATION & LOGIN (Admin & Reseller)
   // ==========================================
   app.post('/api/v1/auth/login', (req, res) => {
-    const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim()
-      || req.socket.remoteAddress
-      || 'unknown';
+    // X-Forwarded-For is untrusted unless a trusted proxy is explicitly configured.
+    const clientIp = req.socket.remoteAddress || 'unknown';
 
     const rateCheck = checkLoginRateLimit(clientIp);
     if (!rateCheck.allowed) {
@@ -3334,7 +3332,8 @@ async function startServer() {
   // ==========================================
   // SERVER AUTOMATED UPDATE & HEALTH
   // ==========================================
-  app.get('/api/v1/admin/system/update-status', authenticate, async (_req, res) => {
+  app.get('/api/v1/admin/system/update-status', authenticate, async (req, res) => {
+    if (!requireSuperAdmin(req, res)) return;
     const status = await getServerUpdateStatus();
     res.json(status);
   });
@@ -3596,14 +3595,15 @@ async function startServer() {
     }
     const tokens = loadTokens();
     const cleanToken = rawToken.toUpperCase();
-    const matched = tokens.find(t =>
-      t.token.toUpperCase() === cleanToken ||
-      (cleanToken === 'ABESS-SSH-ORANGE-DANY' && t.id === 'tok_ssh_dany') ||
-      (t.clientUuid && t.clientUuid.toLowerCase() === rawToken.toLowerCase()) ||
-      t.id === rawToken
-    );
+    const matched = tokens.find(t => t.token.toUpperCase() === cleanToken);
     if (!matched) {
       res.status(404).json({ error: 'Abonnement introuvable.' });
+      return;
+    }
+    const expiresAt = new Date(matched.expiresAt).getTime();
+    if (matched.status !== 'active' || !Number.isFinite(expiresAt) || expiresAt <= Date.now() ||
+        Number(matched.bandwidthUsedGb) >= Number(matched.bandwidthGb)) {
+      res.status(403).json({ error: 'Abonnement inactif, expiré ou quota épuisé.' });
       return;
     }
     const sshJson = generateSshConfigJson(matched);
@@ -3656,14 +3656,19 @@ async function startServer() {
     }
     const tokens = loadTokens();
     const cleanToken = rawToken.toUpperCase();
-    const matched = tokens.find(t =>
-      t.token.toUpperCase() === cleanToken ||
-      (cleanToken === 'ABESS-SSH-ORANGE-DANY' && t.id === 'tok_ssh_dany') ||
-      (t.clientUuid && t.clientUuid.toLowerCase() === rawToken.toLowerCase()) ||
-      t.id === rawToken
-    );
+    const matched = tokens.find(t => t.token.toUpperCase() === cleanToken);
     if (!matched) {
       res.status(404).send('Abonnement introuvable.');
+      return;
+    }
+
+    const subscriptionExpiry = new Date(matched.expiresAt).getTime();
+    const subscriptionInvalid = matched.status !== 'active' ||
+      !Number.isFinite(subscriptionExpiry) ||
+      subscriptionExpiry <= Date.now() ||
+      Number(matched.bandwidthUsedGb) >= Number(matched.bandwidthGb);
+    if (subscriptionInvalid) {
+      res.status(403).send('Compte inactif, expiré ou quota dépassé.');
       return;
     }
 
@@ -3746,13 +3751,6 @@ async function startServer() {
     }
 
     // Raw VPN Subscription Response
-    const isExpired = Number.isFinite(new Date(matched.expiresAt).getTime()) && new Date(matched.expiresAt).getTime() <= Date.now();
-    const isExceeded = Number(matched.bandwidthUsedGb) >= Number(matched.bandwidthGb);
-    if (matched.status !== 'active' || isExpired || isExceeded) {
-      res.status(403).send('Compte inactif, expiré ou quota dépassé.');
-      return;
-    }
-
     const rawUris = variants.map(v => v.uri).join('\n');
     const b64Sub = Buffer.from(rawUris, 'utf8').toString('base64');
 
@@ -3986,7 +3984,13 @@ async function startServer() {
     const deviceId = req.query.device_id ? String(req.query.device_id).trim() : '';
     const requestId = req.query.request_id ? String(req.query.request_id).trim() : '';
     const requests = loadRequests();
-    const reqFound = requests.find(r => (requestId && r.id === requestId) || (deviceId && r.deviceId === deviceId));
+    if (!requestId && !deviceId) {
+      res.status(400).json({ status: 'invalid_request', message: 'request_id ou device_id requis.' });
+      return;
+    }
+    const reqFound = requests.find(r =>
+      (!requestId || r.id === requestId) && (!deviceId || r.deviceId === deviceId)
+    );
     if (!reqFound) {
       res.status(404).json({ status: 'not_found', message: 'Aucune demande trouvée pour cet appareil.' });
       return;
@@ -4007,15 +4011,20 @@ async function startServer() {
     }
     res.json({
       status: reqFound.status.toLowerCase(),
-      request: reqFound,
+      request: {
+        id: reqFound.id,
+        status: reqFound.status,
+        planName: reqFound.planName,
+        submittedAt: reqFound.submittedAt,
+        processedAt: reqFound.processedAt,
+        rejectionReason: reqFound.status === 'REJECTED' ? reqFound.rejectionReason : undefined
+      },
       message: reqFound.status === 'PENDING' ? 'Demande en cours d\'examen par un administrateur.' : 'Demande rejetée.'
     });
   });
 
   function generateTokenCode(): string {
-    const p1 = Math.random().toString(36).substring(2, 6).toUpperCase();
-    const p2 = Math.random().toString(36).substring(2, 6).toUpperCase();
-    return `ABESS-${p1}-${p2}`;
+    return generateUnifiedToken();
   }
 
   app.get(['/api/admin/requests', '/api/v1/admin/requests'], authenticate, (req, res) => {
@@ -4201,7 +4210,8 @@ async function startServer() {
     }
   });
 
-  app.get(['/api/system/diagnostics', '/api/v1/system/diagnostics'], authenticate, (_req, res) => {
+  app.get(['/api/system/diagnostics', '/api/v1/system/diagnostics'], authenticate, (req, res) => {
+    if (!requireSuperAdmin(req, res)) return;
     res.json(getSystemDiagnostics());
   });
 
