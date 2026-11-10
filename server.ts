@@ -2473,7 +2473,8 @@ async function startServer() {
     res.json({ success: true, status: reseller.status });
   });
 
-  // Delete Reseller
+  // Delete a reseller and its full descendant branch. Outstanding credits are
+  // returned to the direct parent; every associated licence and session is revoked.
   app.delete('/api/v1/admin/resellers/:id', authenticate, (req, res) => {
     const user: AppUser = (req as any).user;
     if (user.role !== 'SUPER_ADMIN' && user.role !== 'RESELLER') {
@@ -2488,35 +2489,96 @@ async function startServer() {
       return;
     }
 
-    if (user.role === 'RESELLER') {
-      if (target.parentId !== user.id) {
-        res.status(403).json({ error: 'Vous ne pouvez supprimer que vos propres sous-revendeurs.' });
-        return;
-      }
-
-      const dbUser = users.find(u => u.id === user.id);
-      if (dbUser && target.credits > 0) {
-        const refund = target.credits;
-        const prev = dbUser.credits;
-        dbUser.credits += refund;
-
-        logTransaction({
-          resellerId: dbUser.id,
-          resellerName: dbUser.name,
-          type: 'RESELLER_DELETE_REFUND',
-          amountGb: refund,
-          balanceBefore: prev,
-          balanceAfter: dbUser.credits,
-          note: `Remboursement de ${refund} Go suite à la suppression du sous-revendeur ${target.name}`
-        });
-      }
+    if (user.role === 'RESELLER' && target.parentId !== user.id) {
+      res.status(403).json({ error: 'Vous ne pouvez supprimer que vos propres sous-revendeurs.' });
+      return;
     }
 
     const descendantIds = new Set([target.id, ...getSubResellerIdsRecursive(target.id, users)]);
-    const filtered = users.filter(u => !descendantIds.has(u.id));
-    saveUsers(filtered);
+    const branchUsers = users.filter(candidate => descendantIds.has(candidate.id));
+    const branchTokens = loadTokens();
+    const tokensToRevoke = branchTokens.filter(token =>
+      descendantIds.has(token.resellerId) && token.status === 'active'
+    );
+    const updatedTokens = branchTokens.map(token =>
+      descendantIds.has(token.resellerId) && token.status === 'active'
+        ? { ...token, status: 'revoked' as const }
+        : token
+    );
 
-    res.json({ success: true, deletedCount: descendantIds.size });
+    let refundedCredits = 0;
+    if (user.role === 'RESELLER') {
+      const dbUser = users.find(candidate => candidate.id === user.id);
+      if (!dbUser || dbUser.status !== 'active') {
+        res.status(401).json({ error: 'Compte parent introuvable ou suspendu.' });
+        return;
+      }
+
+      refundedCredits = branchUsers.reduce((total, branchUser) => {
+        const credits = Number(branchUser.credits);
+        if (!Number.isFinite(credits) || credits < 0) {
+          throw new Error(`Solde invalide pour le revendeur ${branchUser.id}; suppression annulée.`);
+        }
+        return total + credits;
+      }, 0);
+
+      if (!Number.isFinite(refundedCredits) || refundedCredits > 1000000000) {
+        res.status(409).json({ error: 'Le total des crédits de la branche est invalide; suppression annulée.' });
+        return;
+      }
+      dbUser.credits += refundedCredits;
+    }
+
+    // Persist the revoked licences before removing the branch accounts.
+    saveTokens(updatedTokens);
+    const filteredUsers = users.filter(candidate => !descendantIds.has(candidate.id));
+    saveUsers(filteredUsers);
+
+    for (const [sessionToken, session] of activeSessions.entries()) {
+      if (descendantIds.has(session.userId)) activeSessions.delete(sessionToken);
+    }
+
+    // Make the Xray runtime drop every UUID issued by the removed branch.
+    syncXrayConfig(updatedTokens);
+
+    for (const token of tokensToRevoke) {
+      logTransaction({
+        resellerId: token.resellerId,
+        resellerName: token.resellerName,
+        type: 'TOKEN_REVOKE',
+        amountGb: 0,
+        balanceBefore: 0,
+        balanceAfter: 0,
+        note: `Révocation automatique de la licence ${token.token} après suppression de la branche revendeur.`
+      });
+    }
+
+    if (user.role === 'RESELLER' && refundedCredits > 0) {
+      const parent = filteredUsers.find(candidate => candidate.id === user.id);
+      logTransaction({
+        resellerId: user.id,
+        resellerName: user.name,
+        type: 'RESELLER_DELETE_REFUND',
+        amountGb: refundedCredits,
+        balanceBefore: Number(parent?.credits || 0) - refundedCredits,
+        balanceAfter: Number(parent?.credits || 0),
+        note: `Remboursement de ${refundedCredits} Go pour suppression de la branche ${target.name} (${descendantIds.size} compte(s)).`
+      });
+    }
+
+    logAudit({
+      actor: user.name,
+      role: user.role,
+      action: 'RESELLER_BRANCH_DELETE',
+      details: `Suppression de la branche ${target.name}: ${descendantIds.size} compte(s), ${tokensToRevoke.length} licence(s) révoquée(s), ${refundedCredits} Go remboursés.`
+    });
+
+    res.json({
+      success: true,
+      deletedCount: descendantIds.size,
+      revokedTokenCount: tokensToRevoke.length,
+      refundedCreditsGb: refundedCredits
+    });
   });
 
   // ==========================================
