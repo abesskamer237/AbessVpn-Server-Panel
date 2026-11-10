@@ -2580,10 +2580,29 @@ async function startServer() {
   // Batch / Bulk Token Generation for commercial vouchers & scratch cards
   app.post('/api/v1/admin/tokens/batch', authenticate, (req, res) => {
     const user: AppUser = (req as any).user;
-    const count = Math.min(200, Math.max(1, Number(req.body?.count) || 5));
-    const requestedGb = Math.max(1, Number(req.body?.bandwidthGb) || 50);
-    const days = Math.max(1, Number(req.body?.days) || 30);
-    const clientLimit = Math.max(1, Math.min(10, Math.floor(Number(req.body?.deviceLimit) || 2)));
+    const count = req.body?.count === undefined ? 5 : Number(req.body.count);
+    const requestedGb = req.body?.bandwidthGb === undefined ? 50 : Number(req.body.bandwidthGb);
+    const days = req.body?.days === undefined ? 30 : Number(req.body.days);
+    const rawDeviceLimit = req.body?.deviceLimit === undefined ? 2 : Number(req.body.deviceLimit);
+
+    if (!Number.isInteger(count) || count < 1 || count > 200) {
+      res.status(400).json({ error: 'La quantité du lot doit être un entier compris entre 1 et 200.' });
+      return;
+    }
+    if (!Number.isFinite(requestedGb) || requestedGb < 1 || requestedGb > 100000) {
+      res.status(400).json({ error: 'Le quota unitaire doit être compris entre 1 et 100000 Go.' });
+      return;
+    }
+    if (!Number.isInteger(days) || days < 1 || days > 3650) {
+      res.status(400).json({ error: 'La durée du lot doit être un entier compris entre 1 et 3650 jours.' });
+      return;
+    }
+    if (!Number.isInteger(rawDeviceLimit) || rawDeviceLimit < 1 || rawDeviceLimit > 10) {
+      res.status(400).json({ error: 'La limite d’appareils doit être un entier compris entre 1 et 10.' });
+      return;
+    }
+
+    const clientLimit = rawDeviceLimit;
     const voucherPrefix = (req.body?.voucherPrefix?.toString()?.trim() || 'VIP').toUpperCase().replace(/[^A-Z0-9]/g, '');
     const plan = req.body?.plan?.toString()?.trim() || `${requestedGb} GO CYBER VIP`;
     const customerNotePrefix = req.body?.customerNotePrefix?.toString()?.trim() || '';
