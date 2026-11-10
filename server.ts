@@ -616,11 +616,13 @@ function loadMasterConfig(): MasterServerConfig {
     }
   }
 
-  fs.writeFileSync(configFile, JSON.stringify(defaults, null, 2), 'utf8');
+  saveMasterConfig(defaults);
   return defaults;
 }
 function saveMasterConfig(cfg: MasterServerConfig) {
-  writeJsonAtomically(configFile, cfg);
+  // MASTER_SECRET must live only in the process environment, never in JSON files.
+  const { secretPassphrase: _secretPassphrase, ...safeConfig } = cfg;
+  writeJsonAtomically(configFile, safeConfig);
 }
 
 // User Storage with Initial Super Admin
@@ -2786,12 +2788,13 @@ async function startServer() {
 
     // Safety snapshot before restoring
     const safetyBackupPath = path.resolve(backupsDir, `pre-restore-${Date.now()}.json`);
+    const { secretPassphrase: _secretPassphrase, ...safeMasterConfig } = loadMasterConfig();
     const currentSnapshot = {
       timestamp: new Date().toISOString(),
-      masterConfig: loadMasterConfig(),
+      masterConfig: safeMasterConfig,
       protocolConfigs: loadProtocolConfigs(),
       users: loadUsers(),
-      tokens: loadTokens(),
+      tokens: loadTokens().map(safeClientToken),
       transactions: loadTransactions()
     };
     writeJsonAtomically(safetyBackupPath, currentSnapshot);
@@ -2819,10 +2822,13 @@ async function startServer() {
         timestamp: new Date().toISOString(),
         type: 'AUTOMATIC_DAILY',
         version: '2.5.0-commercial',
-        masterConfig: loadMasterConfig(),
+        masterConfig: (() => {
+          const { secretPassphrase: _secretPassphrase, ...safeConfig } = loadMasterConfig();
+          return safeConfig;
+        })(),
         protocolConfigs: loadProtocolConfigs(),
         users: loadUsers().map(u => ({ ...u, passwordHash: u.passwordHash })),
-        tokens: loadTokens(),
+        tokens: loadTokens().map(safeClientToken),
         transactions: loadTransactions()
       };
       writeJsonAtomically(backupFile, backupData);
