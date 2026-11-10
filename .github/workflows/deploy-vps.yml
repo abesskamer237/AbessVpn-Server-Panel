@@ -301,7 +301,11 @@ jobs:
           set -euo pipefail
           VPS_PORT="${VPS_PORT:-22}"
           DEST="${VPS_USER}@${VPS_HOST}"
-          "$HOME/.local/bin/abess-ssh" -p "$VPS_PORT" -o StrictHostKeyChecking=yes "$DEST" "VPN_DOMAIN='$VPN_DOMAIN' bash -s" <<'REMOTE'
+          if [[ ! "$VPS_HOST" =~ ^[A-Za-z0-9.-]+$ ]]; then
+            echo '::error::VPS_HOST must be an IPv4 address or hostname without a protocol, port or whitespace.' >&2
+            exit 1
+          fi
+          "$HOME/.local/bin/abess-ssh" -p "$VPS_PORT" -o StrictHostKeyChecking=yes "$DEST" "SSH_WS_HOST='$VPS_HOST' VPN_DOMAIN='$VPN_DOMAIN' bash -s" <<'REMOTE'
           set -euo pipefail
           cd "$HOME/abessvpn-server"
           rm -f .deploy.credentials
@@ -352,6 +356,10 @@ jobs:
           if [ "$rollback_allowed" -eq 1 ]; then
             docker compose exec -T database pg_dump -U abess -Fc abess | docker run --rm -i --env-file .env -v "$PWD/deployment-backups:/backup" -v "$PWD/scripts:/tools:ro" node:22-alpine node /tools/snapshot-volume.mjs encrypt - "/backup/postgres-$(date +%s).dump.enc"
           fi
+          # Persist the exact direct origin supplied to this deployment.
+          grep -v '^SSH_WS_HOST=' .env.new > .env.origin || true
+          printf 'SSH_WS_HOST=%s\n' "$SSH_WS_HOST" >> .env.origin
+          mv .env.origin .env.new
           mv .env.new .env
           chmod 600 .env
           docker compose config -q
@@ -420,7 +428,7 @@ jobs:
             exit 1
           fi
           if [ "$ssh_ws_origin" != "$VPS_HOST" ]; then
-            echo '::error::The running API did not load the deployed SSH_WS_HOST. Refusing to distribute an outdated SSH-WS origin.' >&2
+            echo "::error::The running API did not load the deployed SSH_WS_HOST (running public origin: ${ssh_ws_origin}). Refusing to distribute an outdated SSH-WS origin." >&2
             exit 1
           fi
           ssh_ws_external_ready=0
