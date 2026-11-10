@@ -387,9 +387,12 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
       await sendMessage(chatId, '❌ Aucune configuration de protocole active sur le serveur.');
       return;
     }
+    if (profile.protocol !== 'vless') {
+      await sendMessage(chatId, '⛔ Le bot ne génère que des licences VLESS. Les profils SSH et autres protocoles sont suspendus tant que leur moteur de provisionnement sécurisé n’est pas disponible.');
+      return;
+    }
 
-    const randomSuffix = Math.random().toString(36).substring(2, 6).toUpperCase() +
-      '-' + Math.random().toString(36).substring(2, 6).toUpperCase();
+    const randomSuffix = crypto.randomBytes(8).toString('hex').toUpperCase();
     const tokenCode = `ABESS-${randomSuffix}`;
     const clientUuid = crypto.randomUUID();
     const expiresAt = new Date(Date.now() + days * 24 * 3600 * 1000).toISOString();
@@ -513,14 +516,17 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
       await sendMessage(chatId, '❌ Aucune configuration de protocole disponible.');
       return;
     }
+    if (profile.protocol !== 'vless') {
+      await sendMessage(chatId, '⛔ La génération de lots est limitée à VLESS. Les profils SSH et autres protocoles ne sont pas provisionnés par le moteur actuel.');
+      return;
+    }
 
     const tokens = ctx.loadTokens();
     const createdTokens: ClientToken[] = [];
     const csvRows: string[] = ['Code,Plan,Quota_GB,Days,Expires_At,Abess_Link,Direct_Link'];
 
     for (let i = 0; i < count; i++) {
-      const codeSuffix = Math.random().toString(36).substring(2, 6).toUpperCase() +
-        '-' + Math.random().toString(36).substring(2, 6).toUpperCase();
+      const codeSuffix = crypto.randomBytes(8).toString('hex').toUpperCase();
       const tokenCode = `ABESS-${prefix}-${codeSuffix}`;
       const clientUuid = crypto.randomUUID();
       const expiresAt = new Date(Date.now() + days * 24 * 3600 * 1000).toISOString();
