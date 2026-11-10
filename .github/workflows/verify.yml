@@ -278,7 +278,7 @@ jobs:
           });
           assert.equal(adminAppVersion.status, 200, 'Super Admin must retain access to app version configuration');
 
-          const adminBackup = await fetch(`${base}/api/v1/admin/backup`,
+          const adminBackup = await fetch(`${base}/api/v1/admin/backup`, {
             headers: { Authorization: `Bearer ${login.token}` },
           });
           assert.equal(adminBackup.status, 200);
