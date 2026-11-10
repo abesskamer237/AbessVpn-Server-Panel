@@ -17,7 +17,7 @@ export function SshCenter({ token }: { token: string }) {
   const [quotaGb, setQuota] = useState(10);
   const [connections, setConnections] = useState(1);
   const [selected, setSelected] = useState("");
-  const [transport, setTransport] = useState("wss-raw");
+  const [transport, setTransport] = useState("ws-alt");
   const [config, setConfig] = useState<any>(null);
   const [search, setSearch] = useState("");
   const headers = {
@@ -352,8 +352,9 @@ export function SshCenter({ token }: { token: string }) {
             </select>
           </label>
           <p className="text-sm text-slate-400">
-            TLS 443 est recommandé. Les modes HTTP nécessitent un accès direct
-            sans redirection HTTPS du domaine ou du CDN.
+            Le port HTTP alternatif rejoint directement le VPS. Les données
+            restent chiffrées par SSH. Les variantes TLS nécessitent un proxy
+            compatible avec le transport sélectionné.
           </p>
           <p className="text-sm text-slate-400">
             Serveur :{" "}

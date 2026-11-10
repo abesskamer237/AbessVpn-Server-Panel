@@ -312,7 +312,7 @@ jobs:
             while IFS= read -r existing_line; do
               key="${existing_line%%=*}"
               [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
-              case "$key" in VPN_DOMAIN|ADMIN_EMAIL|ADMIN_NAME|ACME_EMAIL) continue ;; esac
+              case "$key" in VPN_DOMAIN|SSH_WS_HOST|ADMIN_EMAIL|ADMIN_NAME|ACME_EMAIL) continue ;; esac
               grep -v "^${key}=" .env.new > .env.merged || true
               printf '%s\n' "$existing_line" >> .env.merged
               mv .env.merged .env.new
@@ -403,12 +403,18 @@ jobs:
           REMOTE
           # Verify the exported endpoint, which can differ from the management
           # SSH address when SSH_WS_HOST was configured on an existing VPS.
-          ssh_ws_origin="$("$HOME/.local/bin/abess-ssh" -p "$VPS_PORT" -o StrictHostKeyChecking=yes "$DEST" 'bash -s' <<'ORIGIN'
+          ssh_ws_endpoint="$("$HOME/.local/bin/abess-ssh" -p "$VPS_PORT" -o StrictHostKeyChecking=yes "$DEST" 'bash -s' <<'ORIGIN'
           set -euo pipefail
           cd "$HOME/abessvpn-server"
-          docker compose exec -T api node -e 'process.stdout.write(process.env.SSH_WS_HOST || process.env.VPN_DOMAIN)'
+          docker compose exec -T api node -e 'process.stdout.write((process.env.SSH_WS_HOST || process.env.VPN_DOMAIN) + "\n" + (process.env.SSH_WS_PUBLIC_PORT || "85"))'
           ORIGIN
           )"
+          ssh_ws_origin="$(printf '%s\n' "$ssh_ws_endpoint" | head -n 1)"
+          ssh_ws_port="$(printf '%s\n' "$ssh_ws_endpoint" | tail -n 1)"
+          if [[ ! "$ssh_ws_port" =~ ^[0-9]+$ ]] || ((ssh_ws_port < 1 || ssh_ws_port > 65535)); then
+            echo '::error::Invalid SSH-WS public port.' >&2
+            exit 1
+          fi
           if [[ ! "$ssh_ws_origin" =~ ^[A-Za-z0-9.-]+$ ]]; then
             echo '::error::The exported SSH-WS origin must be an IPv4 address or hostname.' >&2
             exit 1
@@ -431,22 +437,28 @@ jobs:
             curl_reason="$(sed -E 's/([0-9]{1,3}\.){3}[0-9]{1,3}/[VPS IP]/g' /tmp/abess-ws-curl-error | tr '\n' ' ')"
             http_status="$(printf '%s' "$ssh_ws_external" | head -n 1 | tr -d '\r')"
             http_server="$(printf '%s' "$ssh_ws_external" | sed -n 's/^[Ss]erver: //p' | tr -d '\r')"
-            echo "::warning::Optional plain SSH-WS port 80: ${http_status:-no HTTP response}; server=${http_server:-unknown}; ${curl_reason:-HTTP Upgrade rejected}. Use the verified TLS profile instead." >&2
+            echo "::warning::Optional plain SSH-WS port 80: ${http_status:-no HTTP response}; server=${http_server:-unknown}; ${curl_reason:-HTTP Upgrade rejected}. Use the direct port 85 after its verification passes." >&2
           else
             echo 'External SSH-WS HTTP Upgrade on port 80 verified.'
           fi
+          ssh_ws_direct="$(curl --noproxy '*' --http1.1 --silent --show-error --connect-timeout 8 --max-time 10 -D - -o /tmp/abess-ws-direct-body -H 'Connection: Upgrade' -H 'Upgrade: websocket' "http://${ssh_ws_origin}:${ssh_ws_port}/ws-ssh" 2>/tmp/abess-ws-direct-error || true)"
+          if ! printf '%s' "$ssh_ws_direct" | grep -Eq '^HTTP/1[.]1 101' || ! grep -aEq '^SSH-2[.]0-' /tmp/abess-ws-direct-body; then
+            direct_status="$(printf '%s' "$ssh_ws_direct" | head -n 1 | tr -d '\r')"
+            direct_reason="$(sed -E 's/([0-9]{1,3}\.){3}[0-9]{1,3}/[VPS IP]/g' /tmp/abess-ws-direct-error | tr '\n' ' ')"
+            echo "::error::Public direct SSH-WS port ${ssh_ws_port} failed: ${direct_status:-no HTTP response}; ${direct_reason:-SSH banner missing}." >&2
+            exit 1
+          fi
+          echo "External direct SSH-WS HTTP Upgrade and SSH server banner on port ${ssh_ws_port} verified."
           ssh_ws_tls="$(curl --noproxy '*' --http1.1 --silent --show-error --connect-timeout 8 --max-time 10 -D - -o /tmp/abess-ws-tls-body -H 'Connection: Upgrade' -H 'Upgrade: websocket' "https://${VPN_DOMAIN}/ws-ssh" 2>/tmp/abess-ws-tls-error || true)"
           if ! printf '%s' "$ssh_ws_tls" | grep -Eq '^HTTP/1[.]1 101'; then
             tls_status="$(printf '%s' "$ssh_ws_tls" | head -n 1 | tr -d '\r')"
             tls_reason="$(sed -E 's/([0-9]{1,3}\.){3}[0-9]{1,3}/[VPS IP]/g' /tmp/abess-ws-tls-error | tr '\n' ' ')"
-            echo "::error::Public SSH-WS TLS verification failed: ${tls_status:-no HTTP response}; ${tls_reason:-HTTP Upgrade rejected}." >&2
-            exit 1
+            echo "::warning::Optional raw SSH-WS TLS: ${tls_status:-no HTTP response}; ${tls_reason:-HTTP Upgrade rejected}. The direct port 85 is verified separately." >&2
+          elif ! grep -aEq '^SSH-2[.]0-' /tmp/abess-ws-tls-body; then
+            echo '::warning::The TLS proxy did not forward the raw SSH banner. Use the verified direct port 85.' >&2
+          else
+            echo 'External SSH-WS TLS HTTP Upgrade and SSH server banner on port 443 verified.'
           fi
-          if ! grep -aEq '^SSH-2[.]0-' /tmp/abess-ws-tls-body; then
-            echo '::error::Public TLS endpoint accepted HTTP Upgrade but did not forward the SSH server banner.' >&2
-            exit 1
-          fi
-          echo 'External SSH-WS TLS HTTP Upgrade and SSH server banner on port 443 verified.'
 
           rm -f .deploy.env
 

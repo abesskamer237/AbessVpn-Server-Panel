@@ -46,7 +46,7 @@ Le déploiement configure `SSH_WS_HOST` avec l’adresse du VPS pour les modes s
 
 1. Installer ABESS VPN **2.5.4 ou supérieur**.
 2. Dans **Comptes SSH**, créer un compte ou choisir un compte existant.
-3. Sélectionner **SSH-WS + TLS · HTTP Upgrade brut — 443**, proposé par défaut. Le mode HTTP 80/85 reste disponible si l’origine et le réseau acceptent un Upgrade sans redirection.
+3. Sélectionner **SSH-WS · HTTP Upgrade brut — 85**, proposé par défaut (ou le port alternatif configuré). Il rejoint directement l’IP du VPS. Les variantes TLS 443/2084 restent disponibles lorsque le domaine et son proxy acceptent le transport brut.
 4. Télécharger le JSON et l’importer dans l’APK. Il contient un mot de passe : le transmettre au seul client concerné.
 5. Sélectionner le profil puis connecter. L’empreinte SHA-256 SSH est vérifiée dans tous les modes. Le certificat TLS est aussi vérifié lorsque TLS est utilisé.
 
@@ -60,4 +60,4 @@ Les tests du panel font traverser le Caddyfile de production par du trafic SSH r
 
 Les tests logiciels ne remplacent pas un essai sur le téléphone et le réseau mobile de l’utilisateur. La configuration personnelle de l’ami n’est pas accessible depuis le dépôt et n’a pas été présumée connue.
 
-Le déploiement exige un Upgrade TLS `101` depuis le runner GitHub, avec vérification du certificat. Il contrôle aussi le mode HTTP et signale un avertissement si un CDN ou un proxy le redirige vers HTTPS. Une redirection `301`/`308` ne constitue pas un tunnel SSH-WS : utiliser le profil TLS, ou corriger explicitement l’origine HTTP avant de distribuer un profil sans TLS.
+Le déploiement exige un Upgrade `101` et une bannière SSH à travers le port alternatif depuis le runner GitHub. Il contrôle aussi HTTP 80 et TLS 443 et signale leurs redirections/erreurs. Une redirection `301`/`308` ou une erreur `502` du CDN ne constitue pas un tunnel SSH-WS. Utiliser l’entrée directe validée plutôt que suivre une redirection. `SSH_WS_HOST` est régénéré avec l’adresse du VPS lors des déploiements pour éviter de conserver un ancien domaine derrière un CDN ; les autres paramètres opérationnels et secrets sont conservés.
