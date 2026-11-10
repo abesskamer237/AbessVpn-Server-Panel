@@ -435,14 +435,18 @@ jobs:
           else
             echo 'External SSH-WS HTTP Upgrade on port 80 verified.'
           fi
-          ssh_ws_tls="$(curl --noproxy '*' --http1.1 --silent --show-error --connect-timeout 8 --max-time 10 -D - -o /dev/null -H 'Connection: Upgrade' -H 'Upgrade: websocket' "https://${VPN_DOMAIN}/ws-ssh" 2>/tmp/abess-ws-tls-error || true)"
+          ssh_ws_tls="$(curl --noproxy '*' --http1.1 --silent --show-error --connect-timeout 8 --max-time 10 -D - -o /tmp/abess-ws-tls-body -H 'Connection: Upgrade' -H 'Upgrade: websocket' "https://${VPN_DOMAIN}/ws-ssh" 2>/tmp/abess-ws-tls-error || true)"
           if ! printf '%s' "$ssh_ws_tls" | grep -Eq '^HTTP/1[.]1 101'; then
             tls_status="$(printf '%s' "$ssh_ws_tls" | head -n 1 | tr -d '\r')"
             tls_reason="$(sed -E 's/([0-9]{1,3}\.){3}[0-9]{1,3}/[VPS IP]/g' /tmp/abess-ws-tls-error | tr '\n' ' ')"
             echo "::error::Public SSH-WS TLS verification failed: ${tls_status:-no HTTP response}; ${tls_reason:-HTTP Upgrade rejected}." >&2
             exit 1
           fi
-          echo 'External SSH-WS TLS HTTP Upgrade on port 443 verified.'
+          if ! grep -aEq '^SSH-2[.]0-' /tmp/abess-ws-tls-body; then
+            echo '::error::Public TLS endpoint accepted HTTP Upgrade but did not forward the SSH server banner.' >&2
+            exit 1
+          fi
+          echo 'External SSH-WS TLS HTTP Upgrade and SSH server banner on port 443 verified.'
 
           rm -f .deploy.env
 
