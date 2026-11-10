@@ -278,11 +278,11 @@ jobs:
           });
           assert.equal(adminAppVersion.status, 200, 'Super Admin must retain access to app version configuration');
 
-          async function assertCorruptStoreFailsClosed(filename, endpoint, headers) {
+          async function assertCorruptStoreFailsClosed(filename, endpoint, headers, corruptPayload = '{invalid-json') {
             const storePath = `${dataDir}/${filename}`;
             const existed = fs.existsSync(storePath);
             const previous = existed ? fs.readFileSync(storePath) : null;
-            fs.writeFileSync(storePath, '{invalid-json');
+            fs.writeFileSync(storePath, corruptPayload);
             try {
               const response = await fetch(`${base}${endpoint}`, { headers });
               assert.equal(response.status, 500, `${filename} corruption must not be treated as an empty store`);
@@ -311,6 +311,12 @@ jobs:
             'config.json',
             '/api/v1/admin/server-config',
             { Authorization: `Bearer ${login.token}` },
+          );
+          await assertCorruptStoreFailsClosed(
+            'protocol-configs.json',
+            '/api/v1/admin/protocol-configs',
+            { Authorization: `Bearer ${login.token}` },
+            '{}',
           );
           await assertCorruptStoreFailsClosed(
             'app-version.json',
