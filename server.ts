@@ -2467,70 +2467,41 @@ async function startServer() {
     const customerNote = req.body?.customerNote?.toString()?.trim() || undefined;
     const customerContact = req.body?.customerContact?.toString()?.trim() || undefined;
 
-    const defaultHost = process.env.VPN_DOMAIN || '';
-    let encryptedLink = '';
-    let directLink = '';
-    let sshConfigData: ClientToken['sshConfig'] | undefined = undefined;
-
-    if (isSsh) {
-      const sshHost = String(selected?.serverHost || req.body?.sshHost || defaultHost).trim();
-      const sshPort = Number(selected?.serverPort || req.body?.sshPort) || 80;
-      const payload = String(selected?.payload || req.body?.payload || DEFAULT_SSH_PAYLOAD).trim();
-      const remarks = String(selected?.remarks || selected?.name || plan || '𖤍 ORANGE🍊〆DANNY 𖤍').trim();
-
-      const cleanTokenPart = finalToken.toLowerCase().replace(/[^a-z0-9]/g, '').slice(-8);
-      const sshUsername = String(req.body?.sshUsername || ('u_' + cleanTokenPart)).trim().toLowerCase();
-      const sshPassword = String(req.body?.sshPassword || ('#' + crypto.randomBytes(3).toString('hex'))).trim();
-
-      createLinuxSshAccount(sshUsername, sshPassword, daysRemaining);
-
-      sshConfigData = {
-        sshConfigType: 'SSH-Payload',
-        remarks,
-        sshHost,
-        sshPort,
-        sshUsername,
-        sshPassword,
-        payload
-      };
-
-      const dummyToken: any = { plan: remarks, sshConfig: sshConfigData };
-      const configsJson = generateSshConfigJson(dummyToken);
-      directLink = JSON.stringify(configsJson, null, 2);
-      encryptedLink = encryptConfig({
-        vpnName: 'AbessVpn', token: finalToken, protocol: 'ssh',
-        sshHost, sshPort, sshUsername, sshPassword, payload, remarks
-      }, masterSecret);
-    } else {
-      const encryptedPayload = {
-        vpnName: 'AbessVpn', token: finalToken, bandwidthGb: requestedGb,
-        expiresAt: calculatedExpiresAt, allowedDeviceId: allowedDeviceId || undefined,
-        configurationId: profile!.id, configurationName: profile!.name,
-        serverHost: profile!.serverHost, host: profile!.host || profile!.serverHost,
-        serverPort: xrayPublicPort(profile!.protocol, profile!.transport, profile!.serverPort),
-        path: xrayProfilePath(profile!.protocol as XrayProtocol, profile!.transport as XrayTransport, profile!.path),
-        sniHost: profile!.sniHost, uuid: clientUuid, protocol: profile!.protocol, transport: profile!.transport,
-        security: profile!.transport === 'tcp' ? 'none' : 'tls'
-      };
-      encryptedLink = encryptConfig(encryptedPayload, masterSecret);
-      directLink = buildDirectProtocolUrl({ token: finalToken, clientUuid } as any, profile!);
-    }
+    const encryptedPayload = {
+      vpnName: 'AbessVpn',
+      token: finalToken,
+      bandwidthGb: requestedGb,
+      expiresAt: calculatedExpiresAt,
+      allowedDeviceId: allowedDeviceId || undefined,
+      configurationId: profile!.id,
+      configurationName: profile!.name,
+      serverHost: profile!.serverHost,
+      host: profile!.host || profile!.serverHost,
+      serverPort: xrayPublicPort(profile!.protocol, profile!.transport, profile!.serverPort),
+      path: xrayProfilePath(profile!.protocol as XrayProtocol, profile!.transport as XrayTransport, profile!.path),
+      sniHost: profile!.sniHost,
+      uuid: clientUuid,
+      protocol: 'vless',
+      transport: profile!.transport,
+      security: profile!.transport === 'tcp' ? 'none' : 'tls'
+    };
+    const encryptedLink = encryptConfig(encryptedPayload, masterSecret);
+    const directLink = buildDirectProtocolUrl({ token: finalToken, clientUuid } as any, profile!);
 
     const tokens = loadTokens();
     const newToken: ClientToken = {
       id: 'tok_' + crypto.randomUUID().slice(0, 8), token: finalToken, clientUuid,
       resellerId: user.id, resellerName: user.name,
-      plan: String(plan || (isSsh ? '𖤍 ORANGE🍊〆DANNY 𖤍' : `${requestedGb} GO CYBER VIP`)).trim().slice(0, 80),
+      plan: String(plan || `${requestedGb} GO CYBER VIP`).trim().slice(0, 80),
       bandwidthGb: requestedGb, bandwidthUsedGb: 0, expiresAt: calculatedExpiresAt, days: daysRemaining,
       deviceLimit: clientLimit, deviceIds: [], allowedDeviceId: allowedDeviceId || undefined,
       customerNote, customerContact,
       connectionCount: 0, lastSeenAt: null, lastSeenIp: null,
       status: 'active',
-      configurationId: profile?.id,
-      configurationName: profile?.name || (isSsh ? 'SSH-Payload (Dropbear/WebSocket)' : undefined),
-      configurationSnapshot: profile ? publicProtocolConfig(profile) : undefined,
-      protocolType: isSsh ? 'ssh' : 'vless',
-      sshConfig: sshConfigData,
+      configurationId: profile!.id,
+      configurationName: profile!.name,
+      configurationSnapshot: publicProtocolConfig(profile!),
+      protocolType: 'vless',
       encryptedLink,
       directLink,
       createdAt: new Date().toISOString()
@@ -2607,55 +2578,25 @@ async function startServer() {
     for (let i = 0; i < count; i++) {
       const finalToken = generateUnifiedToken();
       const clientUuid = crypto.randomUUID();
-      const defaultHost = process.env.VPN_DOMAIN || '';
-
-      let encryptedLink = '';
-      let directLink = '';
-      let sshConfigData: ClientToken['sshConfig'] | undefined = undefined;
-
-      if (profile.protocol === 'ssh') {
-        const sshHost = String(profile.serverHost || defaultHost).trim();
-        const sshPort = Number(profile.serverPort) || 80;
-        const payload = String(profile.payload || DEFAULT_SSH_PAYLOAD).trim();
-        const remarks = String(profile.remarks || profile.name || plan || '𖤍 ORANGE🍊〆DANNY 𖤍').trim();
-
-        const cleanTokenPart = finalToken.toLowerCase().replace(/[^a-z0-9]/g, '').slice(-8);
-        const sshUsername = ('u_' + cleanTokenPart).trim().toLowerCase();
-        const sshPassword = '#' + crypto.randomBytes(3).toString('hex');
-
-        createLinuxSshAccount(sshUsername, sshPassword, daysRemaining);
-
-        sshConfigData = {
-          sshConfigType: 'SSH-Payload',
-          remarks,
-          sshHost,
-          sshPort,
-          sshUsername,
-          sshPassword,
-          payload
-        };
-
-        const dummyToken: any = { plan: remarks, sshConfig: sshConfigData };
-        const configsJson = generateSshConfigJson(dummyToken);
-        directLink = JSON.stringify(configsJson, null, 2);
-        encryptedLink = encryptConfig({
-          vpnName: 'AbessVpn', token: finalToken, protocol: 'ssh',
-          sshHost, sshPort, sshUsername, sshPassword, payload, remarks
-        }, masterSecret);
-      } else {
-        const encryptedPayload = {
-          vpnName: 'AbessVpn', token: finalToken, bandwidthGb: requestedGb,
-          expiresAt: calculatedExpiresAt,
-          configurationId: profile.id, configurationName: profile.name,
-          serverHost: profile.serverHost, host: profile.host || profile.serverHost,
-          serverPort: xrayPublicPort(profile.protocol, profile.transport, profile.serverPort),
-          path: xrayProfilePath(profile.protocol as XrayProtocol, profile.transport as XrayTransport, profile.path),
-          sniHost: profile.sniHost, uuid: clientUuid, protocol: profile.protocol, transport: profile.transport,
-          security: profile.transport === 'tcp' ? 'none' : 'tls'
-        };
-        encryptedLink = encryptConfig(encryptedPayload, masterSecret);
-        directLink = buildDirectProtocolUrl({ token: finalToken, clientUuid } as any, profile);
-      }
+      const encryptedPayload = {
+        vpnName: 'AbessVpn',
+        token: finalToken,
+        bandwidthGb: requestedGb,
+        expiresAt: calculatedExpiresAt,
+        configurationId: profile.id,
+        configurationName: profile.name,
+        serverHost: profile.serverHost,
+        host: profile.host || profile.serverHost,
+        serverPort: xrayPublicPort(profile.protocol, profile.transport, profile.serverPort),
+        path: xrayProfilePath(profile.protocol as XrayProtocol, profile.transport as XrayTransport, profile.path),
+        sniHost: profile.sniHost,
+        uuid: clientUuid,
+        protocol: 'vless',
+        transport: profile.transport,
+        security: profile.transport === 'tcp' ? 'none' : 'tls'
+      };
+      const encryptedLink = encryptConfig(encryptedPayload, masterSecret);
+      const directLink = buildDirectProtocolUrl({ token: finalToken, clientUuid } as any, profile);
 
       const newToken: ClientToken = {
         id: 'tok_' + crypto.randomUUID().slice(0, 8),
@@ -2678,8 +2619,7 @@ async function startServer() {
         configurationId: profile.id,
         configurationName: profile.name,
         configurationSnapshot: publicProtocolConfig(profile),
-        protocolType: profile.protocol === 'ssh' ? 'ssh' : 'vless',
-        sshConfig: sshConfigData,
+        protocolType: 'vless',
         encryptedLink,
         directLink,
         createdAt: new Date().toISOString()
