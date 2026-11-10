@@ -42,6 +42,7 @@ services:
       SSH_GATEWAY_ENABLED: "true"
       SSH_CONTROL_DIR: /ssh-control
       SSH_TCP_PORT: ${SSH_TCP_PORT:-2222}
+      SSH_WS_HOST: ${SSH_WS_HOST:-}
       SSH_WS_PUBLIC_PORT: ${SSH_WS_PUBLIC_PORT:-85}
     depends_on:
       database:
