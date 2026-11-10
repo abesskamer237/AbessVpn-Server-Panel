@@ -644,6 +644,60 @@ jobs:
           assert.equal(new URL(variantsCJson.variants.find(item => item.id === 'fast').uri).searchParams.get('sni'), process.env.VPN_DOMAIN,
             'TCP-only profiles must still use the Caddy certificate SNI for their TLS subscription variants');
 
+          async function assertGeneratedClientTransport(transport, expectedSettingsKey) {
+            const profileResponse = await fetch(`${base}/api/v1/admin/protocol-configs`, {
+              method: 'POST',
+              headers: adminHeaders,
+              body: JSON.stringify({
+                name: `CI VLESS ${transport.toUpperCase()}`,
+                serverHost: `profile-${transport}.example.test`,
+                host: `header-${transport}.example.test`,
+                sniHost: process.env.VPN_DOMAIN,
+                protocol: 'vless',
+                transport,
+              }),
+            });
+            assert.equal(profileResponse.status, 201, `${transport} profile must be accepted`);
+            const profile = (await profileResponse.json()).config;
+            const tokenResponse = await fetch(`${base}/api/v1/admin/tokens`, {
+              method: 'POST',
+              headers: adminHeaders,
+              body: JSON.stringify({
+                plan: `CI ${transport} client JSON`,
+                bandwidthGb: 1,
+                days: 1,
+                deviceLimit: 1,
+                configurationId: profile.id,
+              }),
+            });
+            assert.equal(tokenResponse.status, 201, `${transport} licence must be issued`);
+            const token = await tokenResponse.json();
+            const variantsResponse = await fetch(`${base}/api/v1/admin/tokens/${token.id}/variants`, {
+              headers: adminHeaders,
+            });
+            assert.equal(variantsResponse.status, 200);
+            const variants = await variantsResponse.json();
+            const outbound = variants.xrayClient.outbounds[0];
+            assert.equal(outbound.streamSettings.network, transport);
+            assert.equal(outbound.streamSettings.security, 'tls');
+            assert.equal(outbound.settings.vnext[0].port, 443);
+            assert.equal(outbound.streamSettings.tlsSettings.serverName, process.env.VPN_DOMAIN);
+            assert.ok(outbound.streamSettings[expectedSettingsKey], `${transport} settings must be present`);
+            return outbound.streamSettings;
+          }
+
+          const grpcClientSettings = await assertGeneratedClientTransport('grpc', 'grpcSettings');
+          assert.equal(grpcClientSettings.grpcSettings.serviceName, '@abess237/vless/grpc');
+          assert.deepEqual(grpcClientSettings.tlsSettings.alpn, ['h2']);
+
+          const httpUpgradeClientSettings = await assertGeneratedClientTransport('httpupgrade', 'httpupgradeSettings');
+          assert.equal(httpUpgradeClientSettings.httpupgradeSettings.path, '/@abess237/vless/httpupgrade');
+          assert.equal(httpUpgradeClientSettings.httpupgradeSettings.host, 'header-httpupgrade.example.test');
+
+          const xhttpClientSettings = await assertGeneratedClientTransport('xhttp', 'xhttpSettings');
+          assert.equal(xhttpClientSettings.xhttpSettings.path, '/@abess237/vless/xhttp');
+          assert.equal(xhttpClientSettings.xhttpSettings.mode, 'auto');
+
           const configResponse = JSON.parse(fs.readFileSync(`${dataDir}/xray-config.json`, 'utf8'));
           assert.equal(configResponse.outbounds[0].tag, 'direct', 'default VPN traffic must egress through the direct outbound');
           assert.ok(configResponse.outbounds.some(outbound => outbound.tag === 'api'), 'Xray control API outbound must exist');
