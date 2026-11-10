@@ -316,6 +316,7 @@ jobs:
           set -euo pipefail
           cd "$HOME/abessvpn-server"
           export COMPOSE_FILE="$PWD/docker-compose.yml"
+          dc() { command docker compose -f "$PWD/docker-compose.yml" "$@"; }
           umask 077
           if ! sha256sum --check .deploy-source.sha256; then
             echo '::error::Transferred deployment sources do not match the GitHub commit. Refusing to build stale configuration.' >&2
@@ -348,8 +349,8 @@ jobs:
           fi
           rollback_allowed=0
           if [ -f .env ] && grep -q '^POSTGRES_PASSWORD=' .env; then
-            old_api="$(docker compose images -q api | head -n1)"
-            old_xray="$(docker compose images -q xray | head -n1)"
+            old_api="$(dc images -q api | head -n1)"
+            old_xray="$(dc images -q xray | head -n1)"
             if [ -n "$old_api" ] && [ -n "$old_xray" ]; then
               docker tag "$old_api" abessvpn-api:rollback
               docker tag "$old_xray" abessvpn-xray:rollback
@@ -367,7 +368,7 @@ jobs:
             docker run --rm --env-file .env -v abessvpn-server_ssh_data:/source:ro -v "$PWD/deployment-backups:/backup" -v "$PWD/scripts:/tools:ro" node:22-alpine node /tools/snapshot-volume.mjs encrypt /source "/backup/ssh-pre-deploy-$(date +%s).tgz.enc"
           fi
           if [ "$rollback_allowed" -eq 1 ]; then
-            docker compose exec -T database pg_dump -U abess -Fc abess | docker run --rm -i --env-file .env -v "$PWD/deployment-backups:/backup" -v "$PWD/scripts:/tools:ro" node:22-alpine node /tools/snapshot-volume.mjs encrypt - "/backup/postgres-$(date +%s).dump.enc"
+            dc exec -T database pg_dump -U abess -Fc abess | docker run --rm -i --env-file .env -v "$PWD/deployment-backups:/backup" -v "$PWD/scripts:/tools:ro" node:22-alpine node /tools/snapshot-volume.mjs encrypt - "/backup/postgres-$(date +%s).dump.enc"
           fi
           # Persist the exact direct origin supplied to this deployment.
           grep -v '^SSH_WS_HOST=' .env.new > .env.origin || true
@@ -375,16 +376,16 @@ jobs:
           mv .env.origin .env.new
           mv .env.new .env
           chmod 600 .env
-          docker compose config -q
+          dc config -q
           deploy_failed=0
-          docker compose up -d --build --remove-orphans || deploy_failed=1
+          dc up -d --build --remove-orphans || deploy_failed=1
           # Reload API environment and the Caddyfile bind mount even when
           # their Compose service definitions or image tags stayed unchanged.
           # Preserve databases, SSH accounts, tunnel sessions and volumes.
           if [ "$deploy_failed" -eq 0 ]; then
-            docker compose up -d --no-deps --force-recreate api caddy || deploy_failed=1
+            dc up -d --no-deps --force-recreate api caddy || deploy_failed=1
           fi
-          docker compose ps
+          dc ps
 
           ready=0
           for ((attempt=1; attempt<=30; attempt++)); do
@@ -399,22 +400,22 @@ jobs:
           if [ "$ready" -ne 1 ] || [ "$deploy_failed" -ne 0 ]; then
             if [ "$rollback_allowed" -eq 1 ]; then
               echo 'Health checks failed; restoring the previous PostgreSQL-compatible API/Xray images.' >&2
-              docker compose -f docker-compose.yml -f .rollback.yml up -d --no-build api xray caddy
+              dc -f .rollback.yml up -d --no-build api xray caddy
             else
               echo 'Automatic image rollback is unavailable for the first JSON-to-PostgreSQL migration; restore from the protected pre-deployment archive under maintenance.' >&2
             fi
             echo 'Public HTTPS/Xray readiness check failed. Recent service logs follow.' >&2
-            docker compose ps >&2 || true
-            docker compose logs --tail=100 api xray caddy >&2 || true
+            dc ps >&2 || true
+            dc logs --tail=100 api xray caddy >&2 || true
             exit 1
           fi
-          docker compose exec -T ssh node -e "fetch('http://127.0.0.1:8085/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+          dc exec -T ssh node -e "fetch('http://127.0.0.1:8085/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
           ssh_upgrade="$(curl --http1.1 --silent --show-error --max-time 3 -D - -o /dev/null -H 'Connection: Upgrade' -H 'Upgrade: websocket' "https://${VPN_DOMAIN}/ws-ssh" 2>/dev/null || true)"
           if ! printf '%s' "$ssh_upgrade" | grep -Eq '^HTTP/1[.]1 101'; then
             echo '::error::Public SSH WebSocket/TLS upgrade failed. Check Caddy and the domain/CDN WebSocket settings.' >&2
             exit 1
           fi
-          ssh_ws_host="$(docker compose exec -T api node -e 'process.stdout.write(process.env.SSH_WS_HOST || process.env.VPN_DOMAIN)')"
+          ssh_ws_host="$(dc exec -T api node -e 'process.stdout.write(process.env.SSH_WS_HOST || process.env.VPN_DOMAIN)')"
           ssh_ws_upgrade="$(curl --http1.1 --silent --show-error --max-time 3 -D - -o /dev/null -H 'Connection: Upgrade' -H 'Upgrade: websocket' "http://${ssh_ws_host}/ws-ssh" 2>/dev/null || true)"
           if ! printf '%s' "$ssh_ws_upgrade" | grep -Eq '^HTTP/1[.]1 101'; then
             echo '::warning::Optional plain SSH-WS port 80 is redirected or unavailable from the VPS. Use SSH-WS TLS until the HTTP origin is configured.' >&2
@@ -428,7 +429,7 @@ jobs:
           set -euo pipefail
           cd "$HOME/abessvpn-server"
           export COMPOSE_FILE="$PWD/docker-compose.yml"
-          docker compose exec -T api node -e 'console.log("ABESS_SSH_ENDPOINT=" + JSON.stringify({host: process.env.SSH_WS_HOST || process.env.VPN_DOMAIN, port: process.env.SSH_WS_PUBLIC_PORT || "85"}))'
+          command docker compose -f "$PWD/docker-compose.yml" exec -T api node -e 'console.log("ABESS_SSH_ENDPOINT=" + JSON.stringify({host: process.env.SSH_WS_HOST || process.env.VPN_DOMAIN, port: process.env.SSH_WS_PUBLIC_PORT || "85"}))'
           ORIGIN
           )"
           ssh_ws_endpoint="$(printf '%s\n' "$ssh_ws_endpoint" | sed -n 's/^ABESS_SSH_ENDPOINT=//p' | tail -n 1)"
