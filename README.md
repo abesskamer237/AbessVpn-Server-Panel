@@ -5,9 +5,9 @@ ABESS VPN combines a Node.js/Express control plane, a React administration panel
 ## Status and architecture
 
 - **Control plane:** authentication, reseller accounts, per-licence UUIDs, encrypted `abess://` links, expiry, device limits, and licence administration.
-- **Xray-core:** the API writes `data/xray-config.json` from active licences. VLESS, VMess and Trojan support WebSocket, gRPC, HTTPUpgrade and XHTTP through HTTPS/TCP 443. VMess additionally supports direct RAW/TCP (port 10060) and mKCP/UDP (port 10061). Shadowsocks AEAD uses its native TCP+UDP listener on port 10050 so UDP is not accidentally routed through the HTTP-only reverse proxy. RAW/mKCP are restricted to VMess to avoid exposing VLESS without transport encryption or Trojan without TLS.
+- **Xray-core:** le control plane provisionne actuellement **VLESS uniquement**, avec WebSocket, gRPC, HTTPUpgrade, XHTTP et un profil direct TCP sur le port 10050. VMess, Trojan, Shadowsocks, WireGuard et mKCP ne sont pas provisionnés par cette version du serveur. Les mentions restantes dans certaines interfaces ou anciens profils ne constituent pas une prise en charge active.
 - **Quota enforcement:** the API reads Xray's real user counters and disables a licence in Xray when it expires or exhausts its quota. Client-submitted byte counts are not treated as authoritative.
-- **HTTPS:** Caddy automatically obtains and renews the certificate for `VPN_DOMAIN`. TLS terminates at Caddy on TCP 443; path routes forward supported profile traffic to private Xray inbounds. Native Shadowsocks TCP/UDP is separately published on port 10050. VMess RAW/TCP and mKCP/UDP are exposed on ports 10060/TCP and 10061/UDP respectively.
+- **HTTPS:** Caddy obtient et renouvelle le certificat de `VPN_DOMAIN`. TLS termine sur TCP 443. Les profils VLESS WebSocket sont relayés vers le service Xray interne ; le profil VLESS direct TCP utilise le port 10050. Vérifiez les transports sur un véritable client Android avant de les commercialiser.
 - **No sample production credentials:** the first boot requires an administrator email/password in environment variables. The admin password is stored with scrypt hashing. The master encryption secret must remain stable or previously issued encrypted links can no longer be decrypted.
 
 The health route `GET /api/v1/ping` only reports `dataPlane: "ready"` after the Xray sidecar has started and answered its local stats API. The watcher validates every generated configuration before replacing the active Xray process.
@@ -35,7 +35,7 @@ Use Ubuntu 24.04 or 22.04, install Docker Engine and the Docker Compose plugin u
 
 The deployment SSH user must have permission to run Docker without an interactive sudo prompt. Docker group access is effectively root-equivalent, so use a dedicated deployment account if possible. The workflow supports either a dedicated SSH key (`VPS_SSH_KEY`) or password authentication (`VPS_SSH_PASSWORD` or `VPS_PASSWORD`) stored as a GitHub Actions secret; a key is preferable, but is not mandatory. Never put the VPS password in the repository or in chat. Do not remove existing containers or Docker volumes as part of the setup.
 
-Ensure incoming TCP ports **80 and 443** are available for Caddy and allowed through the VPS/provider firewall. To use every exposed transport, also allow **TCP 10050**, **UDP 10050**, **TCP 10060**, and **UDP 10061**. Port 22 (or your custom SSH port) must be reachable from GitHub-hosted runners. If an existing Nginx, Caddy, x-ui, or other service already owns 80/443, this workflow intentionally aborts; move that service to another port or arrange an explicit reverse-proxy integration before deploying.
+Ensure incoming TCP ports **80 and 443** are available for Caddy and allowed through the VPS/provider firewall. For the current VLESS direct-TCP profile, also allow **TCP 10050**. No UDP listener is provisioned by this release. Port 22 (or your custom SSH port) must be reachable from GitHub-hosted runners. If an existing Nginx, Caddy, x-ui, or other service already owns 80/443, this workflow intentionally aborts; move that service to another port or arrange an explicit reverse-proxy integration before deploying.
 
 ### 2. Point your domain to the VPS
 
@@ -109,15 +109,15 @@ Licence issuance stays in the authenticated administration/reseller panel. Publi
 - Xray-core WebSocket transport: https://xtls.github.io/en/config/transports/websocket.html
 - Caddy automatic HTTPS: https://caddyserver.com/docs/automatic-https
 
-## Multi-protocol Xray profiles
+## Protocoles provisionnés
 
-The panel supports **VLESS, VMess, Trojan and Shadowsocks AEAD** with **WebSocket, gRPC, HTTPUpgrade and XHTTP** transports. Caddy terminates TLS on public TCP 443 and routes each HTTP-based profile to a private Xray inbound.
+Le control plane actuel provisionne **VLESS uniquement**. Les transports gérés par les profils serveur sont WebSocket, gRPC, HTTPUpgrade, XHTTP et TCP direct. Le chemin historique `/@abess237` reste utilisé pour VLESS + WS. Le profil TCP direct utilise le port TCP 10050.
 
-**Native TCP/UDP:** Shadowsocks also has a dedicated listener on port `10050` for both TCP and UDP. Permit TCP and UDP 10050 in the VPS/provider firewall when that profile is selected. This native mode does not use the public HTTPS certificate.
+VMess, Trojan, Shadowsocks, WireGuard, mKCP/UDP et TUN ne sont pas provisionnés par cette version du serveur, même si certains parseurs/importeurs Android ou anciens fichiers du dépôt peuvent reconnaître ces formats. Ne crée pas de licences commerciales pour ces protocoles depuis le panneau.
 
-mKCP is enabled only for VMess on UDP 10061, and Shadowsocks uses its native TCP+UDP listener on port 10050. Hysteria/QUIC, WireGuard and TUN are not enabled in this release because they require their own protocol-specific configuration and client compatibility. Native UDP cannot be forwarded through the ordinary HTTP reverse proxy. The Android app's local SOCKS inbound has UDP enabled, which is separate from a native public UDP listener.
+**SSH :** les anciennes licences SSH sont conservées pour consultation si leurs paramètres existent, mais l'émission de nouvelles licences SSH et la création de comptes Linux sont suspendues. Le déploiement Docker ne provisionne pas de comptes SSH sur l'hôte et aucun mot de passe SSH n'est écrit dans `/etc/ssh/vpn_users.db`. Pour réactiver SSH, il faudra concevoir un provisionneur hôte dédié, authentifié et isolé du conteneur API.
 
-The legacy path `/@abess237` remains for VLESS + WS. Other HTTP-carried profiles use `/@abess237/<protocol>/<transport>`. A successful compile or Xray config validation does not replace a real Android connection test for every combination.
+La validation d'une configuration Xray par CI ne remplace pas un test de connexion réel depuis Android.
 
 ## Gestion commerciale à distance via Bot Telegram
 
@@ -129,13 +129,13 @@ Ajoutez ces variables dans votre fichier `.env` sur le serveur :
 TELEGRAM_BOT_TOKEN=123456789:ABCdefGHIjklMNOpqrsTUVwxyz
 TELEGRAM_ADMIN_IDS=123456789,987654321
 ```
-*Si `TELEGRAM_ADMIN_IDS` n'est pas encore défini, envoyez simplement `/login <ADMIN_INITIAL_PASSWORD>` au bot pour vous authentifier instantanément comme Super Administrateur.*
+Seuls les identifiants listés dans `TELEGRAM_ADMIN_IDS` sont autorisés. La commande `/login` par mot de passe partagé est désactivée. Ajoutez explicitement les identifiants Telegram autorisés dans l'environnement du serveur, puis redémarrez le conteneur API.
 
 ### Fonctionnalités du Bot
 - 📊 **Tableau de bord en direct (`/stats`) :** Uptime, CPU, RAM, statut Xray, clients actifs, bande passante consommée vs allouée.
 - 🎟️ **Création de Vouchers / Tickets (`/create`) :** Packs rapides (Test 24h, Semaine 10 Go, Mensuel VIP 50 Go, Illimité 150 Go) avec génération et envoi immédiat du QR Code image, du lien `abess://` et du lien V2Ray universel.
 - 📦 **Génération de Lots (Batch / Grossiste) (`/batch`) :** Création instantanée de 5 à 200 vouchers avec export automatique d'un fichier CSV prêt à être distribué aux revendeurs ou imprimé.
 - 👥 **Gestion du Parc Clients (`/search`, `/reset`) :** Consultation paginée des fiches clients, ajout de quota (+10 Go), prolongation (+7j, +30j), suspension et réinitialisation en 1 clic des appareils liés (Unbind HWID).
-- ⚙️ **Supervision Protocoles & Xray (`/xray`, `/reload`) :** Contrôle des inbounds (VLESS, VMess, Trojan, Shadowsocks) et rechargement de configuration à chaud.
+- ⚙️ **Supervision Xray (`/xray`, `/reload`) :** Contrôle et rechargement de la configuration VLESS provisionnée par le serveur.
 - 💾 **Sauvegarde Système 1-Clic (`/backup`) :** Téléchargement instantané d'une archive JSON complète de la base de données directement dans la conversation Telegram.
 - ⚠️ **Alertes Automatiques Proactives :** Notification immédiate des administrateurs dès qu'un utilisateur atteint 90% ou 100% de son quota, ou arrive à expiration.
