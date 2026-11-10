@@ -17,7 +17,7 @@ export function SshCenter({ token }: { token: string }) {
   const [quotaGb, setQuota] = useState(10);
   const [connections, setConnections] = useState(1);
   const [selected, setSelected] = useState("");
-  const [transport, setTransport] = useState("ws");
+  const [transport, setTransport] = useState("wss-raw");
   const [config, setConfig] = useState<any>(null);
   const [search, setSearch] = useState("");
   const headers = {
@@ -351,6 +351,10 @@ export function SshCenter({ token }: { token: string }) {
               </option>
             </select>
           </label>
+          <p className="text-sm text-slate-400">
+            TLS 443 est recommandé. Les modes HTTP nécessitent un accès direct
+            sans redirection HTTPS du domaine ou du CDN.
+          </p>
           <p className="text-sm text-slate-400">
             Serveur :{" "}
             {(transport === "tcp" ||

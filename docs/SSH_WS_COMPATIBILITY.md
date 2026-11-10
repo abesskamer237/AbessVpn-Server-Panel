@@ -46,7 +46,7 @@ Le déploiement configure `SSH_WS_HOST` avec l’adresse du VPS pour les modes s
 
 1. Installer ABESS VPN **2.5.4 ou supérieur**.
 2. Dans **Comptes SSH**, créer un compte ou choisir un compte existant.
-3. Sélectionner **SSH-WS · HTTP Upgrade brut — 80** pour le mode HTTP, ou sa variante TLS 443/2084.
+3. Sélectionner **SSH-WS + TLS · HTTP Upgrade brut — 443**, proposé par défaut. Le mode HTTP 80/85 reste disponible si l’origine et le réseau acceptent un Upgrade sans redirection.
 4. Télécharger le JSON et l’importer dans l’APK. Il contient un mot de passe : le transmettre au seul client concerné.
 5. Sélectionner le profil puis connecter. L’empreinte SHA-256 SSH est vérifiée dans tous les modes. Le certificat TLS est aussi vérifié lorsque TLS est utilisé.
 
@@ -59,3 +59,5 @@ Les limites de compte, quota, expiration et connexions sont communes à tous les
 Les tests du panel font traverser le Caddyfile de production par du trafic SSH réel sur 80, 85, 443 et 2084. Ils vérifient le maintien des redirections HTTPS de l’API, les exports, les quotas et la révocation. Les tests du client Dart vérifient HTTP et TLS brut, le refus d’un HTTP 200, d’un mauvais certificat et d’une mauvaise clé SSH, ainsi que la chaîne réelle Xray → SOCKS Dart → SSH avec HTTP et DNS. Les anciens modes WebSocket encadrés sont aussi testés.
 
 Les tests logiciels ne remplacent pas un essai sur le téléphone et le réseau mobile de l’utilisateur. La configuration personnelle de l’ami n’est pas accessible depuis le dépôt et n’a pas été présumée connue.
+
+Le déploiement exige un Upgrade TLS `101` depuis le runner GitHub, avec vérification du certificat. Il contrôle aussi le mode HTTP et signale un avertissement si un CDN ou un proxy le redirige vers HTTPS. Une redirection `301`/`308` ne constitue pas un tunnel SSH-WS : utiliser le profil TLS, ou corriger explicitement l’origine HTTP avant de distribuer un profil sans TLS.

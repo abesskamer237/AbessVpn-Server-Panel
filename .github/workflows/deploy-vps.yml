@@ -396,8 +396,7 @@ jobs:
           ssh_ws_host="$(docker compose exec -T api node -e 'process.stdout.write(process.env.SSH_WS_HOST || process.env.VPN_DOMAIN)')"
           ssh_ws_upgrade="$(curl --http1.1 --silent --show-error --max-time 3 -D - -o /dev/null -H 'Connection: Upgrade' -H 'Upgrade: websocket' "http://${ssh_ws_host}/ws-ssh" 2>/dev/null || true)"
           if ! printf '%s' "$ssh_ws_upgrade" | grep -Eq '^HTTP/1[.]1 101'; then
-            echo '::error::Direct SSH-WS HTTP upgrade failed on port 80. Check the origin IP, firewall and Caddy.' >&2
-            exit 1
+            echo '::warning::Optional plain SSH-WS port 80 is redirected or unavailable from the VPS. Use SSH-WS TLS until the HTTP origin is configured.' >&2
           fi
           printf '%s\n' "$response"
           echo 'ABESS VPN control plane, Xray-core and public SSH WebSocket/TLS report ready.'
@@ -432,10 +431,19 @@ jobs:
             curl_reason="$(sed -E 's/([0-9]{1,3}\.){3}[0-9]{1,3}/[VPS IP]/g' /tmp/abess-ws-curl-error | tr '\n' ' ')"
             http_status="$(printf '%s' "$ssh_ws_external" | head -n 1 | tr -d '\r')"
             http_server="$(printf '%s' "$ssh_ws_external" | sed -n 's/^[Ss]erver: //p' | tr -d '\r')"
-            echo "::error::SSH-WS port 80 external verification failed: ${http_status:-no HTTP response}; server=${http_server:-unknown}; ${curl_reason:-HTTP Upgrade rejected}." >&2
+            echo "::warning::Optional plain SSH-WS port 80: ${http_status:-no HTTP response}; server=${http_server:-unknown}; ${curl_reason:-HTTP Upgrade rejected}. Use the verified TLS profile instead." >&2
+          else
+            echo 'External SSH-WS HTTP Upgrade on port 80 verified.'
+          fi
+          ssh_ws_tls="$(curl --noproxy '*' --http1.1 --silent --show-error --connect-timeout 8 --max-time 10 -D - -o /dev/null -H 'Connection: Upgrade' -H 'Upgrade: websocket' "https://${VPN_DOMAIN}/ws-ssh" 2>/tmp/abess-ws-tls-error || true)"
+          if ! printf '%s' "$ssh_ws_tls" | grep -Eq '^HTTP/1[.]1 101'; then
+            tls_status="$(printf '%s' "$ssh_ws_tls" | head -n 1 | tr -d '\r')"
+            tls_reason="$(sed -E 's/([0-9]{1,3}\.){3}[0-9]{1,3}/[VPS IP]/g' /tmp/abess-ws-tls-error | tr '\n' ' ')"
+            echo "::error::Public SSH-WS TLS verification failed: ${tls_status:-no HTTP response}; ${tls_reason:-HTTP Upgrade rejected}." >&2
             exit 1
           fi
-          echo 'External SSH-WS HTTP Upgrade on port 80 verified.'
+          echo 'External SSH-WS TLS HTTP Upgrade on port 443 verified.'
+
           rm -f .deploy.env
 
       - name: Remove temporary deployment material
