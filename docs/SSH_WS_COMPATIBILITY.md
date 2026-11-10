@@ -61,3 +61,5 @@ Les tests du panel font traverser le Caddyfile de production par du trafic SSH r
 Les tests logiciels ne remplacent pas un essai sur le téléphone et le réseau mobile de l’utilisateur. La configuration personnelle de l’ami n’est pas accessible depuis le dépôt et n’a pas été présumée connue.
 
 Le déploiement exige un Upgrade `101` et une bannière SSH à travers le port alternatif depuis le runner GitHub. Il contrôle aussi HTTP 80 et TLS 443 et signale leurs redirections/erreurs. Une redirection `301`/`308` ou une erreur `502` du CDN ne constitue pas un tunnel SSH-WS. Utiliser l’entrée directe validée plutôt que suivre une redirection. `SSH_WS_HOST` est régénéré avec l’adresse du VPS lors des déploiements pour éviter de conserver un ancien domaine derrière un CDN ; les autres paramètres opérationnels et secrets sont conservés.
+
+Le workflow fixe `COMPOSE_FILE` sur le `docker-compose.yml` livré par le dépôt. Un ancien `compose.yaml`, un fichier de surcharge ou une ancienne sélection `COMPOSE_FILE` du VPS ne doit pas faire disparaître silencieusement les ports et variables SSH-WS. L’adresse de l’API active est comparée à celle du déploiement avant le contrôle réseau.

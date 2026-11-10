@@ -2,6 +2,7 @@
 # Emit only public endpoint/configuration metadata, never credentials or full env.
 set -euo pipefail
 cd "$HOME/abessvpn-server"
+export COMPOSE_FILE="$PWD/docker-compose.yml"
 docker compose config --format json | docker run --rm -i node:22-alpine node -e '
 let text="";process.stdin.on("data",chunk=>text+=chunk).on("end",()=>{
  const config=JSON.parse(text);const env=config.services.api.environment || {};

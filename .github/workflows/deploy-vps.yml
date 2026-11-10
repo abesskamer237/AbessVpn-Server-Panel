@@ -247,7 +247,7 @@ jobs:
 
           existing_caddy=""
           if [ -f "$HOME/abessvpn-server/docker-compose.yml" ]; then
-            existing_caddy="$(cd "$HOME/abessvpn-server" && docker compose ps -q caddy 2>/dev/null || true)"
+            existing_caddy="$(cd "$HOME/abessvpn-server" && docker compose -f docker-compose.yml ps -q caddy 2>/dev/null || true)"
           fi
           busy="$(ss -ltnH 2>/dev/null | awk '$4 ~ /:(80|443)$/ {print $4}' || true)"
           if [ -n "$busy" ] && [ -z "$existing_caddy" ]; then
@@ -308,6 +308,7 @@ jobs:
           "$HOME/.local/bin/abess-ssh" -p "$VPS_PORT" -o StrictHostKeyChecking=yes "$DEST" "SSH_WS_HOST='$VPS_HOST' VPN_DOMAIN='$VPN_DOMAIN' bash -s" <<'REMOTE'
           set -euo pipefail
           cd "$HOME/abessvpn-server"
+          export COMPOSE_FILE="$PWD/docker-compose.yml"
           rm -f .deploy.credentials
           if [ -f .env ]; then
             # Preserve the initial administrator password and master key on redeploys.
@@ -414,6 +415,7 @@ jobs:
           ssh_ws_endpoint="$("$HOME/.local/bin/abess-ssh" -p "$VPS_PORT" -o StrictHostKeyChecking=yes "$DEST" 'bash -s' <<'ORIGIN'
           set -euo pipefail
           cd "$HOME/abessvpn-server"
+          export COMPOSE_FILE="$PWD/docker-compose.yml"
           docker compose exec -T api node -e 'process.stdout.write((process.env.SSH_WS_HOST || process.env.VPN_DOMAIN) + "\n" + (process.env.SSH_WS_PUBLIC_PORT || "85"))'
           ORIGIN
           )"
