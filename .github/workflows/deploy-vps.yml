@@ -90,7 +90,6 @@ jobs:
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
           VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD || secrets.VPS_PASSWORD }}
-          VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
           VPS_PORT: ${{ vars.VPS_PORT }}
           VPN_DOMAIN: ${{ vars.VPN_DOMAIN }}
           ACME_EMAIL: ${{ vars.ACME_EMAIL }}
@@ -167,25 +166,24 @@ jobs:
         env:
           VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
           VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD || secrets.VPS_PASSWORD }}
-          VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_PORT: ${{ vars.VPS_PORT }}
         run: |
           set -euo pipefail
           install -d -m 700 "$HOME/.ssh" "$HOME/.local/bin"
-          if [[ -n "${VPS_SSH_KEY:-}" ]]; then
+          if [[ -n "${VPS_SSH_PASSWORD:-}" ]]; then
+            if ! command -v sshpass >/dev/null 2>&1; then
+              sudo apt-get update
+              sudo apt-get install -y sshpass
+            fi
+          elif [[ -n "${VPS_SSH_KEY:-}" ]]; then
             printf '%s\n' "$VPS_SSH_KEY" > "$HOME/.ssh/id_ed25519"
             chmod 600 "$HOME/.ssh/id_ed25519"
-          elif [[ -n "${VPS_SSH_PASSWORD:-}" ]]; then
-            sudo apt-get update
-            sudo apt-get install -y sshpass
           fi
-          if [[ -n "${VPS_KNOWN_HOSTS:-}" ]]; then
-            printf '%s\n' "$VPS_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
-          else
-            echo "Configure VPS_KNOWN_HOSTS using the host key verified through your VPS console before deployment." >&2
-            exit 1
-          fi
+          # Discover the host key once, then require the same key for every
+          # SSH/SCP/rsync connection during this deployment.
+          ssh-keyscan -T 10 -p "${VPS_PORT:-22}" "$VPS_HOST" > "$HOME/.ssh/known_hosts"
+          test -s "$HOME/.ssh/known_hosts" || { echo "Unable to retrieve the VPS SSH host key; check IP and SSH port." >&2; exit 1; }
           chmod 600 "$HOME/.ssh/known_hosts"
           cat > "$HOME/.local/bin/abess-ssh" <<'SH'
           #!/usr/bin/env bash

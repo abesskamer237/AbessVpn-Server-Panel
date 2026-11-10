@@ -53,7 +53,7 @@ Ne pas extraire ni importer une archive sur la production avant de l’avoir con
 
 ## Déploiement et retour arrière
 
-Le workflow exige une clé d’hôte SSH vérifiée dans `VPS_KNOWN_HOSTS` ; il ne fait pas confiance à une première clé découverte sans vérification. Les conteneurs API et Xray utilisent un utilisateur non privilégié, un système de fichiers en lecture seule et aucune capacité Linux supplémentaire, avec leurs volumes d’état et `/tmp` séparés.
+Le workflow accepte l’IP (`VPS_HOST`), l’utilisateur (`VPS_USER`) et le mot de passe (`VPS_PASSWORD` ou `VPS_SSH_PASSWORD`) sans secret `VPS_KNOWN_HOSTS`. Il collecte automatiquement la clé publique SSH au début de chaque déploiement, puis exige la même clé pour toutes les connexions de cette exécution. Cette découverte initiale ne vérifie pas l’identité du serveur par une source indépendante. Le mot de passe est prioritaire sur une éventuelle clé privée. Les conteneurs API et Xray utilisent un utilisateur non privilégié, un système de fichiers en lecture seule et aucune capacité Linux supplémentaire, avec leurs volumes d’état et `/tmp` séparés.
 
 Le workflow valide les types, les tests de sécurité/plateforme, les transactions PostgreSQL, les images et le trafic Xray avant déploiement. Il conserve les secrets existants, effectue une sauvegarde protégée et vérifie la disponibilité HTTPS/Xray.
 

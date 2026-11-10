@@ -43,8 +43,8 @@ Configurer dans GitHub Actions :
 | Paramètre | Emplacement | Usage |
 | --- | --- | --- |
 | `VPS_HOST`, `VPS_USER` | Secrets | Destination SSH |
-| `VPS_SSH_KEY` ou `VPS_PASSWORD`/`VPS_SSH_PASSWORD` | Secrets | Authentification SSH |
-| `VPS_KNOWN_HOSTS` | Secret requis | Clé d’hôte SSH vérifiée |
+| `VPS_PASSWORD` ou `VPS_SSH_PASSWORD` | Secret | Mot de passe SSH ; prioritaire si une clé est également configurée |
+| `VPS_SSH_KEY` | Secret facultatif | Alternative au mot de passe |
 | `VPN_DOMAIN`, `ADMIN_EMAIL`, `ACME_EMAIL` | Variables | Domaine public et administration |
 | `ADMIN_INITIAL_PASSWORD`, `MASTER_SECRET` | Secrets optionnels | Générés lors du premier déploiement si absents, puis préservés |
 | `ADMIN_NAME`, `VPS_PORT` | Variables optionnelles | Nom et port SSH |
