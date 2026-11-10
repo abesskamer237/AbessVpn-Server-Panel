@@ -486,6 +486,14 @@ jobs:
           );
           assert.ok(!subscriptionHtml.includes(xssCustomerNote), 'raw script-breaking customer text must never appear in portal HTML');
           assert.match(licenceA.clientUuid, /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+          const variantsAResponse = await fetch(`${base}/api/v1/admin/tokens/${licenceA.id}/variants`, {
+            headers: { Authorization: `Bearer ${login.token}` },
+          });
+          assert.equal(variantsAResponse.status, 200);
+          const variantsAJson = await variantsAResponse.json();
+          assert.equal(variantsAJson.xrayClient.outbounds[0].streamSettings.network, 'ws');
+          assert.equal(variantsAJson.xrayClient.outbounds[0].streamSettings.security, 'tls');
+          assert.equal(variantsAJson.xrayClient.outbounds[0].streamSettings.wsSettings.headers.Host, 'header.example.test');
 
           let stableUuid;
           for (const deviceId of ['CI-DEVICE-ONE', 'CI-DEVICE-TWO']) {
@@ -603,6 +611,15 @@ jobs:
           assert.equal(configC.serverConfig.address, 'profile-tcp.example.test');
           assert.equal(configC.serverConfig.port, 10050);
           assert.equal(configC.serverConfig.host, 'header-tcp.example.test');
+
+          const variantsCResponse = await fetch(`${base}/api/v1/admin/tokens/${licenceC.id}/variants`, {
+            headers: { Authorization: `Bearer ${login.token}` },
+          });
+          assert.equal(variantsCResponse.status, 200);
+          const variantsCJson = await variantsCResponse.json();
+          assert.equal(variantsCJson.xrayClient.outbounds[0].streamSettings.network, 'tcp');
+          assert.equal(variantsCJson.xrayClient.outbounds[0].streamSettings.security, 'none');
+          assert.deepEqual(variantsCJson.xrayClient.outbounds[0].streamSettings.tcpSettings, { header: { type: 'none' } });
 
           const configResponse = JSON.parse(fs.readFileSync(`${dataDir}/xray-config.json`, 'utf8'));
           assert.equal(configResponse.outbounds[0].tag, 'direct', 'default VPN traffic must egress through the direct outbound');
