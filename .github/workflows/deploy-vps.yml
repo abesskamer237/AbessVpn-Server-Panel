@@ -61,6 +61,9 @@ jobs:
       - name: Build API image
         run: docker build --pull -f Dockerfile -t abessvpn-api:ci .
 
+      - name: Verify deployment commands preserve the remote script input
+        run: node scripts/test-deploy-stdin.mjs
+
       - name: Verify SSH TCP, WebSocket, quota and isolation
         run: bash scripts/test-ssh-docker.sh
 
@@ -368,7 +371,7 @@ jobs:
             docker run --rm --env-file .env -v abessvpn-server_ssh_data:/source:ro -v "$PWD/deployment-backups:/backup" -v "$PWD/scripts:/tools:ro" node:22-alpine node /tools/snapshot-volume.mjs encrypt /source "/backup/ssh-pre-deploy-$(date +%s).tgz.enc"
           fi
           if [ "$rollback_allowed" -eq 1 ]; then
-            dc exec -T database pg_dump -U abess -Fc abess | docker run --rm -i --env-file .env -v "$PWD/deployment-backups:/backup" -v "$PWD/scripts:/tools:ro" node:22-alpine node /tools/snapshot-volume.mjs encrypt - "/backup/postgres-$(date +%s).dump.enc"
+            dc exec -T --interactive=false database pg_dump -U abess -Fc abess | docker run --rm -i --env-file .env -v "$PWD/deployment-backups:/backup" -v "$PWD/scripts:/tools:ro" node:22-alpine node /tools/snapshot-volume.mjs encrypt - "/backup/postgres-$(date +%s).dump.enc"
           fi
           # Persist the exact direct origin supplied to this deployment.
           grep -v '^SSH_WS_HOST=' .env.new > .env.origin || true
@@ -409,13 +412,13 @@ jobs:
             dc logs --tail=100 api xray caddy >&2 || true
             exit 1
           fi
-          dc exec -T ssh node -e "fetch('http://127.0.0.1:8085/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+          dc exec -T --interactive=false ssh node -e "fetch('http://127.0.0.1:8085/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
           ssh_upgrade="$(curl --http1.1 --silent --show-error --max-time 3 -D - -o /dev/null -H 'Connection: Upgrade' -H 'Upgrade: websocket' "https://${VPN_DOMAIN}/ws-ssh" 2>/dev/null || true)"
           if ! printf '%s' "$ssh_upgrade" | grep -Eq '^HTTP/1[.]1 101'; then
             echo '::error::Public SSH WebSocket/TLS upgrade failed. Check Caddy and the domain/CDN WebSocket settings.' >&2
             exit 1
           fi
-          ssh_ws_host="$(dc exec -T api node -e 'process.stdout.write(process.env.SSH_WS_HOST || process.env.VPN_DOMAIN)')"
+          ssh_ws_host="$(dc exec -T --interactive=false api node -e 'process.stdout.write(process.env.SSH_WS_HOST || process.env.VPN_DOMAIN)')"
           ssh_ws_upgrade="$(curl --http1.1 --silent --show-error --max-time 3 -D - -o /dev/null -H 'Connection: Upgrade' -H 'Upgrade: websocket' "http://${ssh_ws_host}/ws-ssh" 2>/dev/null || true)"
           if ! printf '%s' "$ssh_ws_upgrade" | grep -Eq '^HTTP/1[.]1 101'; then
             echo '::warning::Optional plain SSH-WS port 80 is redirected or unavailable from the VPS. Use SSH-WS TLS until the HTTP origin is configured.' >&2
@@ -429,7 +432,7 @@ jobs:
           set -euo pipefail
           cd "$HOME/abessvpn-server"
           export COMPOSE_FILE="$PWD/docker-compose.yml"
-          command docker compose -f "$PWD/docker-compose.yml" exec -T api node -e 'console.log("ABESS_SSH_ENDPOINT=" + JSON.stringify({host: process.env.SSH_WS_HOST || process.env.VPN_DOMAIN, port: process.env.SSH_WS_PUBLIC_PORT || "85"}))'
+          command docker compose -f "$PWD/docker-compose.yml" exec -T --interactive=false api node -e 'console.log("ABESS_SSH_ENDPOINT=" + JSON.stringify({host: process.env.SSH_WS_HOST || process.env.VPN_DOMAIN, port: process.env.SSH_WS_PUBLIC_PORT || "85"}))'
           ORIGIN
           )"
           ssh_ws_endpoint="$(printf '%s\n' "$ssh_ws_endpoint" | sed -n 's/^ABESS_SSH_ENDPOINT=//p' | tail -n 1)"
