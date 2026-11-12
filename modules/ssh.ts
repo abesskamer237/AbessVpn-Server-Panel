@@ -15,6 +15,7 @@ export interface SshAccount {
   wsAccessKey?: string; wsAccessHash?: string;
   salt?: string; verifier?: string; nodeId?: string; connection?: SshConnection;
   resellerId?: string; resellerName?: string; renewalIds?: string[]; renewalRequests?: Record<string,{gb:number;days:number}>;
+  history?: Array<{at:string;type:'CREATED'|'RENEWED'|'SUSPENDED'|'REACTIVATED'|'UPDATED'|'CONFIG_EXPORTED';note:string}>;
   usageObservedAt?: string;
   online?: number; password: string; payload?: string;
   quotaBytes: number; usedBytes: number; maxConnections: number;
@@ -142,7 +143,8 @@ export function registerSsh(app:Express,d:{
         path:node.sshWsPath||'/ssh-ws',wire:'websocket',hasPayload:false},
       password:seal(password,d.key),quotaBytes:Math.round(quotaGb*1024**3),usedBytes:0,
       maxConnections,enabled:true,createdAt:new Date().toISOString(),
-      expiresAt:new Date(Date.now()+days*86400000).toISOString()
+      expiresAt:new Date(Date.now()+days*86400000).toISOString(),
+      history:[{at:new Date().toISOString(),type:'CREATED',note:`Compte créé avec ${quotaGb} Go, ${days} jours et ${maxConnections} session(s).`}]
     };
     if(!d.charge(owner.id,quotaGb,account.id,false))
       return res.status(409).json({error:'Solde insuffisant ou propriétaire inactif.'});
@@ -167,6 +169,7 @@ export function registerSsh(app:Express,d:{
     if(!Number.isSafeInteger(quota)||quota>1000000*1024**3)return res.status(400).json({error:'Quota total trop élevé.'});
     if(!d.charge(['SUPER_ADMIN','ADMIN'].includes(actor.role)?(a.resellerId||actor.id):actor.id,gb,a.id,true))return res.status(409).json({error:'Solde insuffisant ou compte indisponible.'});
     a.quotaBytes=quota;a.expiresAt=new Date(Math.max(Date.now(),Date.parse(a.expiresAt)||0)+days*86400000).toISOString();
+    a.history=[...(a.history||[]),{at:new Date().toISOString(),type:'RENEWED',note:`+${gb} Go et +${days} jour(s).`}].slice(-100);
     a.renewalIds=[...(a.renewalIds||[]),id];a.renewalRequests={...a.renewalRequests,[id]:{gb,days}};d.write(state);d.audit({action:'SSH_RENEWED',actor:actor.id,role:actor.role,details:JSON.stringify({id:a.id,additionalGb:gb,days})});
     res.json(safeSshAccount(a));
   });
@@ -188,10 +191,16 @@ export function registerSsh(app:Express,d:{
         return res.status(400).json({error:'La limite de sessions doit être comprise entre 1 et 10.'});
       a.maxConnections=maxConnections;
     }
+    const updates:string[]=[];
+    if(hasLabel)updates.push('nom client');
+    if(hasConnections)updates.push('limite sessions');
     if(hasEnabled){
       if(req.body.enabled&&(Date.parse(a.expiresAt)<=Date.now()||a.usedBytes>=a.quotaBytes||!d.ownerActive(a.resellerId)))
         return res.status(409).json({error:'Renouvelez le compte avant réactivation.'});
       a.enabled=req.body.enabled;
+      a.history=[...(a.history||[]),{at:new Date().toISOString(),type:req.body.enabled?'REACTIVATED':'SUSPENDED',note:req.body.enabled?'Compte réactivé.':'Compte suspendu.'}].slice(-100);
+    } else if(updates.length) {
+      a.history=[...(a.history||[]),{at:new Date().toISOString(),type:'UPDATED',note:`Modification : ${updates.join(', ')}.`}].slice(-100);
     }
     d.write(state);
     d.audit({action:'SSH_UPDATED',actor:actor.id,role:actor.role,
@@ -213,6 +222,8 @@ export function registerSsh(app:Express,d:{
     if(a.managed && (!a.wsAccessKey || !a.wsAccessHash))
       return res.status(503).json({error:'La licence SSH-WS doit être régénérée avec un secret WebSocket personnel.'});
     const clientPath=a.managed ? `${connection.path}/${unseal(a.wsAccessKey!,d.key)}` : connection.path;
+    a.history=[...(a.history||[]),{at:new Date().toISOString(),type:'CONFIG_EXPORTED',note:'Configuration client affichée/exportée.'}].slice(-100);
+    d.write(d.read());
     d.audit({action:'SSH_CREDENTIALS_EXPORTED',actor:actor.id,role:actor.role,details:a.id});
     res.set('Cache-Control','no-store').json({format:'abess-ssh-v1',protocol:'ssh',...connection,path:clientPath,username:a.username,password:unseal(a.password,d.key),
       payload:a.payload?unseal(a.payload,d.key):a.connection.wire==='http-upgrade'?sshPayload(a.connection.tls?(a.connection.sni||a.connection.host):a.connection.host,a.connection.port,a.connection.path):null,
