@@ -341,6 +341,8 @@ export interface MembershipRequest {
   planName?: string;
   paymentMethod?: 'ORANGE_MONEY' | 'MTN_MOMO' | 'WAVE' | 'FREE_TRIAL';
   paymentRef?: string;
+  /** SHA-256 of an unguessable claim secret returned once to the applicant. */
+  claimSecretHash?: string;
   status: 'PENDING' | 'APPROVED' | 'REJECTED';
   rejectionReason?: string;
   assignedTokenId?: string;
@@ -3979,6 +3981,8 @@ async function startServer() {
     const plan = plans.find(p => p.id === planId) || plans[0];
 
     const requests = loadRequests();
+    const claimSecret = crypto.randomBytes(32).toString('base64url');
+    const claimSecretHash = crypto.createHash('sha256').update(claimSecret).digest('hex');
     const existing = requests.find(r => r.deviceId && r.deviceId === deviceId && r.status === 'PENDING');
     if (existing) {
       existing.firstName = String(firstName).trim();
@@ -3991,8 +3995,11 @@ async function startServer() {
       existing.paymentMethod = paymentMethod;
       existing.paymentRef = paymentRef;
       existing.submittedAt = new Date().toISOString();
+      // Rotate the proof on every update so a leaked old claim cannot be reused.
+      existing.claimSecretHash = claimSecretHash;
       saveRequests(requests);
-      res.json({ status: 'pending', request: existing, message: 'Demande mise à jour et en attente d\'approbation.' });
+      const { claimSecretHash: _privateClaimHash, ...safeRequest } = existing;
+      res.json({ status: 'pending', request: safeRequest, claimSecret, message: 'Demande mise à jour et en attente d\'approbation.' });
       return;
     }
 
@@ -4015,27 +4022,31 @@ async function startServer() {
       planName: plan?.name,
       paymentMethod: paymentMethod || 'ORANGE_MONEY',
       paymentRef: paymentRef ? String(paymentRef).trim() : undefined,
+      claimSecretHash,
       status: 'PENDING',
       submittedAt: new Date().toISOString()
     };
     requests.push(newReq);
     saveRequests(requests);
-    res.json({ status: 'pending', request: newReq, message: 'Demande enregistrée avec succès. Vous recevrez un accès dès validation.' });
+    const { claimSecretHash: _privateClaimHash, ...safeRequest } = newReq;
+    res.json({ status: 'pending', request: safeRequest, claimSecret, message: 'Demande enregistrée avec succès. Conservez claimSecret pour consulter son statut.' });
   });
 
   app.get(['/api/membership/status', '/api/v1/membership/status'], publicApiRateLimiter, (req, res) => {
     const deviceId = req.query.device_id ? String(req.query.device_id).trim() : '';
     const requestId = req.query.request_id ? String(req.query.request_id).trim() : '';
-    const requests = loadRequests();
-    if (!requestId && !deviceId) {
-      res.status(400).json({ status: 'invalid_request', message: 'request_id ou device_id requis.' });
+    const claimSecret = String(req.get('X-Claim-Secret') || '');
+    if (!requestId || !/^[A-Za-z0-9_-]{43}$/.test(claimSecret)) {
+      res.status(400).json({ status: 'invalid_request', message: 'request_id et en-tête X-Claim-Secret requis.' });
       return;
     }
-    const reqFound = requests.find(r =>
-      (!requestId || r.id === requestId) && (!deviceId || r.deviceId === deviceId)
-    );
-    if (!reqFound) {
-      res.status(404).json({ status: 'not_found', message: 'Aucune demande trouvée pour cet appareil.' });
+    const requests = loadRequests();
+    const reqFound = requests.find(r => r.id === requestId && (!deviceId || r.deviceId === deviceId));
+    const suppliedHash = crypto.createHash('sha256').update(claimSecret).digest();
+    const expectedHash = reqFound?.claimSecretHash && /^[0-9a-f]{64}$/.test(reqFound.claimSecretHash)
+      ? Buffer.from(reqFound.claimSecretHash, 'hex') : Buffer.alloc(32);
+    if (!reqFound?.claimSecretHash || !crypto.timingSafeEqual(suppliedHash, expectedHash)) {
+      res.status(404).json({ status: 'not_found', message: 'Demande ou preuve introuvable.' });
       return;
     }
     if (reqFound.status === 'APPROVED' && reqFound.assignedToken) {
