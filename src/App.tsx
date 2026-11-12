@@ -1636,7 +1636,8 @@ export default function App() {
               { id: 'transactions', label: 'Registre & Crédits', icon: History },
               { id: 'commerce', label: 'Paiements', icon: CreditCard },
               { id: 'security', label: 'Sécurité', icon: Shield },
-              ...(currentUser.role==='SUPER_ADMIN'?[{id:'operations',label:'Exploitation',icon:Server},{id:'ssh',label:'Comptes SSH',icon:Terminal}]:[]),
+              {id:'ssh',label:'Comptes SSH',icon:Terminal},
+              ...(currentUser.role==='SUPER_ADMIN'?[{id:'operations',label:'Exploitation',icon:Server}]:[]),
               { id: 'logs', label: 'Journal & Télémétrie', icon: Terminal },
             ].map((tab) => {
               const Icon = tab.icon;
@@ -1663,7 +1664,7 @@ export default function App() {
 
       {/* Main Body */}
       <main id="main-content" className="max-w-7xl mx-auto px-4 sm:px-6 py-6 flex-1 w-full space-y-6">
-        {activeTab==='ssh'&&currentUser.role==='SUPER_ADMIN'&&<SshCenter token={authToken}/>}
+        {activeTab==='ssh'&&<SshCenter token={authToken} isAdmin={currentUser.role==='SUPER_ADMIN'}/>}
         {activeTab==='security'&&<SecurityCenter token={authToken} onLogout={handleLogout}/>}
         {activeTab==='commerce'&&<CommerceCenter token={authToken}/>}
         {activeTab==='operations'&&currentUser.role==='SUPER_ADMIN'&&<OperationsCenter token={authToken} onLogout={handleLogout}/>}

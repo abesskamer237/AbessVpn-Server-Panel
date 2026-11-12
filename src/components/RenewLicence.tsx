@@ -4,8 +4,10 @@ export function RenewLicence({
   token,
   onClose,
   onSuccess,
+  endpoint,
 }: {
   id: string;
+  endpoint?: string;
   token: string;
   onClose: () => void;
   onSuccess: () => void;
@@ -24,11 +26,11 @@ export function RenewLicence({
         className="professional-section w-full max-w-md space-y-4"
       >
         <h2 id="renew-title">Renouveler la licence</h2>
-        <p>
+        {!endpoint && <p>
           Le quota consommé est conservé. Le quota ajouté est débité du solde du
           revendeur ; la durée prolonge l’expiration actuelle ou repart
           d’aujourd’hui si elle est dépassée.
-        </p>
+        </p>}
         {error && (
           <p role="alert" className="notice">
             {error}
@@ -39,7 +41,7 @@ export function RenewLicence({
           onSubmit={(e) => {
             e.preventDefault();
             setBusy(true);
-            void fetch(`/api/v1/admin/tokens/${id}/renew`, {
+            void fetch(endpoint || `/api/v1/admin/tokens/${id}/renew`, {
               method: "POST",
               headers: {
                 Authorization: `Bearer ${token}`,
@@ -64,7 +66,8 @@ export function RenewLicence({
             <input
               autoFocus
               type="number"
-              min={1}
+              min={endpoint ? 0.01 : 1}
+              step={0.01}
               max={100000}
               required
               value={gb}

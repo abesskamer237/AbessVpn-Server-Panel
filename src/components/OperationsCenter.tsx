@@ -208,6 +208,9 @@ export function OperationsCenter({
                       : "Agent connecté, Xray non prêt"}
               </p>
             </div>
+            <button className="secondary-action" onClick={()=>{
+              if(confirm('Renouveler la clé de cet agent ?'))void call('nodes/'+node.id+'/key',{}).then(value=>{setNodeKey(value);return refresh();}).catch(e=>setMessage(e.message));
+            }}>Renouveler la clé</button>
             {node.enabled && (
               <button
                 className="secondary-action"

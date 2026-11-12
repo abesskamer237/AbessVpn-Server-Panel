@@ -70,10 +70,28 @@ Le backend refuse les nouvelles validations et distributions de licences inactiv
 
 ## Comptes SSH existants
 
-Importer dans **Comptes SSH** un JSON contenant `host`, `port`, `username`, `password`, `transport`, `fingerprint` (SHA-256), et pour TLS `tls:true`, `sni`, ainsi que `path` si nécessaire. Sélectionner le VPS enregistré, le quota, la durée et la limite de connexions. L'hôte doit correspondre au VPS. Les modes restent `tcp`, `ws`, `ws-alt`, `wss-raw`, `wss-raw-alt`, `wss` et `wss-alt`. L'import enregistre les métadonnées et chiffre le mot de passe ; il ne crée aucun utilisateur sur le VPS. L'export conserve exactement le transport, port, chemin, SNI et empreinte importés. Le mot de passe n'est révélé que par l'export authentifié et audité d'un accès disponible.
+Importer dans **Comptes SSH** un JSON contenant `host`, `port`, `username`, `password`, `transport`, `fingerprint` (SHA-256), et pour TLS `tls:true`, `sni`, ainsi que `path` si nécessaire. Sélectionner le VPS enregistré, le quota, la durée et la limite de connexions. L'hôte doit correspondre au VPS. Les modes sont `tcp`, `ws`, `ws-alt`, `ws-framed`, `wss-raw`, `wss-raw-alt`, `wss` et `wss-alt`. L'import enregistre les métadonnées et chiffre le mot de passe ; il ne crée aucun utilisateur sur le VPS. L'export conserve exactement le transport, port, chemin, SNI et empreinte importés. Le mot de passe n'est révélé que par l'export authentifié et audité d'un accès disponible.
 
 La suspension/suppression modifie l'inventaire du panneau. L'intégration externe applique ces changements aux comptes existants si souhaité. Les anciens comptes locaux restent conservés en base ; réimporter leur configuration avec le nœud externe pour rétablir des exports vérifiables. Ne pas réactiver la passerelle historique.
 
 ## Passage d'une ancienne installation
 
 Sauvegarder la base, les secrets et les volumes avant toute opération future. Le workflow de déploiement est exclusivement manuel (`workflow_dispatch`) ; un push sur `main` lance les vérifications, pas un déploiement. Un déploiement manuel futur ne lance que `database api caddy`, sans `--remove-orphans`, sans arrêt ni suppression de volumes des anciens moteurs. Planifier séparément leur migration/arrêt avec l'opérateur ; le backend ne les administre plus. Le ping du backend vérifie `ok:true` indépendamment de la disponibilité des VPS externes. Ne pas attendre `dataPlane:ready` avant d'enregistrer les agents externes.
+
+## Vente et renouvellement SSH
+
+L’administrateur importe les accès réels dans le formulaire SSH (ou par JSON) et choisit le revendeur. La vente débite le quota du solde de ce revendeur et inscrit une écriture `SSH_SALE`. Un solde insuffisant refuse l’import sans créer de vente. L’unicité utilisateur/VPS et les transactions PostgreSQL empêchent deux ventes concurrentes du même accès. Aucun utilisateur n’est créé sur le VPS.
+
+Le revendeur voit ses accès et ceux de sa hiérarchie, peut les exporter, suspendre et renouveler. L’import d’infrastructure, la suppression et les clés d’agents restent réservés au super administrateur. Le renouvellement augmente le quota, prolonge l’expiration sans effacer la consommation et inscrit `SSH_RENEW`. Il exige une `Idempotency-Key` ; plusieurs requêtes simultanées identiques ne débitent qu’une fois. La réutilisation d’une clé pour un achat différent renvoie 409. L’administrateur qui renouvelle un accès vendu débite son propriétaire ; un revendeur qui renouvelle un accès de sa branche paie avec son propre solde. Les unités de nouvelles ventes SSH correspondent aux licences VLESS : 1 Go commercial = 1024³ octets. Les anciens quotas restent inchangés en octets.
+
+Les règlements restent manuels et vérifiés par un administrateur, avec les factures existantes. Une déclaration de transfert ne recharge jamais automatiquement un compte. Le registre financier n’est plus tronqué après 1000 écritures. Les ventes, renouvellements, suspensions et exports SSH identifient leur acteur dans l’audit ; les mots de passe et payloads personnalisés sont chiffrés et absents des listes et de l’inventaire des agents. Une suspension d’un revendeur ou d’un parent désactive ses droits SSH dans l’inventaire.
+
+`POST /api/v1/admin/nodes/ID/key` permet au super administrateur de renouveler une clé d’agent perdue ou compromise. L’ancienne clé cesse immédiatement de fonctionner ; la génération et les baselines de compteurs sont conservées pour éviter une double facturation après reconnexion. La nouvelle clé est affichée une seule fois.
+
+## Payload TCP et WebSocket
+
+Un import `tcp` peut inclure `payload`. Le serveur l’enregistre chiffré et le restitue exactement lors de l’export. Le client Android 2.5.5+ l’envoie avant SSH, accepte une réponse HTTP 200/101, puis exige la bonne empreinte SSH. Les transports HTTP Upgrade bruts (`ws`, `ws-alt`, `wss-raw`, `wss-raw-alt`) exigent 101 ; `ws-framed`, `wss` et `wss-alt` sont des WebSocket standard. Seuls les transports bruts/TCP acceptent un payload personnalisé. Le port, le chemin et le SNI proviennent de la configuration du VPS ; aucun proxy ni service n’est généré.
+
+Les placeholders sont `[crlf]`, `[cr]`, `[lf]`, `[host]`, `[port]`, `[host_port]`, `[protocol]` et `[ua]`. Un payload doit commencer par une méthode HTTP, rester ASCII, ne pas contenir de NUL et ne pas dépasser 8192 caractères. Les placeholders inconnus sont refusés. Les paramètres doivent correspondre au proxy réellement exploité sur le VPS ; le panneau ne devine pas un payload fonctionnel. Pour un compte existant sans payload, le TCP reste du SSH direct.
+
+Les changements de droits commerciaux ne constituent pas une preuve de coupure du moteur distant. L’intégration externe doit appliquer l’inventaire aux utilisateurs déjà configurés. La nouvelle version du client est nécessaire pour les payloads TCP et chemins/SNI personnalisés ; un ancien APK ne gagne pas ces capacités par une simple mise à jour du panneau.

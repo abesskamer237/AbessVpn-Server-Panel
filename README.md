@@ -9,6 +9,7 @@ Backend Node/Express et panneau React pour des serveurs VPN configurés manuelle
 - Double authentification TOTP, codes de récupération à usage unique, sessions révocables, changement de mot de passe et cookie de panneau HttpOnly.
 - Règlements **manuels** MTN MoMo / Orange Money, déclaration de référence, vérification par un administrateur et factures après confirmation.
 - Sauvegardes AES-GCM, copie S3 optionnelle, supervision et alertes.
+- Vente et renouvellement SSH aux revendeurs, crédits débités et journal financier conservé.
 - API de relevés authentifiés par VPS et agent facultatif en lecture seule, isolation des licences et rapprochement persistant des compteurs réels.
 
 Les exports client prennent en charge **VLESS avec TLS** : WebSocket, gRPC, HTTPUpgrade et XHTTP. Aucun service VPN ni utilisateur SSH n’est provisionné. Les comptes SSH existants peuvent être importés et exportés. VLESS/TCP sans TLS est désactivé par défaut ; TCP/10050 n’est pas exposé par le Compose sécurisé.

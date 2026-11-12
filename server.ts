@@ -83,7 +83,7 @@ export interface TransactionLog {
   id: string;
   resellerId: string;
   resellerName: string;
-  type: 'CREDIT_ADD' | 'TOKEN_CREATE' | 'BATCH_CREATE' | 'TOKEN_REVOKE' | 'RESET_DEVICES' | 'SERVER_UPDATE' | 'APP_VERSION_UPDATE' | 'ANNOUNCEMENT_PUBLISH' | 'SUB_RESELLER_CREATE' | 'CREDIT_TRANSFER' | 'RESELLER_DELETE_REFUND' | 'TOKEN_RENEW';
+  type: 'CREDIT_ADD' | 'TOKEN_CREATE' | 'BATCH_CREATE' | 'TOKEN_REVOKE' | 'RESET_DEVICES' | 'SERVER_UPDATE' | 'APP_VERSION_UPDATE' | 'ANNOUNCEMENT_PUBLISH' | 'SUB_RESELLER_CREATE' | 'CREDIT_TRANSFER' | 'RESELLER_DELETE_REFUND' | 'TOKEN_RENEW' | 'SSH_SALE' | 'SSH_RENEW';
   amountGb: number;
   balanceBefore: number;
   balanceAfter: number;
@@ -109,7 +109,6 @@ function logTransaction(tx: Omit<TransactionLog, 'id' | 'timestamp'>): void {
     ...tx,
     timestamp: new Date().toISOString()
   });
-  if (list.length > 1000) list.length = 1000;
   writeJsonAtomically(transactionsFile, list);
 }
 
@@ -1907,8 +1906,34 @@ async function startServer() {
   const sshFile = path.resolve(dataDir, 'ssh.json');
   const sshControl = process.env.SSH_CONTROL_DIR || path.resolve(dataDir, 'ssh-control');
   const readSsh = (): SshState => hasDocument(sshFile) ? readDocument(sshFile) : { accounts: [] };
+  const sshOwnerActive = (ownerId?: string) => {
+    if (!ownerId) return true; // Retain legacy administrator-owned imports.
+    const users = loadUsers(); const visited = new Set<string>();
+    let id: string | undefined = ownerId;
+    while (id) {
+      if (visited.has(id)) return false; visited.add(id);
+      const user = users.find(u => u.id === id);
+      if (!user || user.status !== 'active') return false;
+      id = user.parentId;
+    }
+    return true;
+  };
   registerSsh(app, { authenticate, read: readSsh, write: state => { writeJsonAtomically(sshFile, state); },
-    key: process.env.MASTER_SECRET!, nodes: readExternalNodes, audit: logAudit });
+    key: process.env.MASTER_SECRET!, nodes: readExternalNodes, audit: logAudit, users: loadUsers,
+    ownerActive: sshOwnerActive,
+    canManage: (actor, ownerId) => canManageToken(actor, ownerId, loadUsers()),
+    charge: (payerId, quotaGb, id, renewal) => {
+      const users = loadUsers(); const payer = users.find(u => u.id === payerId);
+      if (!payer || !sshOwnerActive(payerId) || (payer.role === 'RESELLER' && payer.credits < quotaGb)) return false;
+      const balance = payer.credits;
+      if (payer.role === 'RESELLER') payer.credits = Math.round((payer.credits - quotaGb) * 1e6) / 1e6;
+      payer.totalBandwidthAllocatedGb += quotaGb;
+      if (!renewal) payer.totalTokensCreated++;
+      saveUsers(users);
+      logTransaction({resellerId:payer.id,resellerName:payer.name,type:renewal?'SSH_RENEW':'SSH_SALE',amountGb:quotaGb,
+        balanceBefore:balance,balanceAfter:payer.credits,note:`${renewal?'Renouvellement':'Vente'} SSH ${id}`});
+      return true;
+    } });
   const nodesFile=path.resolve(dataDir,'nodes.json');
   const fullSnapshot=async()=>({version:3,ssh:readSsh(),auditLogs:loadAuditLogs(),auditEvents:await storage.exportAudit(),masterKeyId:crypto.createHash('sha256').update(process.env.MASTER_SECRET!).digest('hex').slice(0,16),users:loadUsers(),tokens:loadTokens().map(backupClientToken),masterConfig:(()=>{const {secretPassphrase,...config}=loadMasterConfig();return config;})(),protocolConfigs:loadProtocolConfigs(),transactions:loadTransactions(),plans:loadPlans(),requests:loadRequests(),appVersion:loadAppVersionConfig(),announcements:loadAnnouncements(),security:{mfa:security.state().mfa,sessions:{}},commerce:hasDocument(commerceFile)?readDocument(commerceFile):{orders:[]},nodes:hasDocument(nodesFile)?readDocument(nodesFile):[]});
   const restoreSnapshot=async(snapshot:any)=>{
@@ -1934,7 +1959,7 @@ async function startServer() {
         enabled: token.status === 'active' && Date.parse(token.expiresAt) > Date.now() && token.bandwidthUsedGb < token.bandwidthGb
       })),
       sshAccounts: readSsh().accounts.filter(account => account.nodeId === node.id).map(account => ({
-        id: account.id, username: account.username, enabled: account.enabled && Date.parse(account.expiresAt) > Date.now() && account.usedBytes < account.quotaBytes,
+        id: account.id, username: account.username, enabled: account.enabled && sshOwnerActive(account.resellerId) && Date.parse(account.expiresAt) > Date.now() && account.usedBytes < account.quotaBytes,
         expiresAt: account.expiresAt, quotaBytes: account.quotaBytes, usedBytes: account.usedBytes, maxConnections: account.maxConnections
       })) }),
     nodeUsage: (node, snapshot) => {

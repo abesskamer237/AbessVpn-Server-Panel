@@ -288,6 +288,15 @@ export function registerOperations(
     d.saveNodes(nodes);
     res.sendStatus(204);
   });
+  app.post('/api/v1/admin/nodes/:id/key', d.authenticate, admin, (req, res) => {
+    const nodes=d.readNodes(), node=nodes.find(n=>n.id===req.params.id);
+    if(!node)return res.sendStatus(404);
+    const key=crypto.randomBytes(32).toString('hex');
+    node.keyHash=digest(key);node.enabled=true;node.ready=false;delete node.lastSeenAt;
+    // Preserve generation and counter baselines so rotation never bills history twice.
+    d.saveNodes(nodes);d.audit({action:'NODE_KEY_ROTATED',actor:(req as any).user.id,role:'SUPER_ADMIN',details:node.id});
+    res.set('Cache-Control','no-store').json({id:node.id,key});
+  });
   const nodeAuth: RequestHandler = (req, res, next) => {
     const key = req.headers.authorization?.replace(/^Bearer /, "") || "";
     const node = d.readNodes().find((n) => n.id === req.params.id && n.enabled);

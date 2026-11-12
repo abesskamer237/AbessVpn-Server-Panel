@@ -6,10 +6,21 @@ import {
   Terminal,
   Trash2,
 } from "lucide-react";
-export function SshCenter({ token }: { token: string }) {
+import { RenewLicence } from './RenewLicence';
+export function SshCenter({ token, isAdmin = true }: { token: string; isAdmin?: boolean }) {
   const [state, setState] = useState<any>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [renewId, setRenewId] = useState<string | null>(null);
+  const [resellerId, setResellerId] = useState('');
+  const [mode, setMode] = useState('tcp');
+  const [port, setPort] = useState(22);
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [fingerprint, setFingerprint] = useState('');
+  const [payload, setPayload] = useState('');
+  const [path, setPath] = useState('/ws-ssh');
+  const [sni, setSni] = useState('');
   const [importJson, setImportJson] = useState("");
   const [nodeId, setNodeId] = useState("");
   const [label, setLabel] = useState("");
@@ -99,13 +110,15 @@ export function SshCenter({ token }: { token: string }) {
           {error}
         </p>
       )}
-      <form
+      {isAdmin && <form
         className="rounded-2xl border border-slate-700 p-5 grid sm:grid-cols-2 lg:grid-cols-6 gap-4"
         onSubmit={(e) => {
           e.preventDefault();
           void action(async () => {
             const a = await call("/accounts", {
-              config: JSON.parse(importJson),
+              config: importJson.trim() ? JSON.parse(importJson) : {host:state.nodes.find((n: any)=>n.id===nodeId)?.host,
+                transport:mode,port,username,password,fingerprint,payload:['tcp','ws','ws-alt','wss-raw','wss-raw-alt'].includes(mode)?payload||undefined:undefined,path,tls:mode.startsWith('wss'),sni},
+              resellerId: resellerId || undefined,
               nodeId,
               label,
               days,
@@ -113,8 +126,8 @@ export function SshCenter({ token }: { token: string }) {
               maxConnections: connections,
             });
             setSelected(a.id);
-            setTransport(a.connection.transport);
-            setImportJson("");
+            setTransport(a.connection?.transport || "tcp");
+            setImportJson(""); setPassword(""); setPayload("");
             setLabel("");
             setConfig(null);
           });
@@ -127,9 +140,26 @@ export function SshCenter({ token }: { token: string }) {
             {state?.nodes?.map((n: any) => <option key={n.id} value={n.id}>{n.name}</option>)}
           </select>
         </label>
+        <label className="text-sm">Revendeur
+          <select aria-label="Revendeur SSH" value={resellerId} onChange={e=>setResellerId(e.target.value)} className="w-full bg-slate-950 p-2">
+            <option value="">—</option>{state?.resellers?.map((r:any)=><option key={r.id} value={r.id}>{r.name}</option>)}
+          </select>
+        </label>
+        <label className="text-sm">Mode
+          <select aria-label="Mode SSH" value={mode} onChange={e=>setMode(e.target.value)} className="w-full bg-slate-950 p-2">
+            {['tcp','ws','ws-alt','ws-framed','wss-raw','wss-raw-alt','wss','wss-alt'].map(m=><option key={m} value={m}>{m.toUpperCase()}</option>)}
+          </select>
+        </label>
+        <label className="text-sm">Port<input aria-label="Port SSH" type="number" min={1} max={65535} value={port} onChange={e=>setPort(Number(e.target.value))} className="w-full bg-slate-950 p-2" /></label>
+        <label className="text-sm">Utilisateur<input aria-label="Utilisateur SSH" value={username} onChange={e=>setUsername(e.target.value)} className="w-full bg-slate-950 p-2" /></label>
+        <label className="text-sm">Mot de passe<input aria-label="Mot de passe SSH" type="password" autoComplete="new-password" value={password} onChange={e=>setPassword(e.target.value)} className="w-full bg-slate-950 p-2" /></label>
+        <label className="text-sm">Empreinte SHA-256<input aria-label="Empreinte SSH" value={fingerprint} onChange={e=>setFingerprint(e.target.value)} className="w-full bg-slate-950 p-2" /></label>
+        <label className="text-sm">Chemin<input aria-label="Chemin SSH" value={path} onChange={e=>setPath(e.target.value)} className="w-full bg-slate-950 p-2" /></label>
+        <label className="text-sm">SNI<input aria-label="SNI SSH" value={sni} onChange={e=>setSni(e.target.value)} className="w-full bg-slate-950 p-2" /></label>
+        {['tcp','ws','ws-alt','wss-raw','wss-raw-alt'].includes(mode) && <label className="text-sm sm:col-span-2">Payload<textarea aria-label="Payload SSH" value={payload} onChange={e=>setPayload(e.target.value)} className="w-full bg-slate-950 p-2" /></label>}
         <label className="text-sm">
           Configuration JSON
-          <textarea aria-label="Configuration SSH JSON" required value={importJson} onChange={e => setImportJson(e.target.value)} className="w-full bg-slate-950 p-2" />
+          <textarea aria-label="Configuration SSH JSON" value={importJson} onChange={e => setImportJson(e.target.value)} className="w-full bg-slate-950 p-2" />
         </label>
         <label className="text-sm">
           Nom du client
@@ -178,12 +208,13 @@ export function SshCenter({ token }: { token: string }) {
           />
         </label>
         <button
-          disabled={busy || !nodeId || !importJson}
+          disabled={busy || !nodeId || (!importJson && (!username || !password || !fingerprint))}
           className="self-end bg-emerald-500 text-slate-950 font-bold rounded-lg p-2 disabled:opacity-40"
         >
           Importer le compte
         </button>
-      </form>
+      </form>}
+      {renewId && <RenewLicence id={renewId} token={token} endpoint={`/api/v1/admin/ssh/accounts/${renewId}/renew`} onClose={()=>setRenewId(null)} onSuccess={()=>void refresh()} />}
       <div className="rounded-2xl border border-slate-700 p-5 space-y-4">
         <input
           type="search"
@@ -234,8 +265,8 @@ export function SshCenter({ token }: { token: string }) {
                             : "Actif"}
                     </td>
                     <td className="p-3">
-                      {(a.usedBytes / 1e9).toFixed(3)} /{" "}
-                      {(a.quotaBytes / 1e9).toFixed(2)} Go
+                      {(a.usedBytes / 1024 ** 3).toFixed(3)} /{" "}
+                      {(a.quotaBytes / 1024 ** 3).toFixed(2)} Go
                     </td>
                     <td className="p-3">
                       {a.online} / {a.maxConnections}
@@ -247,12 +278,13 @@ export function SshCenter({ token }: { token: string }) {
                       <button
                         onClick={() => {
                           setSelected(a.id);
-            setTransport(a.connection.transport);
+            setTransport(a.connection?.transport || "tcp");
                           setConfig(null);
                         }}
                       >
                         Configurer
                       </button>
+                      <button disabled={busy || !a.enabled} onClick={()=>setRenewId(a.id)}>Renouveler</button>
                       <button
                         disabled={busy}
                         onClick={() =>
@@ -268,13 +300,13 @@ export function SshCenter({ token }: { token: string }) {
                       >
                         {a.enabled ? "Suspendre" : "Réactiver"}
                       </button>
-                      <button
+                      {isAdmin && <button
                         aria-label={"Supprimer " + a.username}
                         disabled={busy}
                         onClick={() => {
                           if (
                             confirm(
-                              "Supprimer ce compte et couper ses tunnels SSH ?",
+                              "Supprimer ce compte du panneau ?",
                             )
                           )
                             void action(async () => {
@@ -289,7 +321,7 @@ export function SshCenter({ token }: { token: string }) {
                         }}
                       >
                         <Trash2 size={16} />
-                      </button>
+                      </button>}
                     </td>
                   </tr>
                 ))}
@@ -337,9 +369,9 @@ export function SshCenter({ token }: { token: string }) {
               }}
               className="mt-2 w-full bg-slate-950 border border-slate-700 rounded-lg p-3"
             >
-              {['tcp', 'ws', 'ws-alt', 'wss-raw', 'wss-raw-alt', 'wss', 'wss-alt']
+              {['tcp', 'ws', 'ws-alt', 'ws-framed', 'wss-raw', 'wss-raw-alt', 'wss', 'wss-alt']
                 .filter(mode => !selectedAccount?.connection || selectedAccount.connection.transport === mode)
-                .map(mode => <option key={mode} value={mode}>{mode.toUpperCase()}{selectedAccount?.connection ? ` · ${selectedAccount.connection.port}` : ''}</option>)}
+                .map(mode => <option key={mode} value={mode}>{mode.toUpperCase()}{selectedAccount?.connection?.hasPayload ? ' + PAYLOAD' : ''}{selectedAccount?.connection ? ` · ${selectedAccount.connection.port}` : ''}</option>)}
             </select>
           </label>
           <p className="text-sm text-slate-400">{selectedAccount?.connection?.host || '…'} · {selectedAccount?.connection?.path || '—'}</p>
