@@ -16,7 +16,7 @@ import { Operations, registerOperations, encryptedBackup, uploadBackup, type Vpn
 import { registerCommerce } from './modules/commerce.js';
 import { registerSsh, type SshState } from './modules/ssh.js';
 import { singBoxConfig, mihomoConfig } from './modules/subscriptions.js';
-import { SecurityService, registerSecurityRoutes } from './modules/security.js';
+import { SecurityService, registerSecurityRoutes, unseal } from './modules/security.js';
 import { DocumentStore } from './modules/store.js';
 import { startTelegramBot } from './telegram-bot.js';
 
@@ -1974,6 +1974,32 @@ async function startServer() {
         id: account.id, username: account.username, enabled: account.enabled && sshOwnerActive(account.resellerId) && Date.parse(account.expiresAt) > Date.now() && account.usedBytes < account.quotaBytes,
         expiresAt: account.expiresAt, quotaBytes: account.quotaBytes, usedBytes: account.usedBytes, maxConnections: account.maxConnections
       })) }),
+    nodeSshDesired: node => ({
+      format:'abess-managed-ssh-ws-v1',
+      observedAt:new Date().toISOString(),
+      accounts:readSsh().accounts.filter(a=>a.managed&&a.nodeId===node.id).map(a=>{
+        const enabled=a.enabled&&sshOwnerActive(a.resellerId)&&
+          Number.isFinite(Date.parse(a.expiresAt))&&Date.parse(a.expiresAt)>Date.now()&&
+          a.usedBytes<a.quotaBytes;
+        return {id:a.id,username:a.username,expiresAt:a.expiresAt,enabled,
+          ...(enabled?{password:unseal(a.password,process.env.MASTER_SECRET!)}:{})};
+      })
+    }),
+    nodeSshReport: (node,reports) => {
+      const state=readSsh();
+      let changed=false;
+      const now=new Date().toISOString();
+      for(const report of reports){
+        const a=state.accounts.find(v=>v.managed&&v.nodeId===node.id&&v.id===report.id);
+        if(!a)continue;
+        const canBeActive=a.enabled&&sshOwnerActive(a.resellerId)&&Date.parse(a.expiresAt)>Date.now()&&a.usedBytes<a.quotaBytes;
+        const wanted=report.state==='active'&&!canBeActive?'error':report.state;
+        a.provisionState=wanted as 'active'|'blocked'|'error';
+        a.lastAppliedAt=now;
+        changed=true;
+      }
+      if(changed)writeJsonAtomically(sshFile,state);
+    },
     nodeUsage: (node, snapshot) => {
       const counters = new Map<string, number>(snapshot.stat.map((item: any) => [item.name, Number(item.value)]));
       const tokens = loadTokens();
