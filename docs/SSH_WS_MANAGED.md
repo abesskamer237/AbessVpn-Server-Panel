@@ -206,3 +206,68 @@ Pour tester localement le code sans VPS, exécuter :
 Avant déploiement réel : tests d'un client WSS indépendant, contrôles
 SSH fingerprint, charge et latence, reconnexion, coupure de l'agent, expiration,
 suspension et **révocation des connexions déjà établies**.
+
+
+## Binding SSH → licence (sécurité anti-contournement)
+
+Le WebSocket possède un jeton aléatoire et un quota propre. Pour empêcher un
+client qui connaît deux mots de passe SSH de faire passer l'identité SSH B
+par le tunnel WebSocket A, chaque licence possède désormais une adresse source
+loopback **stable et non réutilisée** de la plage `127.120.0.1–127.120.255.254`.
+
+La passerelle se connecte à OpenSSH en définissant cette adresse comme source.
+L'agent écrit une liste `AllowUsers utilisateur@127.120.x.y` dans le fichier
+`/etc/abess-ssh-ws/allowed-users.conf`, vérifie la syntaxe avec `sshd -t`
+et recharge uniquement le daemon SSH dédié. Une adresse source ne peut
+correspondre à deux licences dans le même instant. Si aucune licence n'est
+autorisée, la liste refuse **tous** les utilisateurs.
+
+Important : les environnements Linux doivent accepter les connexions venant
+de ces adresses loopback 127/8 (configuration Linux standard). Cela ne fonctionne
+pas tel quel sur Windows ou sur un VPS dont la politique réseau interdit 127/8.
+Le trafic passant *hors* de cette passerelle (accès OpenSSH via un autre port,
+proxy distinct, comptes du fournisseur externe) n'est pas automatiquement
+comptabilisé : ne pas exposer le port SSH dédié à Internet.
+
+## Comment interpréter le quota
+
+Le quota inclut **les octets du flux SSH chiffré dans les deux sens**, au point
+de passage SSH-WS. Il ne compte pas nécessairement les mêmes octets qu'un
+opérateur télécom, ni les en-têtes TLS/WebSocket ou tous les octets TCP/IP.
+Les réservations disque sont durables et peuvent surfacturer des octets non
+consommés si le processus tombe brutalement ; elles empêchent en revanche
+la remise à zéro gratuite d'un quota après crash.
+
+Une seule instance de la passerelle doit gérer chaque journal de quotas :
+ne pas démarrer plusieurs passerelles avec des journaux différents pour le
+même VPS, au risque de contourner les plafonds de sessions et d'octets.
+
+## Benchmark reproductible avant la mise en production
+
+```bash
+# Banc d'essai CI / machine de développement : boucle locale seulement
+node scripts/benchmark-ssh-ws.mjs
+```
+
+Il évalue 1, 4 puis 12 connexions concurrentes, transfère des blocs binaires
+dans un faux service SSH en écho et affiche débit utile agrégé (MiB/s),
+latence médiane et P95. Ces valeurs sont **synthétiques**, pas celles d'un VPS
+ni d'une application VPN réelle.
+
+Sur un VPS de **préproduction seulement**, lorsque l'installation sera
+autorisée, compléter avec une matrice de mesure :
+- SSH-WS via certificat TLS valide, application SSH-WS tierce réellement
+  compatible et empreinte SSH vérifiée.
+- Essais 1, 5, 10, 25 clients, débit descendant/montant par client.
+- Latences p50/p95, CPU, RSS, charge du daemon OpenSSH et erreurs WebSocket.
+- Coupure du panneau 10 minutes, expiration, suspension, franchissement
+  du quota, redémarrage de la passerelle et du VPS.
+- Test d'usurpation : se connecter en WSS avec le secret A et essayer
+  l'utilisateur/mot de passe SSH B — **doit échouer**.
+- Confirmer l'absence de débordement de `maxConnections` en tenant des
+  connexions simultanées ouvertes.
+- Examiner la consommation après redémarrage et la cohérence avec les
+  octets transférés sur le flux SSH.
+
+Ne valider commercialement la capacité et le débit qu'une fois ces tests
+effectués sur **le vrai VPS et la vraie application VPN**.

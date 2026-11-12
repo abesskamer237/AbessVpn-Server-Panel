@@ -9,7 +9,7 @@ import {once} from 'node:events';
 import {WebSocket} from 'ws';
 import {startGateway} from './ssh-ws-gateway.mjs';
 import {QuotaLedger,validatePolicy} from './ssh-ws-quota.mjs';
-import {validateDesired,reconcile,failClosedOffline,httpsOrigin,syncOnce} from './ssh-ws-reconciler.mjs';
+import {validateDesired,reconcile,allowedUsersConfig,failClosedOffline,httpsOrigin,syncOnce} from './ssh-ws-reconciler.mjs';
 
 const dir=await mkdtemp(path.join(tmpdir(),'abess-ssh-ws-quota-'));
 const usageFile=path.join(dir,'durable-usage.json');
@@ -24,18 +24,21 @@ const key=crypto.randomBytes(32).toString('base64url');
 const keyB=crypto.randomBytes(32).toString('base64url');
 const hash=k=>crypto.createHash('sha256').update(k).digest('hex');
 const account=(accountId,username,token,quota,maxConnections)=>({
-  id:accountId,username,tokenHash:hash(token),enabled:true,
+  id:accountId,username,sourceIp:accountId===id?'127.120.0.1':'127.120.0.2',tokenHash:hash(token),enabled:true,
   expiresAt:new Date(Date.now()+86400000).toISOString(),
   quotaBytes:quota,baselineUsedBytes:0,maxConnections
 });
 let policy={format:'abess-ssh-ws-policy-v1',generatedAt:new Date().toISOString(),
   accounts:[account(id,user,key,4096,1),account(idB,userB,keyB,1048576,2)]};
 assert.equal(validatePolicy(policy).accounts.length,2);
+assert.throws(()=>validatePolicy({...policy,accounts:policy.accounts.map(a=>({...a,sourceIp:'127.120.0.1'}))}),/Invalid gateway licence/);
 assert.throws(()=>validatePolicy({...policy,accounts:[policy.accounts[0],policy.accounts[0]]}));
 assert.throws(()=>validatePolicy({...policy,accounts:[{...policy.accounts[0],quotaBytes:-1}]}));
 fs.writeFileSync(policyFile,JSON.stringify(policy));
 
+const seenSourceIps=new Set();
 const tcp=net.createServer(socket=>{
+  seenSourceIps.add(socket.remoteAddress);
   // The gateway intentionally resets streams when a hard quota is reached.
   socket.on('error',()=>{});
   socket.write('SSH-2.0-ABESS-test\r\n');
@@ -83,6 +86,9 @@ try {
   // Depending on frame timing this may be the upstream SSH banner.
   if(echo.startsWith('SSH-2.0'))echo=(await once(b,'message'))[0].toString();
   assert.equal(echo,'echo-check');
+  assert.ok(seenSourceIps.has('127.120.0.1') && seenSourceIps.has('127.120.0.2'),
+    'gateway must use distinct SSH TCP peer addresses for both credentials');
+
   gateway.ledger.report();
   const measured=JSON.parse(fs.readFileSync(reportFile,'utf8'));
   assert.ok(measured.accounts.find(x=>x.id===idB).usedBytes>=2*'echo-check'.length);
@@ -152,6 +158,10 @@ const host={
 let first=await reconcile(desired,{},host);
 assert.deepEqual(first.reports,[{id,state:'active'}]);
 assert.deepEqual(commands,['create','password','enable']);
+assert.equal(first.state[user].sourceIp,'127.120.0.1');
+assert.equal(allowedUsersConfig({accounts:[{username:user,sourceIp:first.state[user].sourceIp,enabled:true}]}).includes(
+  'AllowUsers '+user+'@127.120.0.1'),true);
+assert.equal(allowedUsersConfig({accounts:[]}).includes('_abess_no_active_user_'),true);
 let again=await reconcile(desired,first.state,host);
 assert.deepEqual(commands,['create','password','enable']);
 users.delete(user);
@@ -167,6 +177,7 @@ assert.throws(()=>httpsOrigin('http://panel.example.test'));
 assert.equal(httpsOrigin('https://panel.example.test').hostname,'panel.example.test');
 const mocked=[];
 const store={state:again.state,lastSuccessfulAt:0,
+  async configureSshd(x){store.sshdAllowlist=x;},
   async writePolicy(x){store.published=x;},
   async readUsage(t){return {format:'abess-ssh-ws-usage-v1',
     policyObservedAt:t,observedAt:new Date().toISOString(),
@@ -183,6 +194,8 @@ assert.equal(mocked.length,2);
 assert.equal(store.published.accounts[0].quotaBytes,12288);
 assert.equal(store.published.accounts[0].maxConnections,1);
 assert.equal(store.published.accounts[0].tokenHash,hash(key));
+assert.equal(store.published.accounts[0].sourceIp,'127.120.0.1');
+assert.ok(store.sshdAllowlist.includes('AllowUsers '+user+'@127.120.0.1'));
 const sent=JSON.parse(mocked[1].body).reports[0];
 assert.equal(sent.state,'active');assert.equal(sent.usedBytes,100);assert.equal(sent.online,1);
 await rm(dir,{recursive:true,force:true});
