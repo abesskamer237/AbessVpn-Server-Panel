@@ -27,9 +27,18 @@ if [[ ! -f node_modules/ws/package.json ]]; then
 fi
 install -d -m 0700 /etc/abess-ssh-ws /var/lib/abess-ssh-ws
 if ! getent group abessvpn >/dev/null; then groupadd --system abessvpn; fi
+if ! getent group abess-gateway >/dev/null; then groupadd --system abess-gateway; fi
 if ! id abess-gateway >/dev/null 2>&1; then
-  useradd --system --no-create-home --shell /usr/sbin/nologin abess-gateway
+  useradd --system --gid abess-gateway --no-create-home --shell /usr/sbin/nologin abess-gateway
 fi
+if [[ "$(id -gn abess-gateway)" != "abess-gateway" ]]; then
+  echo "The existing abess-gateway user must have its dedicated private group." >&2
+  exit 1
+fi
+# The unprivileged gateway reads a root-written policy and writes only its own counters.
+chmod 0751 /var/lib/abess-ssh-ws
+install -d -o root -g abess-gateway -m 0750 /var/lib/abess-ssh-ws/policy
+install -d -o abess-gateway -g abess-gateway -m 0700 /var/lib/abess-ssh-ws/gateway
 cat > /etc/abess-ssh-ws/sshd_config <<'SSHD'
 Port 2222
 ListenAddress 127.0.0.1
@@ -80,6 +89,9 @@ Environment=SSH_WS_LISTEN_PORT=2080
 Environment=SSH_WS_SSH_PORT=2222
 Environment=SSH_WS_PATH=/ssh-ws
 Environment=SSH_WS_MAX_CONNECTIONS=512
+Environment=SSH_WS_POLICY_FILE=/var/lib/abess-ssh-ws/policy/gateway-policy.json
+Environment=SSH_WS_USAGE_FILE=/var/lib/abess-ssh-ws/gateway/usage.json
+Environment=SSH_WS_USAGE_REPORT_FILE=/var/lib/abess-ssh-ws/gateway/usage-live.json
 ExecStart=$NODE_BIN $PWD/scripts/ssh-ws-gateway.mjs
 Restart=always
 RestartSec=2
@@ -87,6 +99,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
+ReadWritePaths=/var/lib/abess-ssh-ws/gateway
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
 UMask=0077
@@ -101,6 +114,9 @@ CONTROL_API_BASE_URL=$CONTROL_API_BASE_URL
 VPN_NODE_ID=$VPN_NODE_ID
 VPN_NODE_KEY_FILE=/etc/abess-ssh-ws/node-key
 SSH_WS_STATE_FILE=/var/lib/abess-ssh-ws/state.json
+SSH_WS_POLICY_FILE=/var/lib/abess-ssh-ws/policy/gateway-policy.json
+SSH_WS_USAGE_REPORT_FILE=/var/lib/abess-ssh-ws/gateway/usage-live.json
+SSH_WS_GATEWAY_GID=$(id -g abess-gateway)
 SSH_WS_OFFLINE_LIMIT_MS=600000
 ENV
 chmod 0600 /etc/abess-ssh-ws/agent.env

@@ -201,16 +201,30 @@ try{
   assert.equal(manifest.body.accounts[0].enabled,true);
   assert.match(manifest.body.accounts[0].username,/^abv_[0-9a-f]{12}$/);
   assert.ok(manifest.body.accounts[0].password.length>=32);
-  assert.equal((await call(`nodes/${managedNode.body.id}/ssh-ws/status`,{reports:[{id:managedId,state:'active'}]},managedNode.body.key)).status,200);
+  assert.match(manifest.body.accounts[0].tokenHash,/^[0-9a-f]{64}$/);
+  assert.equal(manifest.body.accounts[0].quotaBytes,Math.round(0.5*1024**3));
+  assert.equal(manifest.body.accounts[0].maxConnections,1);
+  assert.equal((await call(`nodes/${managedNode.body.id}/ssh-ws/status`,
+    {reports:[{id:managedId,state:'active'}]},managedNode.body.key)).status,400,
+    'active accounts require verified measured SSH traffic');
+  assert.equal((await call(`nodes/${managedNode.body.id}/ssh-ws/status`,
+    {reports:[{id:managedId,state:'active',usedBytes:1048576,online:1}]},managedNode.body.key)).status,200);
   const managedDelivered=await call(`admin/ssh/accounts/${managedId}/config`,{transport:'wss'},importerSession);
   assert.equal(managedDelivered.status,200);
   assert.equal(managedDelivered.body.password,manifest.body.accounts[0].password);
-  assert.equal(managedDelivered.body.path,'/ssh-ws');
+  assert.match(managedDelivered.body.path,/^\/ssh-ws\/[A-Za-z0-9_-]{43}$/);
+  assert.equal(managedDelivered.body.usedGb,1048576/1024**3);
+  assert.equal((await call('admin/ssh',undefined,importerSession)).body.accounts
+    .find(a=>a.id===managedId).connection.path,undefined,
+    'reseller listing must not disclose private WS path');
+  const usageManifest=await call(`nodes/${managedNode.body.id}/ssh-ws/desired`,undefined,managedNode.body.key);
+  assert.equal(usageManifest.body.accounts[0].baselineUsedBytes,1048576);
   assert.equal((await call(`admin/ssh/accounts/${managedId}`,{enabled:false},importerSession,'PATCH')).status,200);
   const suspendedManifest=await call(`nodes/${managedNode.body.id}/ssh-ws/desired`,undefined,managedNode.body.key);
   assert.equal(suspendedManifest.body.accounts[0].enabled,false);
   assert.equal(suspendedManifest.body.accounts[0].password,undefined);
-  assert.equal((await call(`nodes/${managedNode.body.id}/ssh-ws/status`,{reports:[{id:managedId,state:'blocked'}]},managedNode.body.key)).status,200);
+  assert.equal((await call(`nodes/${managedNode.body.id}/ssh-ws/status`,
+    {reports:[{id:managedId,state:'blocked',usedBytes:1048576,online:0}]},managedNode.body.key)).status,200);
   assert.equal((await call(`admin/ssh/accounts/${managedId}/config`,{transport:'wss'},importerSession)).status,503);
   console.log(`External backend passed (${database?'PostgreSQL':'JSON'}): manual endpoints/UUID, client exports, node isolation, real counters, duplicate/reset/replay validation, SSH import/export, persistence, reporting-only agent, no provisioned services.`);
 }finally{

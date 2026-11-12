@@ -11,6 +11,8 @@ export interface SshConnection {
 export interface SshAccount {
   id: string; username: string; label: string;
   managed?: boolean; provisionState?: 'pending'|'active'|'blocked'|'error'; lastAppliedAt?: string;
+  /** Unique per-account RFC6455 path bearer. Never include in list/inventory. */
+  wsAccessKey?: string; wsAccessHash?: string;
   salt?: string; verifier?: string; nodeId?: string; connection?: SshConnection;
   resellerId?: string; resellerName?: string; renewalIds?: string[]; renewalRequests?: Record<string,{gb:number;days:number}>;
   usageObservedAt?: string;
@@ -20,7 +22,7 @@ export interface SshAccount {
 }
 export interface SshState { accounts: SshAccount[] }
 export function safeSshAccount(a: SshAccount) {
-  const {password, payload, salt, verifier, renewalIds, renewalRequests, ...safe} = a;
+  const {password, payload, salt, verifier, wsAccessKey, wsAccessHash, renewalIds, renewalRequests, ...safe} = a;
   return {...safe,trafficVerified:Boolean(a.usageObservedAt),usedBytes:a.usageObservedAt?a.usedBytes:null,online:a.usageObservedAt?a.online??null:null};
 }
 export function sshPayload(host: string, port = 80, pathname = '/ws-ssh') {
@@ -121,8 +123,10 @@ export function registerSsh(app:Express,d:{
     let username: string;
     do{username='abv_'+crypto.randomBytes(6).toString('hex');}while(state.accounts.some(a=>a.username===username));
     const password=crypto.randomBytes(32).toString('base64url');
+    const wsSecret=crypto.randomBytes(32).toString('base64url');
     const account:SshAccount={
       id:'ssh_'+crypto.randomUUID(), username, label, managed:true,
+      wsAccessKey:seal(wsSecret,d.key),wsAccessHash:crypto.createHash('sha256').update(wsSecret).digest('hex'),
       provisionState:'pending',nodeId:node.id,resellerId:owner.id,resellerName:owner.name,
       connection:{host:node.host,port:node.sshWsPort||443,transport:'wss',
         fingerprint:node.sshWsFingerprint!,tls:true,sni:node.sshWsSni||node.host,
@@ -174,8 +178,11 @@ export function registerSsh(app:Express,d:{
     if(!a.connection||req.body?.transport!==a.connection.transport)return res.sendStatus(400);
     if(!active(a))return res.status(503).json({error:'Accès SSH indisponible.'});
     const {hasPayload,...connection}=a.connection;
+    if(a.managed && (!a.wsAccessKey || !a.wsAccessHash))
+      return res.status(503).json({error:'La licence SSH-WS doit être régénérée avec un secret WebSocket personnel.'});
+    const clientPath=a.managed ? `${connection.path}/${unseal(a.wsAccessKey!,d.key)}` : connection.path;
     d.audit({action:'SSH_CREDENTIALS_EXPORTED',actor:actor.id,role:actor.role,details:a.id});
-    res.set('Cache-Control','no-store').json({format:'abess-ssh-v1',protocol:'ssh',...connection,username:a.username,password:unseal(a.password,d.key),
+    res.set('Cache-Control','no-store').json({format:'abess-ssh-v1',protocol:'ssh',...connection,path:clientPath,username:a.username,password:unseal(a.password,d.key),
       payload:a.payload?unseal(a.payload,d.key):a.connection.wire==='http-upgrade'?sshPayload(a.connection.tls?(a.connection.sni||a.connection.host):a.connection.host,a.connection.port,a.connection.path):null,
       expiresAt:a.expiresAt,quotaGb:a.quotaBytes/1024**3,usedGb:a.usageObservedAt?a.usedBytes/1024**3:null,trafficVerified:Boolean(a.usageObservedAt)});
   });
