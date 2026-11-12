@@ -52,6 +52,12 @@ assert.deepEqual(calls,['create','password','enable']);
 let again=await reconcile(desired,first.state,host);
 assert.equal(again.reports[0].state,'active');
 assert.deepEqual(calls,['create','password','enable'],'idempotent polls do not change password');
+users.delete(username);
+const recreated=await reconcile(desired,again.state,host);
+assert.equal(recreated.reports[0].state,'active');
+assert.deepEqual(calls.slice(-3),['create','password','enable'],
+  'recreating a missing managed user must reset credentials and unlock it');
+again=recreated;
 const stopped=await reconcile({...desired,accounts:[{...desired.accounts[0],enabled:false,password:undefined}]},again.state,host);
 assert.equal(stopped.reports[0].state,'blocked');
 assert.ok(calls.includes('disable'));
