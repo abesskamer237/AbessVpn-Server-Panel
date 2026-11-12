@@ -73,6 +73,7 @@ export interface VpnNode {
   sshWsHost?: {
     observedAt: string;
     uptimeSeconds: number;
+    cpuPercent: number;
     load1: number;
     totalMemoryBytes: number;
     freeMemoryBytes: number;
@@ -393,7 +394,7 @@ export function registerOperations(
       const observedAt=String(telemetry?.observedAt||'');
       const age=Date.now()-Date.parse(observedAt);
       const services=telemetry?.services;
-      const nums=['uptimeSeconds','load1','totalMemoryBytes','freeMemoryBytes','diskTotalBytes','diskFreeBytes'] as const;
+      const nums=['uptimeSeconds','cpuPercent','load1','totalMemoryBytes','freeMemoryBytes','diskTotalBytes','diskFreeBytes'] as const;
       if(!Number.isFinite(age)||age<-5000||age>60000||!services||
         typeof services.sshd!=='boolean'||typeof services.gateway!=='boolean'||typeof services.reconciler!=='boolean'||
         nums.some(key=>!Number.isFinite(Number(telemetry?.[key]))||Number(telemetry[key])<0)||
@@ -404,6 +405,7 @@ export function registerOperations(
       safeTelemetry={
         observedAt,
         uptimeSeconds:Math.floor(Number(telemetry.uptimeSeconds)),
+        cpuPercent:Math.max(0,Math.min(100,Number(telemetry.cpuPercent))),
         load1:Number(telemetry.load1),
         totalMemoryBytes:Math.floor(Number(telemetry.totalMemoryBytes)),
         freeMemoryBytes:Math.floor(Number(telemetry.freeMemoryBytes)),
