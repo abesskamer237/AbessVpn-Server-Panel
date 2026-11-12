@@ -5,7 +5,7 @@ async function login(page:Page){
   await page.getByLabel('Adresse email',{exact:true}).fill(process.env.PANEL_TEST_EMAIL!);
   await page.getByLabel('Mot de passe',{exact:true}).fill(process.env.PANEL_TEST_PASSWORD!);
   await page.getByRole('button',{name:'Se connecter',exact:true}).click();
-  await expect(page.getByRole('heading',{name:'Comptes SSH-WSS'})).toBeVisible();
+  await expect(page.getByRole('heading',{level:1,name:'Comptes SSH-WSS'})).toBeVisible();
 }
 
 test('the SSH-WSS panel authenticates with HttpOnly cookies and logs out',async({page,request})=>{
@@ -23,7 +23,7 @@ test('the SSH-WSS panel authenticates with HttpOnly cookies and logs out',async(
 
 test('only managed SSH WebSocket accounts are visible; no legacy TCP/VLESS/VMess/Trojan selectors',async({page})=>{
   await login(page);
-  await expect(page.getByRole('heading',{name:'Comptes SSH-WSS'})).toBeVisible();
+  await expect(page.getByRole('heading',{level:1,name:'Comptes SSH-WSS'})).toBeVisible();
   await expect(page.getByText('Moteur SSH sur WebSocket sécurisé (WSS)')).toBeVisible();
   await expect(page.getByRole('button',{name:'Créer le compte SSH-WSS'})).toBeVisible();
   await expect(page.getByLabel('Connexions SSH-WS simultanées')).toHaveCount(0);
