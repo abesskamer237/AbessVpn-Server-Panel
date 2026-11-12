@@ -5,13 +5,13 @@ import {
   RefreshCw,
   Terminal,
   Trash2,
-  ShieldCheck,
 } from "lucide-react";
 export function SshCenter({ token }: { token: string }) {
   const [state, setState] = useState<any>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [username, setUsername] = useState("");
+  const [importJson, setImportJson] = useState("");
+  const [nodeId, setNodeId] = useState("");
   const [label, setLabel] = useState("");
   const [days, setDays] = useState(30);
   const [quotaGb, setQuota] = useState(10);
@@ -69,6 +69,7 @@ export function SshCenter({ token }: { token: string }) {
     a.click();
     URL.revokeObjectURL(url);
   }
+  const selectedAccount = state?.accounts.find((a: any) => a.id === selected);
   return (
     <section className="space-y-6" aria-label="Comptes SSH">
       <div className="rounded-2xl border border-emerald-500/20 bg-slate-900/60 p-6 flex flex-wrap gap-4 items-center justify-between">
@@ -77,10 +78,7 @@ export function SshCenter({ token }: { token: string }) {
             <Terminal className="text-emerald-400" />
             Comptes et tunnels SSH
           </h2>
-          <p className="text-sm text-slate-400 mt-2">
-            SSH TCP · SSH-WS HTTP Upgrade · WS avec TLS · quotas et expiration
-            contrôlés par la passerelle dédiée.
-          </p>
+
         </div>
         <span className={state?.ready ? "text-emerald-400" : "text-amber-400"}>
           {state?.ready
@@ -107,29 +105,31 @@ export function SshCenter({ token }: { token: string }) {
           e.preventDefault();
           void action(async () => {
             const a = await call("/accounts", {
-              username,
+              config: JSON.parse(importJson),
+              nodeId,
               label,
               days,
               quotaGb,
               maxConnections: connections,
             });
             setSelected(a.id);
-            setUsername("");
+            setTransport(a.connection.transport);
+            setImportJson("");
             setLabel("");
             setConfig(null);
           });
         }}
       >
         <label className="text-sm">
-          Utilisateur
-          <input
-            aria-label="Utilisateur SSH"
-            required
-            pattern="[a-z][a-z0-9_-]{2,31}"
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            className="w-full mt-2 bg-slate-950 border border-slate-700 rounded-lg p-2"
-          />
+          Serveur
+          <select aria-label="Serveur SSH" required value={nodeId} onChange={e => setNodeId(e.target.value)} className="w-full bg-slate-950 p-2">
+            <option value="">—</option>
+            {state?.nodes?.map((n: any) => <option key={n.id} value={n.id}>{n.name}</option>)}
+          </select>
+        </label>
+        <label className="text-sm">
+          Configuration JSON
+          <textarea aria-label="Configuration SSH JSON" required value={importJson} onChange={e => setImportJson(e.target.value)} className="w-full bg-slate-950 p-2" />
         </label>
         <label className="text-sm">
           Nom du client
@@ -178,10 +178,10 @@ export function SshCenter({ token }: { token: string }) {
           />
         </label>
         <button
-          disabled={busy || !state?.ready}
+          disabled={busy || !nodeId || !importJson}
           className="self-end bg-emerald-500 text-slate-950 font-bold rounded-lg p-2 disabled:opacity-40"
         >
-          Créer le compte
+          Importer le compte
         </button>
       </form>
       <div className="rounded-2xl border border-slate-700 p-5 space-y-4">
@@ -247,6 +247,7 @@ export function SshCenter({ token }: { token: string }) {
                       <button
                         onClick={() => {
                           setSelected(a.id);
+            setTransport(a.connection.transport);
                           setConfig(null);
                         }}
                       >
@@ -297,7 +298,7 @@ export function SshCenter({ token }: { token: string }) {
         </div>
         {state?.accounts.length === 0 && (
           <p className="text-slate-400 p-4 text-center">
-            Aucun compte SSH. Créez votre premier client ci-dessus.
+            Aucun compte SSH.
           </p>
         )}
       </div>
@@ -311,6 +312,8 @@ export function SshCenter({ token }: { token: string }) {
               value={selected}
               onChange={(e) => {
                 setSelected(e.target.value);
+                const account = state?.accounts.find((a: any) => a.id === e.target.value);
+                if (account?.connection) setTransport(account.connection.transport);
                 setConfig(null);
               }}
               className="mt-2 w-full bg-slate-950 border border-slate-700 rounded-lg p-3"
@@ -334,38 +337,12 @@ export function SshCenter({ token }: { token: string }) {
               }}
               className="mt-2 w-full bg-slate-950 border border-slate-700 rounded-lg p-3"
             >
-              <option value="ws">SSH-WS · HTTP Upgrade brut — 80</option>
-              <option value="ws-alt">
-                SSH-WS · HTTP Upgrade brut — {state?.ports.wsAlt || 85}
-              </option>
-              <option value="wss-raw">
-                SSH-WS + TLS · HTTP Upgrade brut — 443
-              </option>
-              <option value="wss-raw-alt">
-                SSH-WS + TLS · HTTP Upgrade brut — 2084
-              </option>
-              <option value="wss-alt">WebSocket standard + TLS — 2084</option>
-              <option value="wss">WebSocket standard + TLS — 443</option>
-              <option value="tcp">
-                SSH direct TCP — {state?.ports.tcp || 2222}
-              </option>
+              {['tcp', 'ws', 'ws-alt', 'wss-raw', 'wss-raw-alt', 'wss', 'wss-alt']
+                .filter(mode => !selectedAccount?.connection || selectedAccount.connection.transport === mode)
+                .map(mode => <option key={mode} value={mode}>{mode.toUpperCase()}{selectedAccount?.connection ? ` · ${selectedAccount.connection.port}` : ''}</option>)}
             </select>
           </label>
-          <p className="text-sm text-slate-400">
-            Le port HTTP alternatif rejoint directement le VPS. Les données
-            restent chiffrées par SSH. Les variantes TLS nécessitent un proxy
-            compatible avec le transport sélectionné.
-          </p>
-          <p className="text-sm text-slate-400">
-            Serveur :{" "}
-            {(transport === "tcp" ||
-            transport === "ws" ||
-            transport === "ws-alt"
-              ? state?.wsHost
-              : state?.host) || "…"}{" "}
-            · chemin : /ws-ssh · SNI TLS : nom du serveur. Vérification du
-            certificat obligatoire. SSH TCP reste chiffré par SSH.
-          </p>
+          <p className="text-sm text-slate-400">{selectedAccount?.connection?.host || '…'} · {selectedAccount?.connection?.path || '—'}</p>
           <button
             disabled={busy || !selected}
             onClick={() =>
@@ -422,13 +399,6 @@ export function SshCenter({ token }: { token: string }) {
               de connexion.
             </p>
           )}
-          <p className="text-xs text-slate-400 flex gap-2">
-            <ShieldCheck className="shrink-0" size={16} />
-            Passerelle indépendante du SSH administrateur. Aucun shell système
-            ni accès au réseau privé. TCP uniquement : UDP, SlowDNS, serveur
-            Dropbear ne sont pas inclus. Import direct dans ABESS VPN 2.5.0 ou
-            supérieur.
-          </p>
           {state?.fingerprint && (
             <p className="text-xs break-all text-slate-400">
               Empreinte de la clé SSH : {state.fingerprint}

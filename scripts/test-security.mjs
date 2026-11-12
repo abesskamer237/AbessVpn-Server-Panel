@@ -38,7 +38,7 @@ try {
   await writeFile(path.join(dataDir, 'xray-ready'), 'audit-generation');
   assert.equal((await (await request('/api/v1/ping')).json()).dataPlane, 'not-ready');
   for (const [generation, observedAt, expected] of [
-    ['audit-generation', new Date().toISOString(), 'ready'],
+    ['audit-generation', new Date().toISOString(), 'not-ready'],
     ['wrong-generation', new Date().toISOString(), 'not-ready'],
     ['audit-generation', new Date(Date.now() - 60000).toISOString(), 'not-ready'],
   ]) {

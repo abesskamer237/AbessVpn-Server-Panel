@@ -101,7 +101,7 @@ test('SSH generator shows actual availability and protects credential export', a
   await page.getByRole('navigation').getByRole('button', {name:'Comptes SSH',exact:true}).click();
   await expect(page.getByRole('heading', {name:'Comptes et tunnels SSH'})).toBeVisible();
   await expect(page.getByText('● Passerelle indisponible', {exact:true})).toBeVisible();
-  await expect(page.getByRole('button', {name:'Créer le compte',exact:true})).toBeDisabled();
+  await expect(page.getByRole('button', {name:'Importer le compte',exact:true})).toBeDisabled();
   await expect(page.getByRole('button', {name:'Afficher les paramètres et identifiants',exact:true})).toBeDisabled();
   await page.getByLabel('Transport SSH').selectOption('wss-alt');
   await expect(page.getByText(/Sélectionnez un compte et un transport/)).toBeVisible();
@@ -133,4 +133,30 @@ test('MFA enrollment and recovery login work through the browser',async({page})=
   await page.getByLabel('Code de double authentification ou de récupération',{exact:true}).fill(recovery[0]);
   await page.getByRole('button',{name:'Se connecter',exact:true}).click();
   await expect(page.getByRole('heading',{name:/Bonjour/})).toBeVisible();
+});
+
+test('imports an existing SSH account and exports its exact remote endpoint', async ({page, request}) => {
+  const token = await login(page);
+  const headers = {Authorization:`Bearer ${token}`};
+  const response = await request.post('/api/v1/admin/nodes',{headers,data:{name:'Manual SSH browser',host:'ssh-browser.example.test'}});
+  expect(response.status()).toBe(201);
+  const node = await response.json();
+  await page.getByRole('navigation').getByRole('button',{name:'Comptes SSH',exact:true}).click();
+  await page.getByLabel('Serveur SSH').selectOption(node.id);
+  const config={host:'ssh-browser.example.test',username:'browser_user',password:'browser-only-fixture-password',port:8443,transport:'wss-raw',tls:true,sni:'ssh-cert.example.test',path:'/existing-ssh',fingerprint:'SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'};
+  await page.getByLabel('Configuration SSH JSON').fill(JSON.stringify(config));
+  await page.getByRole('button',{name:'Importer le compte',exact:true}).click();
+  await expect(page.locator('td strong').filter({hasText:'browser_user'})).toBeVisible();
+  const list = await (await request.get('/api/v1/admin/ssh',{headers})).json();
+  const account = list.accounts.find((a:any)=>a.username==='browser_user');
+  expect(account).toBeTruthy();
+  const heartbeat=await request.post(`/api/v1/nodes/${node.id}/heartbeat`,{headers:{Authorization:`Bearer ${node.key}`},data:{ready:true,snapshot:{generation:'browser-ssh',observedAt:new Date().toISOString(),stat:[],accounts:[{id:account.id,usedBytes:2048,online:1}]}}});
+  expect(heartbeat.status()).toBe(200);
+  await page.getByRole('button',{name:'Actualiser',exact:true}).click();
+  await expect(page.getByLabel('Transport SSH')).toHaveValue('wss-raw');
+  await page.getByRole('button',{name:'Afficher les paramètres et identifiants',exact:true}).click();
+  await expect(page.locator('pre')).toContainText('browser-only-fixture-password');
+  await expect(page.locator('pre')).toContainText('"port": 8443');
+  await expect(page.locator('pre')).toContainText('GET /existing-ssh HTTP/1.1');
+  expect((await request.get('/api/v1/admin/ssh')).status()).toBe(401);
 });

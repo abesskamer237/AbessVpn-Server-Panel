@@ -1,67 +1,8 @@
 {
   email {$ACME_EMAIL}
-  auto_https disable_redirects
-}
-
-(abess_routes) {
-  encode zstd gzip
-
-  @abess_ssh path /ws-ssh
-  reverse_proxy @abess_ssh ssh:8085
-
-  # VLESS WebSocket over TLS
-  @abess_vless_ws path /@abess237
-  reverse_proxy @abess_vless_ws xray:10000
-
-  # VLESS gRPC over TLS (h2c)
-  @abess_vless_grpc path /@abess237/vless/grpc*
-  reverse_proxy @abess_vless_grpc h2c://xray:10001
-
-  # VLESS HTTPUpgrade over TLS
-  @abess_vless_httpupgrade path /@abess237/vless/httpupgrade
-  reverse_proxy @abess_vless_httpupgrade xray:10002
-
-  # VLESS XHTTP over TLS
-  @abess_vless_xhttp path /@abess237/vless/xhttp*
-  reverse_proxy @abess_vless_xhttp xray:10003
-
-  # Management Web Panel & API fallback
-  reverse_proxy api:3000
 }
 
 {$VPN_DOMAIN} {
-  import abess_routes
-}
-
-:443 {
-  import abess_routes
-}
-
-# Dedicated SSH WebSocket TLS listener, sharing the panel certificate.
-{$VPN_DOMAIN}:2084 {
-  handle /ws-ssh {
-    reverse_proxy ssh:8085
-  }
-  handle {
-    respond 404
-  }
-}
-
-# SSH-WS over HTTP: only the tunnel endpoint avoids the HTTPS redirect.
-:80 {
-  handle /ws-ssh {
-    reverse_proxy ssh:8085
-  }
-  handle {
-    redir https://{$VPN_DOMAIN}{uri} 308
-  }
-}
-
-:85 {
-  handle /ws-ssh {
-    reverse_proxy ssh:8085
-  }
-  handle {
-    respond 404
-  }
+  encode zstd gzip
+  reverse_proxy api:3000
 }

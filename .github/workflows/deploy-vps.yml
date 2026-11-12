@@ -53,20 +53,17 @@ jobs:
       - name: Build admin panel
         run: npm run build
 
-      - name: Validate shell script syntax
-        run: sh -n docker/xray/watch-config.sh
-
       - name: Build API image
         run: docker build --pull -f Dockerfile -t abessvpn-api:ci .
 
       - name: Verify deployment commands preserve the remote script input
         run: node scripts/test-deploy-stdin.mjs
 
-      - name: Verify SSH TCP, WebSocket, quota and isolation
-        run: bash scripts/test-ssh-docker.sh
+      - name: Verify external backend contract
+        run: node --import tsx scripts/test-external-backend.mjs
 
-      - name: Build Xray-core sidecar image
-        run: docker build --pull -f docker/xray/Dockerfile -t abessvpn-xray:ci ./docker/xray
+      - name: Verify mobile API contract
+        run: node scripts/test-mobile-contract.mjs
 
       - name: Verify official Xray traffic and real quota accounting
         run: python3 scripts/test-xray-traffic.py
@@ -80,7 +77,7 @@ jobs:
           rm -f .env
 
   deploy:
-    name: Deploy control plane, Xray-core and HTTPS
+    name: Deploy backend and HTTPS
     if: github.ref == 'refs/heads/main'
     needs: validate
     runs-on: ubuntu-latest
@@ -351,11 +348,9 @@ jobs:
           rollback_allowed=0
           if [ -f .env ] && grep -q '^POSTGRES_PASSWORD=' .env; then
             old_api="$(dc images -q api | head -n1)"
-            old_xray="$(dc images -q xray | head -n1)"
-            if [ -n "$old_api" ] && [ -n "$old_xray" ]; then
+            if [ -n "$old_api" ]; then
               docker tag "$old_api" abessvpn-api:rollback
-              docker tag "$old_xray" abessvpn-xray:rollback
-              printf 'services:\n  api:\n    image: abessvpn-api:rollback\n  xray:\n    image: abessvpn-xray:rollback\n' > .rollback.yml
+              printf 'services:\n  api:\n    image: abessvpn-api:rollback\n' > .rollback.yml
               chmod 600 .rollback.yml
               rollback_allowed=1
             fi
@@ -379,7 +374,7 @@ jobs:
           chmod 600 .env
           dc config -q
           deploy_failed=0
-          dc up -d --build --remove-orphans || deploy_failed=1
+          dc up -d --build database api caddy || deploy_failed=1
           # Reload API environment and the Caddyfile bind mount even when
           # their Compose service definitions or image tags stayed unchanged.
           # Preserve databases, SSH accounts, tunnel sessions and volumes.
@@ -391,7 +386,7 @@ jobs:
           ready=0
           for ((attempt=1; attempt<=30; attempt++)); do
             response="$(curl --silent --show-error --fail --max-time 8 "https://${VPN_DOMAIN}/api/v1/ping" 2>/dev/null || true)"
-            if printf '%s' "$response" | grep -q '"dataPlane":"ready"'; then
+            if printf '%s' "$response" | grep -q '"ok":true'; then
               ready=1
               break
             fi
@@ -400,93 +395,19 @@ jobs:
 
           if [ "$ready" -ne 1 ] || [ "$deploy_failed" -ne 0 ]; then
             if [ "$rollback_allowed" -eq 1 ]; then
-              echo 'Health checks failed; restoring the previous PostgreSQL-compatible API/Xray images.' >&2
-              dc -f .rollback.yml up -d --no-build api xray caddy
+              echo 'Health checks failed; restoring the previous PostgreSQL-compatible API image.' >&2
+              dc -f .rollback.yml up -d --no-build api caddy
             else
               echo 'Automatic image rollback is unavailable for the first JSON-to-PostgreSQL migration; restore from the protected pre-deployment archive under maintenance.' >&2
             fi
-            echo 'Public HTTPS/Xray readiness check failed. Recent service logs follow.' >&2
+            echo 'Public HTTPS readiness check failed. Recent service logs follow.' >&2
             dc ps >&2 || true
-            dc logs --tail=100 api xray caddy >&2 || true
+            dc logs --tail=100 api caddy >&2 || true
             exit 1
-          fi
-          dc exec -T --interactive=false ssh node -e "fetch('http://127.0.0.1:8085/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
-          ssh_upgrade="$(curl --http1.1 --silent --show-error --max-time 3 -D - -o /dev/null -H 'Connection: Upgrade' -H 'Upgrade: websocket' "https://${VPN_DOMAIN}/ws-ssh" 2>/dev/null || true)"
-          if ! printf '%s' "$ssh_upgrade" | grep -Eq '^HTTP/1[.]1 101'; then
-            echo '::error::Public SSH WebSocket/TLS upgrade failed. Check Caddy and the domain/CDN WebSocket settings.' >&2
-            exit 1
-          fi
-          ssh_ws_host="$(dc exec -T --interactive=false api node -e 'process.stdout.write(process.env.SSH_WS_HOST || process.env.VPN_DOMAIN)')"
-          ssh_ws_upgrade="$(curl --http1.1 --silent --show-error --max-time 3 -D - -o /dev/null -H 'Connection: Upgrade' -H 'Upgrade: websocket' "http://${ssh_ws_host}/ws-ssh" 2>/dev/null || true)"
-          if ! printf '%s' "$ssh_ws_upgrade" | grep -Eq '^HTTP/1[.]1 101'; then
-            echo '::warning::Optional plain SSH-WS port 80 is redirected or unavailable from the VPS. Use SSH-WS TLS until the HTTP origin is configured.' >&2
           fi
           printf '%s\n' "$response"
-          echo 'ABESS VPN control plane, Xray-core and public SSH WebSocket/TLS report ready.'
+          echo 'ABESS backend HTTPS readiness verified.'
           REMOTE
-          # Verify the exported endpoint, which can differ from the management
-          # SSH address when SSH_WS_HOST was configured on an existing VPS.
-          ssh_ws_endpoint="$("$HOME/.local/bin/abess-ssh" -p "$VPS_PORT" -o StrictHostKeyChecking=yes "$DEST" 'bash -s' <<'ORIGIN'
-          set -euo pipefail
-          cd "$HOME/abessvpn-server"
-          export COMPOSE_FILE="$PWD/docker-compose.yml"
-          command docker compose -f "$PWD/docker-compose.yml" exec -T --interactive=false api node -e 'console.log("ABESS_SSH_ENDPOINT=" + JSON.stringify({host: process.env.SSH_WS_HOST || process.env.VPN_DOMAIN, port: process.env.SSH_WS_PUBLIC_PORT || "85"}))'
-          ORIGIN
-          )"
-          ssh_ws_endpoint="$(printf '%s\n' "$ssh_ws_endpoint" | sed -n 's/^ABESS_SSH_ENDPOINT=//p' | tail -n 1)"
-          ssh_ws_origin="$(printf '%s' "$ssh_ws_endpoint" | node -e 'process.stdout.write(JSON.parse(require("node:fs").readFileSync(0,"utf8")).host)')"
-          ssh_ws_port="$(printf '%s' "$ssh_ws_endpoint" | node -e 'process.stdout.write(String(JSON.parse(require("node:fs").readFileSync(0,"utf8")).port))')"
-          expected_ws_origin="$(node -e 'process.stdout.write(process.env.VPS_HOST.trim())')"
-          if [[ ! "$ssh_ws_port" =~ ^[0-9]+$ ]] || ((ssh_ws_port < 1 || ssh_ws_port > 65535)); then
-            echo '::error::Invalid SSH-WS public port.' >&2
-            exit 1
-          fi
-          if [[ ! "$ssh_ws_origin" =~ ^[A-Za-z0-9.-]+$ ]]; then
-            echo '::error::The exported SSH-WS origin must be an IPv4 address or hostname.' >&2
-            exit 1
-          fi
-          if [ "$ssh_ws_origin" != "$expected_ws_origin" ]; then
-            "$HOME/.local/bin/abess-ssh" -p "$VPS_PORT" -o StrictHostKeyChecking=yes "$DEST" 'bash abessvpn-server/scripts/diagnose-ssh-origin.sh' || true
-            echo "::error::The running API did not load the deployed SSH_WS_HOST (running public origin: ${ssh_ws_origin}). Refusing to distribute an outdated SSH-WS origin." >&2
-            exit 1
-          fi
-          ssh_ws_external_ready=0
-          for attempt in 1 2 3; do
-            ssh_ws_external="$(curl --noproxy '*' --http1.1 --silent --show-error --connect-timeout 8 --max-time 10 -D - -o /dev/null -H 'Connection: Upgrade' -H 'Upgrade: websocket' "http://${ssh_ws_origin}/ws-ssh" 2>/tmp/abess-ws-curl-error || true)"
-            if printf '%s' "$ssh_ws_external" | grep -Eq '^HTTP/1[.]1 101'; then
-              ssh_ws_external_ready=1
-              break
-            fi
-            # Report only the status, never credentials or response bodies.
-            printf 'External SSH-WS attempt %s: %s\n' "$attempt" "$(printf '%s' "$ssh_ws_external" | head -n 1 | tr -d '\r')"
-            sleep 3
-          done
-          if [ "$ssh_ws_external_ready" -ne 1 ]; then
-            curl_reason="$(sed -E 's/([0-9]{1,3}\.){3}[0-9]{1,3}/[VPS IP]/g' /tmp/abess-ws-curl-error | tr '\n' ' ')"
-            http_status="$(printf '%s' "$ssh_ws_external" | head -n 1 | tr -d '\r')"
-            http_server="$(printf '%s' "$ssh_ws_external" | sed -n 's/^[Ss]erver: //p' | tr -d '\r')"
-            echo "::warning::Optional plain SSH-WS port 80: ${http_status:-no HTTP response}; server=${http_server:-unknown}; ${curl_reason:-HTTP Upgrade rejected}. Use the direct port 85 after its verification passes." >&2
-          else
-            echo 'External SSH-WS HTTP Upgrade on port 80 verified.'
-          fi
-          ssh_ws_direct="$(curl --noproxy '*' --http1.1 --silent --show-error --connect-timeout 8 --max-time 10 -D - -o /tmp/abess-ws-direct-body -H 'Connection: Upgrade' -H 'Upgrade: websocket' "http://${ssh_ws_origin}:${ssh_ws_port}/ws-ssh" 2>/tmp/abess-ws-direct-error || true)"
-          if ! printf '%s' "$ssh_ws_direct" | grep -Eq '^HTTP/1[.]1 101' || ! grep -aEq '^SSH-2[.]0-' /tmp/abess-ws-direct-body; then
-            direct_status="$(printf '%s' "$ssh_ws_direct" | head -n 1 | tr -d '\r')"
-            direct_reason="$(sed -E 's/([0-9]{1,3}\.){3}[0-9]{1,3}/[VPS IP]/g' /tmp/abess-ws-direct-error | tr '\n' ' ')"
-            echo "::error::Public direct SSH-WS port ${ssh_ws_port} failed: ${direct_status:-no HTTP response}; ${direct_reason:-SSH banner missing}." >&2
-            exit 1
-          fi
-          echo "External direct SSH-WS HTTP Upgrade and SSH server banner on port ${ssh_ws_port} verified."
-          ssh_ws_tls="$(curl --noproxy '*' --http1.1 --silent --show-error --connect-timeout 8 --max-time 10 -D - -o /tmp/abess-ws-tls-body -H 'Connection: Upgrade' -H 'Upgrade: websocket' "https://${VPN_DOMAIN}/ws-ssh" 2>/tmp/abess-ws-tls-error || true)"
-          if ! printf '%s' "$ssh_ws_tls" | grep -Eq '^HTTP/1[.]1 101'; then
-            tls_status="$(printf '%s' "$ssh_ws_tls" | head -n 1 | tr -d '\r')"
-            tls_reason="$(sed -E 's/([0-9]{1,3}\.){3}[0-9]{1,3}/[VPS IP]/g' /tmp/abess-ws-tls-error | tr '\n' ' ')"
-            echo "::warning::Optional raw SSH-WS TLS: ${tls_status:-no HTTP response}; ${tls_reason:-HTTP Upgrade rejected}. The direct port 85 is verified separately." >&2
-          elif ! grep -aEq '^SSH-2[.]0-' /tmp/abess-ws-tls-body; then
-            echo '::warning::The TLS proxy did not forward the raw SSH banner. Use the verified direct port 85.' >&2
-          else
-            echo 'External SSH-WS TLS HTTP Upgrade and SSH server banner on port 443 verified.'
-          fi
 
           rm -f .deploy.env
 

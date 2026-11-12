@@ -59,6 +59,9 @@ export interface VpnNode {
   version?: string;
   activeLicences?: number;
   generation?: string;
+  observedAt?: string;
+  snapshotHash?: string;
+  online?: number;
   counters?: Record<string, number>;
 }
 export class Operations {
@@ -238,7 +241,7 @@ export function registerOperations(
     res.json(
       d
         .readNodes()
-        .map(({ keyHash, counters, generation, ...node }) => ({
+        .map(({ keyHash, counters, generation, snapshotHash, ...node }) => ({
           ...node,
           stale:
             !node.lastSeenAt ||
@@ -248,9 +251,8 @@ export function registerOperations(
   );
   app.post("/api/v1/admin/nodes", d.authenticate, admin, (req, res) => {
     const name = String(req.body?.name || "").trim();
-    const host = String(req.body?.host || "").trim();
+    const host = String(req.body?.host || "").trim().toLowerCase();
     if (
-      host === process.env.VPN_DOMAIN ||
       name.length < 1 ||
       name.length > 80 ||
       !/^[a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?$/.test(host)
@@ -310,15 +312,39 @@ export function registerOperations(
   app.post("/api/v1/nodes/:id/heartbeat", d.limiter, nodeAuth, (req, res) => {
     const nodes = d.readNodes();
     const node = nodes.find((n) => n.id === (req as any).vpnNode.id)!;
-    if (req.body?.snapshot) {
+    const snapshot = req.body?.snapshot;
+    if (snapshot) {
       try {
-        d.nodeUsage(node, req.body.snapshot);
+        const time = Date.parse(snapshot.observedAt);
+        const age = Date.now() - time;
+        if (typeof snapshot.generation !== 'string' || !snapshot.generation.length || snapshot.generation.length > 100 ||
+          !Number.isFinite(age) || age < -5000 || age > 60000 ||
+          !Array.isArray(snapshot.stat) || snapshot.stat.length > 10000 ||
+          (snapshot.accounts !== undefined && (!Array.isArray(snapshot.accounts) || snapshot.accounts.length > 5000))) throw Error('Invalid snapshot');
+        const names = new Set<string>();
+        for (const item of snapshot.stat) {
+          if (!item || typeof item.name !== 'string' || item.name.length > 256 || names.has(item.name) ||
+            !['number', 'string'].includes(typeof item.value) || String(item.value).trim() === '' || !Number.isSafeInteger(Number(item.value)) || Number(item.value) < 0) throw Error('Invalid counter');
+          names.add(item.name);
+        }
+        const accounts = new Set<string>();
+        for (const item of snapshot.accounts || []) {
+          if (!item || typeof item.id !== 'string' || accounts.has(item.id) || !Number.isSafeInteger(item.usedBytes) || item.usedBytes < 0 ||
+            (item.online !== undefined && (!Number.isSafeInteger(item.online) || item.online < 0))) throw Error('Invalid SSH counter');
+          accounts.add(item.id);
+        }
+        const hash = digest(JSON.stringify(snapshot));
+        const previousTime = Date.parse(node.observedAt || '');
+        if (time < previousTime || (time === previousTime && hash !== node.snapshotHash)) throw Error('Out-of-order snapshot');
+        if (hash !== node.snapshotHash) d.nodeUsage(node, snapshot);
+        node.observedAt = snapshot.observedAt;
+        node.snapshotHash = hash;
       } catch {
         return res.sendStatus(400);
       }
     }
     node.lastSeenAt = new Date().toISOString();
-    node.ready = req.body?.ready === true;
+    node.ready = req.body?.ready === true && Boolean(snapshot);
     node.version = String(req.body?.version || "").slice(0, 40);
     d.saveNodes(nodes);
     res.json({ ok: true });

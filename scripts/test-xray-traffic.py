@@ -27,23 +27,28 @@ try:
   try:request('ping');break
   except OSError:time.sleep(.1)
  token=request('auth/login',{'email':env['ADMIN_EMAIL'],'password':password})['token']
+ node=request('admin/nodes',{'name':'Manual Xray','host':'vpn.example.test'},token)
  profile=request('admin/protocol-configs',{'name':'Traffic test','serverHost':'vpn.example.test','sniHost':'vpn.example.test','transport':'tcp','protocol':'vless'},token)['config']
  licence=request('admin/tokens',{'configurationId':profile['id'],'bandwidthGb':1,'days':1,'deviceLimit':1},token)
  records=json.loads((data/'tokens.json').read_text());records[0]['bandwidthUsedGb']=(1024**3-1024)/(1024**3);(data/'tokens.json').write_text(json.dumps(records))
- config=json.loads((data/'xray-config.json').read_text())
- assert any('fc00::/7' in rule.get('ip',[]) for rule in config['routing']['rules'])
- # Private benchmark network only. The real production file remains unchanged.
- config['routing']['rules']=[r for r in config['routing']['rules'] if 'ip' not in r]
- config['log']={'loglevel':'debug'}
+ # Independently configured fixture: the panel must never generate this server config.
+ assert not (data/'xray-config.json').exists()
+ config={'log':{'loglevel':'warning'},'stats':{},
+ 'api':{'tag':'api','services':['StatsService']},
+ 'policy':{'levels':{'0':{'statsUserUplink':True,'statsUserDownlink':True}}},
+ 'inbounds':[{'listen':'0.0.0.0','port':10050,'protocol':'vless','settings':{'clients':[{'id':licence['clientUuid'],'email':licence['clientUuid'],'level':0}],'decryption':'none'},'streamSettings':{'network':'tcp','security':'none'}},
+ {'listen':'127.0.0.1','port':10085,'protocol':'dokodemo-door','settings':{'address':'127.0.0.1'},'tag':'api-in'}],
+ 'outbounds':[{'protocol':'freedom','tag':'direct'}],
+ 'routing':{'rules':[{'type':'field','inboundTag':['api-in'],'outboundTag':'api'}]}}
  config_file=root/'benchmark-server.json';config_file.write_text(json.dumps(config));config_file.chmod(0o644)
+ original_config=config_file.read_bytes()
  client={'log':{'loglevel':'debug'},'inbounds':[{'listen':'0.0.0.0','port':10809,'protocol':'http','settings':{}}],'outbounds':[{'protocol':'vless','settings':{'vnext':[{'address':'server','port':10050,'users':[{'id':licence['clientUuid'],'encryption':'none'}]}]},'streamSettings':{'network':'tcp','security':'none'}}]}
  client_file=root/'benchmark-client.json';client_file.write_text(json.dumps(client));client_file.chmod(0o644)
  cmd(['docker','network','create',network])
  web=container('web',['node:22-alpine','node','-e',"require('http').createServer((q,r)=>{r.setHeader('Connection','close');r.end('ABESS-XRAY-SMOKE'.repeat(8192))}).listen(8080,'0.0.0.0')"])
  web_ip=cmd(['docker','inspect','-f','{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}',web]).strip()
- for outbound in config['outbounds']:
-  if outbound.get('tag')=='direct':outbound['settings']['finalRules']=[{'action':'allow','network':'tcp','ip':[web_ip+'/32'],'port':'8080'}]
- config_file.write_text(json.dumps(config))
+ config['outbounds'][0]['settings']={'finalRules':[{'action':'allow','network':'tcp','ip':[web_ip+'/32'],'port':'8080'}]}
+ config_file.write_text(json.dumps(config));original_config=config_file.read_bytes()
  server=container('server',['--entrypoint','/usr/local/bin/xray','--mount',f'type=bind,src={config_file},dst=/config.json,readonly',image,'run','-c','/config.json'])
  client_container=container('client',['--entrypoint','/usr/local/bin/xray','--mount',f'type=bind,src={client_file},dst=/config.json,readonly',image,'run','-c','/config.json'])
  time.sleep(1)
@@ -51,19 +56,16 @@ try:
  cmd(['docker','exec',web,'node','-e',traffic])
  snapshot=json.loads(cmd(['docker','exec',server,'/usr/local/bin/xray','api','statsquery','--server=127.0.0.1:10085','-pattern','user>>>']))
  assert sum(int(s.get('value',0)) for s in snapshot.get('stat',[]))>1024
- generation='official-xray-traffic-test';(data/'xray-ready').write_text(generation);snapshot.update(generation=generation,observedAt=time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()));(data/'xray-stats.json').write_text(json.dumps(snapshot))
+ snapshot.update(generation='manual-xray-process',observedAt=time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()))
+ request('nodes/'+node['id']+'/heartbeat',{'ready':True,'snapshot':snapshot},node['key'])
  usage=request('client/telemetry',{'token':licence['token'],'deviceId':'TEST-DEVICE-TRAFFIC'})
  assert usage['status']=='quota_exceeded'
- revised=json.loads((data/'xray-config.json').read_text());assert not revised['inbounds'][0]['settings']['users']
- # Reload the generated no-user config and verify the old UUID no longer forwards.
- revised['routing']['rules']=[r for r in revised['routing']['rules'] if 'ip' not in r]
- for outbound in revised['outbounds']:
-  if outbound.get('tag')=='direct':outbound['settings']['finalRules']=[{'action':'allow','network':'tcp','ip':[web_ip+'/32'],'port':'8080'}]
- cmd(['docker','rm','-f',server]);containers.remove(server);config_file.write_text(json.dumps(revised));config_file.chmod(0o644)
- server=container('server',['--entrypoint','/usr/local/bin/xray','--mount',f'type=bind,src={config_file},dst=/config.json,readonly',image,'run','-c','/config.json']);time.sleep(.5)
- denied=subprocess.run(['docker','exec',web,'node','-e',traffic],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=12)
- assert denied.returncode!=0,'exhausted UUID must no longer forward traffic'
- print('Official Xray passed: VLESS traffic, real counters, quota exhaustion and denied forwarding after reload.')
+ inventory=request('nodes/'+node['id']+'/config',token=node['key'])
+ assert not inventory['licences'][0]['enabled']
+ assert 'inbounds' not in inventory
+ assert config_file.read_bytes()==original_config,'panel must not modify the external engine'
+ assert not (data/'xray-config.json').exists()
+ print('External Xray passed: independently configured VLESS, real counters through authenticated API, quota exhaustion, inactive inventory, unchanged VPN configuration.')
 except Exception:
  debug=pathlib.Path('/tmp/abess-xray-debug');debug.mkdir(exist_ok=True)
  for name in containers:

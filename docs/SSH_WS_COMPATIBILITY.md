@@ -1,3 +1,5 @@
+> Le backend actuel importe les configurations de serveurs externes et ne crée aucun service SSH-WS. Voir [Serveurs externes](EXTERNAL_SERVERS.md). Les exemples de passerelle intégrée ci-dessous sont historiques.
+
 # SSH-WS : référence X-net et intégration ABESS
 
 ## Ce qui est vérifiable

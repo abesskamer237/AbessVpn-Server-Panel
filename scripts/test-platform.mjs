@@ -275,21 +275,17 @@ try {
     remoteNode.body.key,
   );
   assert.equal(configuration.status, 200);
-  const remoteUsers = configuration.body.inbounds.find(
-    (i) => i.tag === "vless-ws-in",
-  ).settings.users;
-  assert.ok(remoteUsers.some((u) => u.id === remoteLicense.body.clientUuid));
-  assert.ok(
-    !remoteUsers.some((u) => u.id === localLicense.body.clientUuid),
-    "node configurations must be isolated",
-  );
-  const email = remoteUsers.find(
-    (u) => u.id === remoteLicense.body.clientUuid,
-  ).email;
+  assert.equal(configuration.body.format, 'abess-external-inventory-v1');
+  assert.ok(!('inbounds' in configuration.body));
+  const remoteUsers = configuration.body.licences;
+  assert.ok(remoteUsers.some(u => u.clientUuid === remoteLicense.body.clientUuid));
+  assert.ok(!remoteUsers.some(u => u.clientUuid === localLicense.body.clientUuid));
+  const email = remoteUsers.find(u => u.clientUuid === remoteLicense.body.clientUuid).trafficId;
   const heartbeat = {
     ready: true,
     snapshot: {
       generation: "remote-process-1",
+      observedAt: new Date().toISOString(),
       stat: [
         {
           name: `user>>>${email}>>>traffic>>>uplink`,
@@ -324,6 +320,7 @@ try {
     1,
     "repeated counters must not double count",
   );
+  heartbeat.snapshot.observedAt = new Date(Date.now() + 1).toISOString();
   heartbeat.snapshot.stat[0].value = String(2 * 1024 ** 3);
   await call(
     `nodes/${remoteNode.body.id}/heartbeat`,
@@ -336,10 +333,8 @@ try {
     remoteNode.body.key,
   );
   assert.ok(
-    !exhausted.body.inbounds
-      .find((i) => i.tag === "vless-ws-in")
-      .settings.users.some((u) => u.id === remoteLicense.body.clientUuid),
-    "quota exhaustion removes the remote user",
+    !exhausted.body.licences.find(u => u.clientUuid === remoteLicense.body.clientUuid).enabled,
+    "quota exhaustion disables the inventory licence",
   );
   await call(`admin/nodes/${remoteNode.body.id}`, undefined, token, "DELETE");
   assert.equal(

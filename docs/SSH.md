@@ -1,3 +1,9 @@
+# Comptes SSH externes
+
+Le panneau importe désormais des accès SSH existants et ne crée plus de passerelle ou de compte système. Voir [Serveurs externes](EXTERNAL_SERVERS.md#comptes-ssh-existants) pour l’import, le suivi et l’export.
+
+Les instructions historiques ci-dessous décrivent l’ancienne passerelle intégrée et ne s’appliquent plus au backend actuel.
+
 > Pour le mode SSH-WS HTTP Upgrade brut ajouté en 2.5.4 (80/85 et TLS 443/2084), suivre [le guide SSH-WS](SSH_WS_COMPATIBILITY.md). Les modes WebSocket TLS historiques ci-dessous restent compatibles.
 
 # Comptes SSH ABESS

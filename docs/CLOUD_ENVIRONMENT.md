@@ -2,7 +2,7 @@
 
 Dépôts existants : `/workspace/AbessVpn-Server-Panel` et `/workspace/AbessVpn-Cyber`. Les tâches cloud sont isolées : réutiliser ces dépôts ; ne pas créer de worktree sauf demande explicite.
 
-Node 24.22.1/npm 11.9.0 et Docker disponibles. Les dépendances npm des deux dépôts ont été installées par `npm ci`. Les builds TypeScript/React et les tests serveur fonctionnent. Consulter les fichiers AUDIT.md des deux dépôts.
+Node 24.22.1/npm 11.9.0 et Docker disponibles. Les dépendances npm du panneau sont installées par `npm ci`. Le backend ne provisionne plus de services VPN ; voir EXTERNAL_SERVERS.md. Les builds TypeScript/React et les tests serveur fonctionnent. Consulter les fichiers AUDIT.md des deux dépôts.
 
 ## Réinstallation et validation serveur
 
@@ -16,7 +16,7 @@ node scripts/test-security.mjs
 node scripts/rotate-master-secret.mjs --self-test
 ```
 
-Pour lancer le serveur, fournir VPN_DOMAIN, ADMIN_EMAIL, ADMIN_INITIAL_PASSWORD (16 caractères minimum), MASTER_SECRET (32 caractères minimum) et DATA_DIR via la configuration sécurisée. Utiliser un stockage isolé pour le développement, sans réutiliser des données ou identifiants de production. Lancer `npm run dev` depuis le dépôt serveur, puis vérifier `/api/v1/ping` par une requête HTTP locale et la connexion dans le navigateur. Sans sidecar Xray actif, `dataPlane` doit rester `not-ready`. Redémarrer les services dans les nouvelles tâches : les processus ne sont pas persistants.
+Pour lancer le serveur, fournir VPN_DOMAIN, ADMIN_EMAIL, ADMIN_INITIAL_PASSWORD (16 caractères minimum), MASTER_SECRET (32 caractères minimum) et DATA_DIR via la configuration sécurisée. Utiliser un stockage isolé pour le développement, sans réutiliser des données ou identifiants de production. Lancer `npm run dev` depuis le dépôt serveur, puis vérifier `/api/v1/ping` par une requête HTTP locale et la connexion dans le navigateur. Sans mesure fraîche d’un agent externe enregistré, `dataPlane` reste `not-ready`. Redémarrer les services dans les nouvelles tâches : les processus ne sont pas persistants.
 
 Ne pas lancer le backend Node du dépôt Cyber : il est retiré volontairement.
 
@@ -37,6 +37,6 @@ Après déblocage, relancer les commandes affectées et les tests réels Android
 
 La production utilise désormais PostgreSQL et un rôle applicatif distinct. Les tests JSON doivent définir explicitement `ALLOW_JSON_STORAGE=true` sur un stockage jetable. La suite navigateur applique ce réglage dans son propre serveur isolé.
 
-Tests supplémentaires : `node --import tsx scripts/test-platform.mjs`, puis `TEST_DATABASE_URL` sécurisé pour `node --import tsx scripts/test-postgres.mjs`. Le test de trafic réel est `python3 scripts/test-xray-traffic.py` avec Docker ; il est entièrement local et ne valide pas un téléphone Android.
+Tests supplémentaires : `node --import tsx scripts/test-platform.mjs`, puis `TEST_DATABASE_URL` sécurisé pour `node --import tsx scripts/test-postgres.mjs`. Le test de trafic réel est `python3 scripts/test-xray-traffic.py` avec Docker et un Xray configuré indépendamment ; il est entièrement local et ne valide pas un téléphone Android.
 
 Le règlement est manuel : aucune destination de paiement externe ni clé marchande n’est nécessaire. Pour les sauvegardes S3, autoriser uniquement le hostname du fournisseur choisi. Consulter `OPERATIONS.md` et `MANUAL_PAYMENTS.md`.

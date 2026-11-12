@@ -9,10 +9,10 @@ import { lookup as dnsLookup } from 'node:dns/promises';
 import tls from 'tls';
 import os from 'os';
 import { fileURLToPath } from 'url';
-import { exec, execSync, spawn } from 'child_process';
+import { exec } from 'child_process';
 import { promisify } from 'util';
 import QRCode from 'qrcode';
-import { Operations, registerOperations, encryptedBackup, uploadBackup } from './modules/operations.js';
+import { Operations, registerOperations, encryptedBackup, uploadBackup, type VpnNode } from './modules/operations.js';
 import { registerCommerce } from './modules/commerce.js';
 import { registerSsh, type SshState } from './modules/ssh.js';
 import { SecurityService, registerSecurityRoutes } from './modules/security.js';
@@ -51,10 +51,6 @@ if (!fs.existsSync(backupsDir)) {
   fs.mkdirSync(backupsDir, { recursive: true });
 }
 
-const xrayConfigFile = process.env.XRAY_CONFIG_PATH || path.resolve(dataDir, 'xray-config.json');
-const xrayStatusFile = process.env.XRAY_STATUS_FILE || path.resolve(dataDir, 'xray-ready');
-const xrayStatsFile = process.env.XRAY_STATS_FILE || path.resolve(dataDir, 'xray-stats.json');
-const xrayUsageStateFile = process.env.XRAY_USAGE_STATE_FILE || path.resolve(dataDir, 'xray-usage-state.json');
 
 const storage = new DocumentStore(dataDir, process.env.DATABASE_URL);
 const hasDocument = (file: string) => storage.exists(file);
@@ -139,6 +135,7 @@ export interface ClientToken {
   token: string;
   /** Per-licence VLESS identity; legacy records are migrated on load. */
   clientUuid?: string;
+  trafficId?: string;
   resellerId: string;
   resellerName: string;
   plan: string;
@@ -535,12 +532,12 @@ export async function executeServerUpdate(): Promise<{ success: boolean; output:
 
     try {
       await execAsync('npm run build', { cwd: __dirname, timeout: 120000 });
-      syncXrayConfig();
+      refreshTrafficTotals();
     } catch (buildOrConfigError) {
       const reason = buildOrConfigError instanceof Error ? buildOrConfigError.message : String(buildOrConfigError);
       await execAsync(`git reset --hard ${previousCommit}`, { cwd: __dirname, timeout: 30000 });
       await execAsync('npm run build', { cwd: __dirname, timeout: 120000 });
-      syncXrayConfig();
+      refreshTrafficTotals();
       return {
         success: false,
         output: `Mise à jour annulée et commit précédent restauré après échec du build/configuration : ${reason}`,
@@ -617,7 +614,7 @@ function loadMasterConfig(): MasterServerConfig {
         serverHost: normalizedStoredHost(stored.serverHost),
         host: normalizedStoredHost(stored.host),
         serverPort: Number(stored.serverPort) || defaults.serverPort,
-        path: '/@abess237',
+        path: typeof stored.path === 'string' ? stored.path : '/@abess237',
         sniHost: normalizedStoredHost(stored.sniHost),
         secretPassphrase: process.env.MASTER_SECRET || ''
       };
@@ -778,7 +775,7 @@ function loadTokens(): ClientToken[] {
 
 
 function xrayUserEmail(token: ClientToken): string {
-  return 'abess-' + token.id.replace(/[^a-zA-Z0-9_.@-]/g, '_');
+  return token.trafficId || 'abess-' + token.id.replace(/[^a-zA-Z0-9_.@-]/g, '_');
 }
 
 const XRAY_PROTOCOLS = ['vless'] as const;
@@ -797,98 +794,21 @@ function isXrayProtocol(value: unknown): value is XrayProtocol {
 function isXrayTransport(value: unknown): value is XrayTransport {
   return typeof value === 'string' && (XRAY_TRANSPORTS as readonly string[]).includes(value);
 }
-function normalizedPath(_value: string): string { return '/@abess237'; }
-function xrayProfilePath(protocol: XrayProtocol, transport: XrayTransport, customWsPath = '/@abess237'): string {
-  if (transport === 'tcp') return '';
-  if (transport === 'ws') return normalizedPath(customWsPath);
-  return '/@abess237/' + protocol + '/' + transport;
+function xrayProfilePath(_protocol: XrayProtocol, transport: XrayTransport, customPath = '/@abess237'): string {
+  return transport === 'tcp' ? '' : customPath;
 }
-function xrayProfilePort(protocol: XrayProtocol, transport: XrayTransport): number {
-  if (transport === 'tcp') return 10050;
-  const transportIndex = XRAY_WEB_TRANSPORTS.indexOf(transport as XrayWebTransport);
-  if (transportIndex < 0) return 10000;
-  return 10000 + transportIndex;
+function xrayPublicPort(_protocol: string, _transport: string, port: number): number {
+  return Number.isInteger(port) && port >= 1 && port <= 65535 ? port : 443;
 }
-function xrayPublicPort(protocol: string, transport: string, _fallbackPort: number): number {
-  if (transport === 'tcp') return 10050;
-  // All HTTP-based transports terminate TLS at Caddy, which serves public TCP/443.
-  return 443;
-}
-function xrayStreamSettings(transport: XrayTransport, profilePath: string): Record<string, unknown> {
-  const tcpOptimizations = {
-    tcpFastOpen: true,
-    tcpNoDelay: true,
-    tcpKeepAliveIdle: 30,
-    tcpKeepAliveInterval: 15
-  };
-  switch (transport) {
-    case 'tcp':
-      return {
-        network: 'tcp',
-        security: 'none',
-        tcpSettings: { header: { type: 'none' } },
-        sockopt: tcpOptimizations
-      };
-    case 'ws':
-      return {
-        network: 'ws',
-        security: 'none',
-        wsSettings: { path: profilePath },
-        sockopt: tcpOptimizations
-      };
-    case 'grpc':
-      return {
-        network: 'grpc',
-        security: 'none',
-        grpcSettings: { serviceName: profilePath.replace(/^\/+/, ''), multiMode: false },
-        sockopt: tcpOptimizations
-      };
-    case 'httpupgrade':
-      return {
-        network: 'httpupgrade',
-        security: 'none',
-        httpupgradeSettings: { path: profilePath, host: '' },
-        sockopt: tcpOptimizations
-      };
-    case 'xhttp':
-      return {
-        network: 'xhttp',
-        security: 'none',
-        xhttpSettings: { path: profilePath, mode: 'auto' },
-        sockopt: tcpOptimizations
-      };
-    default:
-      throw new Error('Transport non pris en charge.');
-  }
-}
-
 
 function isTlsWebTransport(transport: string): boolean {
   return ['ws', 'grpc', 'httpupgrade', 'xhttp'].includes(transport);
 }
 
-// This deployment's Caddyfile obtains an automatic certificate for VPN_DOMAIN only.
-// A different SNI is not made valid merely by entering it in a profile.
-function configuredTlsDomain(): string {
-  return (process.env.VPN_DOMAIN || '').trim().toLowerCase();
-}
-function tlsSniValidationError(transport: string, sniHost: unknown, serverHost?: string): string | null {
-  if(transport==='tcp'&&process.env.ALLOW_INSECURE_TCP!=='true')return 'VLESS TCP sans TLS est désactivé. Utilisez WS, gRPC, HTTPUpgrade ou XHTTP avec TLS.';
+function tlsSniValidationError(transport: string, sniHost: unknown, _serverHost?: string): string | null {
+  if (transport === 'tcp' && process.env.ALLOW_INSECURE_TCP !== 'true') return 'VLESS TCP sans TLS est désactivé.';
   if (!isTlsWebTransport(transport)) return null;
-  const nodesFile=path.resolve(dataDir,'nodes.json');
-  const node=(hasDocument(nodesFile)?readDocument(nodesFile):[]).find((item:any)=>item.enabled&&item.host===serverHost?.toLowerCase());
-  const configured = node?.host || configuredTlsDomain();
-  const supplied = typeof sniHost === 'string' ? sniHost.trim().toLowerCase() : '';
-  if (!configured || !isValidPublicHost(configured)) {
-    return 'Le domaine VPN_DOMAIN est absent ou invalide; le certificat TLS du serveur ne peut pas être vérifié.';
-  }
-  if (!isValidPublicHost(supplied)) {
-    return `Indiquez un SNI TLS valide. Pour ce déploiement, le certificat Caddy est émis pour « ${configured} ».`;
-  }
-  if (supplied !== configured) {
-    return `SNI TLS « ${supplied} » incompatible avec le certificat Caddy de ce déploiement. Utilisez exactement « ${configured} ». Le champ Host HTTP reste distinct et ne remplace pas le certificat.`;
-  }
-  return null;
+  return typeof sniHost === 'string' && isValidPublicHost(sniHost.trim()) ? null : 'SNI TLS invalide.';
 }
 function publicProtocolConfig(config: ProtocolConfig): ProtocolConfig {
   return {
@@ -909,56 +829,10 @@ function legacyProtocolConfig(): ProtocolConfig | null {
     id: 'cfg_legacy', name: legacy.systemName?.trim() || 'Configuration existante',
     serverHost: legacy.serverHost, host: legacy.host || '',
     serverPort: xrayPublicPort(legacy.protocol, legacy.transport, legacy.serverPort),
-    protocol: legacy.protocol, transport: legacy.transport, path: '/@abess237',
+    protocol: legacy.protocol, transport: legacy.transport, path: legacy.path,
     sniHost: legacy.sniHost || '', createdAt: now, updatedAt: now
   };
 }
-function seedDefaultProtocolConfigs(vpnDomain?: string): ProtocolConfig[] {
-  const domain = (vpnDomain && isValidPublicHost(vpnDomain)) ? vpnDomain : (process.env.VPN_DOMAIN || 'vpn.example.com');
-  const now = new Date().toISOString();
-  return [
-    {
-      id: 'cfg_vless_tcp',
-      name: 'VLESS Direct TCP (Ultra Faible Latence)',
-      serverHost: domain,
-      host: domain,
-      serverPort: 10050,
-      protocol: 'vless',
-      transport: 'tcp',
-      path: '',
-      sniHost: '',
-      createdAt: now,
-      updatedAt: now
-    },
-    {
-      id: 'cfg_vless_ws',
-      name: 'VLESS WebSocket (Cloudflare CDN / TLS)',
-      serverHost: domain,
-      host: domain,
-      serverPort: 443,
-      protocol: 'vless',
-      transport: 'ws',
-      path: '/@abess237',
-      sniHost: domain,
-      createdAt: now,
-      updatedAt: now
-    },
-    {
-      id: 'cfg_vless_grpc',
-      name: 'VLESS gRPC (Haute Vitesse TCP H2)',
-      serverHost: domain,
-      host: domain,
-      serverPort: 443,
-      protocol: 'vless',
-      transport: 'grpc',
-      path: '/@abess237/vless/grpc',
-      sniHost: domain,
-      createdAt: now,
-      updatedAt: now
-    }
-  ];
-}
-
 export function buildDirectProtocolUrl(token: ClientToken, profile: ProtocolConfig): string {
   const host = profile.serverHost;
   const port = xrayPublicPort(profile.protocol, profile.transport, profile.serverPort);
@@ -980,91 +854,10 @@ export function buildDirectProtocolUrl(token: ClientToken, profile: ProtocolConf
 }
 
 export function generateUserVlessVariants(token: ClientToken, profile?: ProtocolConfig): VlessVariant[] {
-  const master = loadMasterConfig();
-  const host = profile?.serverHost || master.serverHost || 'panel.pagnol.xyz';
-  // Caddy terminates TLS with the certificate for VPN_DOMAIN. A TCP-only
-  // profile has no SNI of its own, but its other supported variants still do.
-  const primarySni = profile?.sniHost || configuredTlsDomain() || master.sniHost || host;
-  const wsHost = profile?.host || master.host || host;
-  const uuid = token.clientUuid || token.token;
-  const baseName = `AbessVpn - ${token.token}`;
-  const variants: VlessVariant[] = [];
-
-  const tcpPort = xrayPublicPort('vless', 'tcp', 10050);
-  const tcpTag = `${baseName} 🚀 Direct TCP (Ultra-Fast)`;
-  if(process.env.ALLOW_INSECURE_TCP==='true') variants.push({
-    id: 'vless_tcp_direct',
-    label: '🚀 VLESS Direct TCP (Port 10050 • Faible Latence)',
-    badge: 'DIRECT TCP • MAX SPEED',
-    protocol: 'vless',
-    uri: `vless://${uuid}@${host}:${tcpPort}?encryption=none&security=none&type=tcp&headerType=none#${encodeURIComponent(tcpTag)}`,
-    sni: '',
-    target: `${host}:${tcpPort}`
-  });
-
-  const tlsPort = xrayPublicPort('vless', 'ws', 443);
-  const tlsBase = `encryption=none&security=tls&sni=${encodeURIComponent(primarySni)}&fp=chrome`;
-  const wsPath = xrayProfilePath('vless', 'ws');
-  const fastTag = `${baseName} ⚡ Fast (0-RTT TLS)`;
-  variants.push({
-    id: 'fast',
-    label: '⚡ VLESS Fast (0-RTT Early Data • Port 443)',
-    badge: '0-RTT • RECOMMANDÉ',
-    protocol: 'vless',
-    uri: `vless://${uuid}@${host}:${tlsPort}?${tlsBase}&alpn=http%2F1.1&type=ws&host=${encodeURIComponent(wsHost)}&path=${encodeURIComponent(wsPath + '?ed=2048')}#${encodeURIComponent(fastTag)}`,
-    sni: primarySni,
-    target: `${host}:${tlsPort}`
-  });
-
-  const stableTag = `${baseName} 🛡️ Stable`;
-  variants.push({
-    id: 'stable',
-    label: '🛡️ VLESS Stable (WebSocket TLS • Compatibilité Max)',
-    badge: 'COMPATIBILITÉ MAX',
-    protocol: 'vless',
-    uri: `vless://${uuid}@${host}:${tlsPort}?${tlsBase}&alpn=http%2F1.1&type=ws&host=${encodeURIComponent(wsHost)}&path=${encodeURIComponent(wsPath)}#${encodeURIComponent(stableTag)}`,
-    sni: primarySni,
-    target: `${host}:${tlsPort}`
-  });
-
-  const grpcPath = xrayProfilePath('vless', 'grpc');
-  const grpcService = grpcPath.startsWith('/') ? grpcPath.slice(1) : grpcPath;
-  const grpcTag = `${baseName} 🌐 gRPC High Speed`;
-  variants.push({
-    id: 'vless_grpc',
-    label: '🌐 VLESS gRPC (HTTP/2 Gun • Haute Vitesse)',
-    badge: 'gRPC H2',
-    protocol: 'vless',
-    uri: `vless://${uuid}@${host}:${tlsPort}?${tlsBase}&alpn=h2&type=grpc&serviceName=${encodeURIComponent(grpcService)}&mode=gun#${encodeURIComponent(grpcTag)}`,
-    sni: primarySni,
-    target: `${host}:${tlsPort}`
-  });
-
-  const httpUpgradePath = xrayProfilePath('vless', 'httpupgrade');
-  const httpUpgradeTag = `${baseName} 🔁 HTTPUpgrade`;
-  variants.push({
-    id: 'vless_httpupgrade',
-    label: '🔁 VLESS HTTPUpgrade (TLS)',
-    badge: 'HTTPUPGRADE',
-    protocol: 'vless',
-    uri: `vless://${uuid}@${host}:${tlsPort}?${tlsBase}&type=httpupgrade&host=${encodeURIComponent(wsHost)}&path=${encodeURIComponent(httpUpgradePath)}#${encodeURIComponent(httpUpgradeTag)}`,
-    sni: primarySni,
-    target: `${host}:${tlsPort}`
-  });
-
-  const xhttpPath = xrayProfilePath('vless', 'xhttp');
-  const xhttpTag = `${baseName} 🌐 XHTTP`;
-  variants.push({
-    id: 'vless_xhttp',
-    label: '🌐 VLESS XHTTP (TLS)',
-    badge: 'XHTTP',
-    protocol: 'vless',
-    uri: `vless://${uuid}@${host}:${tlsPort}?${tlsBase}&type=xhttp&path=${encodeURIComponent(xhttpPath)}&mode=auto#${encodeURIComponent(xhttpTag)}`,
-    sni: primarySni,
-    target: `${host}:${tlsPort}`
-  });
-
-  return variants;
+  const selected = profile || legacyProtocolConfig();
+  if (!selected) return [];
+  return [{ id: 'configured', label: selected.name, badge: selected.transport.toUpperCase(), protocol: selected.protocol,
+    uri: buildDirectProtocolUrl(token, selected), sni: selected.sniHost, target: `${selected.serverHost}:${selected.serverPort}` }];
 }
 
 export function generateXrayClientJson(token: ClientToken, profile?: ProtocolConfig): Record<string, unknown> {
@@ -1365,19 +1158,9 @@ export function getSystemDiagnostics() {
   const totalBandwidthUsedGb = tokens.reduce((acc, t) => acc + (Number(t.bandwidthUsedGb) || 0), 0);
   const activeTokens = tokens.filter(t => t.status === 'active' && new Date(t.expiresAt).getTime() > Date.now());
 
-  let dropbearStatus = 'not-ready';
-  let wsDropbearStatus = 'not-ready';
-  let activeSshConnections = 0;
-  try {
-    dropbearStatus = execSync('systemctl is-active dropbear 2>/dev/null || true', { encoding: 'utf8' }).trim() === 'active' ? 'ready' : 'inactive';
-  } catch {}
-  try {
-    wsDropbearStatus = execSync('systemctl is-active ws-dropbear 2>/dev/null || true', { encoding: 'utf8' }).trim() === 'active' ? 'ready' : 'inactive';
-  } catch {}
-  try {
-    const pids = execSync('pgrep dropbear 2>/dev/null || true', { encoding: 'utf8' }).trim().split('\n').filter(Boolean);
-    activeSshConnections = Math.max(0, pids.length - 1);
-  } catch {}
+  const dropbearStatus = 'external';
+  const wsDropbearStatus = 'external';
+  const activeSshConnections = readExternalNodes().filter(nodeReady).reduce((n, node) => n + (node.online || 0), 0);
 
   return {
     ok: true,
@@ -1458,7 +1241,7 @@ function saveProtocolConfigs(configs: ProtocolConfig[]): void {
 }
 function normalizeProtocolConfig(input: any, existing?: ProtocolConfig): ProtocolConfig | null {
   const name = String(input?.name ?? existing?.name ?? '').trim();
-  const serverHost = String(input?.serverHost ?? existing?.serverHost ?? '').trim();
+  const serverHost = String(input?.serverHost ?? existing?.serverHost ?? '').trim().toLowerCase();
   const host = String(input?.host ?? existing?.host ?? '').trim();
   const protocol = String(input?.protocol ?? existing?.protocol ?? 'vless').toLowerCase();
   const transport = String(input?.transport ?? existing?.transport ?? (protocol === 'ssh' ? 'ws' : 'tcp')).toLowerCase();
@@ -1469,6 +1252,9 @@ function normalizeProtocolConfig(input: any, existing?: ProtocolConfig): Protoco
   if (name.length < 2 || name.length > 80) return null;
   if (!isValidPublicHost(serverHost) || (host !== '' && !isValidPublicHost(host))) return null;
 
+  const port = Number(input?.serverPort ?? existing?.serverPort ?? 443);
+  const profilePath = String(input?.path ?? existing?.path ?? '/@abess237');
+  if (!Number.isInteger(port) || port < 1 || port > 65535 || profilePath.length > 2048 || /[\r\n\x00]/.test(profilePath)) return null;
   const now = new Date().toISOString();
   // SSH provisioning is retired until a dedicated host-side agent replaces the
   // unsafe legacy root/password-file integration.
@@ -1479,8 +1265,8 @@ function normalizeProtocolConfig(input: any, existing?: ProtocolConfig): Protoco
   if (sniHost && !isValidPublicHost(sniHost)) return null;
   return {
     id: existing?.id || 'cfg_' + crypto.randomUUID(), name, serverHost, host,
-    serverPort: xrayPublicPort(protocol, transport, Number(input?.serverPort) || 443),
-    protocol, transport, path: xrayProfilePath(protocol as XrayProtocol, transport as XrayTransport, input?.path || '/@abess237'), sniHost,
+    serverPort: port,
+    protocol, transport, path: xrayProfilePath(protocol as XrayProtocol, transport as XrayTransport, profilePath), sniHost,
     createdAt: existing?.createdAt || now, updatedAt: now
   };
 }
@@ -1522,211 +1308,30 @@ function backupClientToken(token: ClientToken): BackupClientToken {
   return { ...fullToken, sshConfig: safeSshConfig };
 }
 
-function syncXrayConfig(tokens: ClientToken[] = loadTokens()): boolean {
-  const nodesPath=path.resolve(dataDir,'nodes.json');
-  const remoteHosts=new Set<string>((hasDocument(nodesPath)?readDocument(nodesPath):[]).map((node:any)=>node.host));
-  writeJsonAtomically(path.resolve(path.dirname(xrayConfigFile),'xray-control-heartbeat'),{at:Date.now()});
-  return writeJsonAtomically(xrayConfigFile,generateXrayConfig(tokens.filter(token=>!remoteHosts.has(protocolConfigForToken(token)?.serverHost || ''))));
+function readExternalNodes(): VpnNode[] {
+  const file = path.resolve(dataDir, 'nodes.json');
+  return hasDocument(file) ? readDocument(file) : [];
 }
-
-function generateXrayConfig(tokens: ClientToken[]): Record<string,unknown> {
-  const masterConfig = loadMasterConfig();
-  const now = Date.now();
-  const activeTokens = tokens.filter(token =>
-    token.protocolType !== 'ssh' &&
-    !token.sshConfig &&
-    token.status === 'active' &&
-    Number.isFinite(new Date(token.expiresAt).getTime()) && new Date(token.expiresAt).getTime() > now &&
-    Number(token.bandwidthUsedGb) < Number(token.bandwidthGb) &&
-    typeof token.clientUuid === 'string' && token.clientUuid.length > 0
-  );
-  const users = activeTokens.map(token => ({
-    id: token.clientUuid as string,
-    email: xrayUserEmail(token),
-    level: 0
-  }));
-
-  const inbounds: Array<Record<string, unknown>> = [];
-
-  // 1. Direct Native TCP Inbound (Port 10050)
-  if(process.env.ALLOW_INSECURE_TCP==='true') inbounds.push({
-    tag: 'vless-tcp-direct-in',
-    listen: '0.0.0.0',
-    port: 10050,
-    protocol: 'vless',
-    settings: { users, decryption: 'none' },
-    streamSettings: xrayStreamSettings('tcp', '')
-  });
-
-  // 2. Web Transports via Caddy (WebSocket, gRPC, HTTPUpgrade, XHTTP)
-  for (const transport of XRAY_WEB_TRANSPORTS) {
-    const profilePath = xrayProfilePath('vless', transport, masterConfig.path);
-    inbounds.push({
-      tag: 'vless-' + transport + '-in',
-      listen: '0.0.0.0',
-      port: xrayProfilePort('vless', transport),
-      protocol: 'vless',
-      settings: { users, decryption: 'none' },
-      streamSettings: xrayStreamSettings(transport, profilePath)
-    });
-  }
-
-  // 3. Dokodemo-door API Inbound for Stats & Dynamic User Management
-  inbounds.push({
-    tag: 'api',
-    listen: '127.0.0.1',
-    port: 10085,
-    protocol: 'dokodemo-door',
-    settings: { address: '127.0.0.1' }
-  });
-
-  const config = {
-    log: { loglevel: 'warning' },
-    api: { tag: 'api', services: ['HandlerService', 'StatsService', 'LoggerService'] },
-    stats: {},
-    policy: {
-      levels: {
-        '0': {
-          statsUserUplink: true,
-          statsUserDownlink: true,
-          statsUserOnline: true,
-          handshake: 4,
-          connIdle: 300,
-          bufferSize: 2048
-        }
-      }
-    },
-    inbounds,
-    outbounds: [
-      {
-        tag: 'direct',
-        protocol: 'freedom',
-        settings: {
-          domainStrategy: 'UseIPv4'
-        },
-        streamSettings: {
-          sockopt: {
-            tcpNoDelay: true,
-            tcpFastOpen: true,
-            tcpKeepAliveIdle: 30,
-            tcpKeepAliveInterval: 15
-          }
-        }
-      },
-      { tag: 'api', protocol: 'freedom', settings: {} },
-      { tag: 'block', protocol: 'blackhole', settings: { response: { type: 'none' } } }
-    ],
-    routing: {
-      domainStrategy: 'IPIfNonMatch',
-      rules: [
-        { type: 'field', inboundTag: ['api'], outboundTag: 'api' },
-        { type: 'field', ip: ['0.0.0.0/8','10.0.0.0/8','100.64.0.0/10','127.0.0.0/8','169.254.0.0/16','172.16.0.0/12','192.168.0.0/16','198.18.0.0/15','224.0.0.0/4','240.0.0.0/4','::/128','::1/128','fc00::/7','fe80::/10','ff00::/8'], outboundTag: 'block' },
-        { type: 'field', port: '25', outboundTag: 'block' },
-        { type: 'field', protocol: ['bittorrent'], outboundTag: 'block' }
-      ]
-    }
-  };
-  return config;
+function nodeReady(node: VpnNode): boolean {
+  const age = Date.now() - Date.parse(node.observedAt || '');
+  return node.enabled && node.ready === true && Number.isFinite(age) && age >= -5000 && age <= 60000;
 }
-interface XrayUsageState {
-  generation: string;
-  lastCounters: Record<string, { uplink: number; downlink: number }>;
-}
-
-function readXrayUsageState(): XrayUsageState {
-  try {
-    const state = readDocument(xrayUsageStateFile) as XrayUsageState;
-    if (typeof state.generation === 'string' && state.lastCounters && typeof state.lastCounters === 'object') return state;
-  } catch {
-    // First run or invalid state; start a clean baseline.
-  }
-  return { generation: '', lastCounters: {} };
-}
-
-// A readiness marker alone can survive a sidecar crash. Require a recent
-// stats heartbeat from the same Xray process generation before advertising it.
 function isXrayReady(): boolean {
-  try {
-    const generation = fs.readFileSync(xrayStatusFile, 'utf8').trim();
-    const snapshot = JSON.parse(fs.readFileSync(xrayStatsFile, 'utf8'));
-    const observedAt = Date.parse(snapshot.observedAt);
-    const age = Date.now() - observedAt;
-    return generation.length > 0 && snapshot.generation === generation &&
-      Array.isArray(snapshot.stat) && Number.isFinite(age) && age >= -5000 && age <= 15000;
-  } catch {
-    return false;
-  }
+  return readExternalNodes().some(nodeReady);
 }
-
 function isTokenDataPlaneReady(token: ClientToken): boolean {
-  const nodeFile=path.resolve(dataDir,'nodes.json');
-  const node=(hasDocument(nodeFile)?readDocument(nodeFile):[]).find((item:any)=>item.host===protocolConfigForToken(token)?.serverHost);
-  return node?node.enabled===true&&node.ready===true&&Date.now()-Date.parse(node.lastSeenAt||'')<=60000:isXrayReady();
+  return readExternalNodes().some(node => node.host === protocolConfigForToken(token)?.serverHost && nodeReady(node));
 }
-
-function reconcileXrayUsage(): boolean {
-  if (!fs.existsSync(xrayStatusFile) || !fs.existsSync(xrayStatsFile)) return false;
-
-  try {
-    const snapshot = JSON.parse(fs.readFileSync(xrayStatsFile, 'utf8')) as {
-      generation?: string;
-      stat?: Array<{ name?: string; value?: string | number }>;
-    };
-    if (!snapshot.generation || !Array.isArray(snapshot.stat)) return false;
-
-    const state = readXrayUsageState();
-    const newGeneration = state.generation !== snapshot.generation;
-    const counters = new Map<string, number>();
-    for (const stat of snapshot.stat) {
-      if (typeof stat.name !== 'string') continue;
-      const value = Number(stat.value ?? 0);
-      if (Number.isFinite(value) && value >= 0) counters.set(stat.name, value);
-    }
-
-    const tokens = loadTokens();
-    let tokensChanged = false;
-    let currentTotalBytes = 0;
-
-    for (const token of tokens) {
-      const prefix = `user>>>${xrayUserEmail(token)}>>>traffic>>>`;
-      const uplink = counters.get(prefix + 'uplink') ?? 0;
-      const downlink = counters.get(prefix + 'downlink') ?? 0;
-      currentTotalBytes += uplink + downlink;
-
-      const previous = state.lastCounters[token.id] || { uplink: 0, downlink: 0 };
-      const uplinkDelta = newGeneration || uplink < previous.uplink ? uplink : uplink - previous.uplink;
-      const downlinkDelta = newGeneration || downlink < previous.downlink ? downlink : downlink - previous.downlink;
-      state.lastCounters[token.id] = { uplink, downlink };
-
-      if (token.status === 'active' && (uplinkDelta + downlinkDelta) > 0) {
-        const used = Number(token.bandwidthUsedGb) + (uplinkDelta + downlinkDelta) / (1024 ** 3);
-        token.bandwidthUsedGb = Math.min(Number(token.bandwidthGb), used);
-        if (token.bandwidthUsedGb >= Number(token.bandwidthGb)) token.status = 'quota_exceeded';
-        tokensChanged = true;
-      }
-    }
-
-    state.generation = snapshot.generation;
-    writeJsonAtomically(xrayUsageStateFile, state);
-    totalBytesTransferred = currentTotalBytes;
-    activeTunnelConnections = snapshot.stat.filter(stat =>
-      typeof stat.name === 'string' &&
-      stat.name.startsWith('user>>>') &&
-      stat.name.endsWith('>>>online') &&
-      Number(stat.value ?? 0) > 0
-    ).length;
-
-    if (tokensChanged) saveTokens(tokens);
-    return true;
-  } catch (error) {
-    console.error('[XRAY STATS] Could not reconcile Xray usage:', error);
-    return false;
-  }
+function refreshTrafficTotals(_tokens?: ClientToken[]): boolean {
+  const nodes = readExternalNodes().filter(node => node.enabled);
+  totalBytesTransferred = loadTokens().reduce((total, token) => total + token.bandwidthUsedGb * 1024 ** 3, 0);
+  activeTunnelConnections = nodes.filter(nodeReady).reduce((total, node) => total + (node.online || 0), 0);
+  return true;
 }
 
 function saveTokens(tokens: ClientToken[]) {
   writeJsonAtomically(tokensFile, tokens);
-  syncXrayConfig(tokens);
+  refreshTrafficTotals(tokens);
 }
 
 // Versioned authenticated encryption. The master key never leaves the server.
@@ -1900,7 +1505,7 @@ async function startServer() {
   await storage.initialize();
   await storage.transaction(() => {
     loadUsers();
-    syncXrayConfig(loadTokens());
+    refreshTrafficTotals(loadTokens());
   });
 
   const app = express();
@@ -2038,7 +1643,7 @@ async function startServer() {
       return;
     }
 
-    reconcileXrayUsage();
+    refreshTrafficTotals();
     // Re-read after reconciliation: it may have advanced the real Xray counters or disabled an exhausted licence.
     tokens = loadTokens();
     found = tokens.find(t => t.token.toUpperCase() === rawToken.toUpperCase());
@@ -2082,7 +1687,7 @@ async function startServer() {
       bandwidthUsedGb: Number(found.bandwidthUsedGb.toFixed(3)),
       bandwidthRemainingGb: Number(Math.max(0, found.bandwidthGb - found.bandwidthUsedGb).toFixed(3)),
       expiresAt: found.expiresAt,
-      quotaSource: 'xray-core-user-stats'
+      quotaSource: 'external-agent-user-stats'
     });
   });
 
@@ -2302,31 +1907,8 @@ async function startServer() {
   const sshFile = path.resolve(dataDir, 'ssh.json');
   const sshControl = process.env.SSH_CONTROL_DIR || path.resolve(dataDir, 'ssh-control');
   const readSsh = (): SshState => hasDocument(sshFile) ? readDocument(sshFile) : { accounts: [] };
-  const publishSsh = (state: SshState) => {
-    if (process.env.SSH_GATEWAY_ENABLED !== 'true') return;
-    const projection = { at: Date.now(), enabled: true, accounts: state.accounts.map(({password, ...a}) => a) };
-    storage.afterCommit(() => { fs.mkdirSync(sshControl, {recursive: true, mode: 0o700}); writeJsonAtomically(path.join(sshControl, 'config.json'), projection); });
-  };
-  const reconcileSsh = () => {
-    if (process.env.SSH_GATEWAY_ENABLED !== 'true') return;
-    const state = readSsh(); let changed = false;
-    try {
-      const stats = JSON.parse(fs.readFileSync(path.join(sshControl, 'stats.json'), 'utf8'));
-      if (Date.now() - stats.at >= -5000 && Date.now() - stats.at < 15000 && Array.isArray(stats.accounts)) {
-        for (const a of state.accounts) {
-          const used = stats.accounts.find((v: any) => v.id === a.id)?.usedBytes;
-          if (Number.isSafeInteger(used) && used > a.usedBytes) { a.usedBytes = Math.min(used, a.quotaBytes); changed = true; }
-        }
-      }
-    } catch { /* Gateway remains unavailable until its first heartbeat. */ }
-    if (changed) writeJsonAtomically(sshFile, state);
-    publishSsh(state);
-  };
   registerSsh(app, { authenticate, read: readSsh, write: state => { writeJsonAtomically(sshFile, state); },
-    publish: publishSsh, key: process.env.MASTER_SECRET!, directory: sshControl, audit: logAudit });
-  await storage.transaction(reconcileSsh);
-  const sshReconcileTimer = setInterval(() => { void storage.transaction(reconcileSsh).catch(() => console.error('[SSH] Control refresh postponed.')); }, 5000);
-  sshReconcileTimer.unref();
+    key: process.env.MASTER_SECRET!, nodes: readExternalNodes, audit: logAudit });
   const nodesFile=path.resolve(dataDir,'nodes.json');
   const fullSnapshot=async()=>({version:3,ssh:readSsh(),auditLogs:loadAuditLogs(),auditEvents:await storage.exportAudit(),masterKeyId:crypto.createHash('sha256').update(process.env.MASTER_SECRET!).digest('hex').slice(0,16),users:loadUsers(),tokens:loadTokens().map(backupClientToken),masterConfig:(()=>{const {secretPassphrase,...config}=loadMasterConfig();return config;})(),protocolConfigs:loadProtocolConfigs(),transactions:loadTransactions(),plans:loadPlans(),requests:loadRequests(),appVersion:loadAppVersionConfig(),announcements:loadAnnouncements(),security:{mfa:security.state().mfa,sessions:{}},commerce:hasDocument(commerceFile)?readDocument(commerceFile):{orders:[]},nodes:hasDocument(nodesFile)?readDocument(nodesFile):[]});
   const restoreSnapshot=async(snapshot:any)=>{
@@ -2340,24 +1922,64 @@ async function startServer() {
     if(Array.isArray(snapshot.announcements))saveAnnouncements(snapshot.announcements);
     if(snapshot.commerce)writeJsonAtomically(commerceFile,snapshot.commerce);
     writeJsonAtomically(sshFile, snapshot.ssh || { accounts: [] });
-    publishSsh(snapshot.ssh || { accounts: [] });
     if(Array.isArray(snapshot.nodes))writeJsonAtomically(nodesFile,snapshot.nodes);
     writeJsonAtomically(securityFile,{mfa:snapshot.security?.mfa||{},sessions:{}});
     if(Array.isArray(snapshot.auditEvents))storage.importAudit(snapshot.auditEvents);
   };
   registerOperations(app,{authenticate,limiter:publicApiRateLimiter,ops:operations,snapshot:fullSnapshot,restore:restoreSnapshot,readNodes:()=>hasDocument(nodesFile)?readDocument(nodesFile):[],saveNodes:v=>{writeJsonAtomically(nodesFile,v);},audit:logAudit,
-    nodeConfig:node=>generateXrayConfig(loadTokens().filter(token=>protocolConfigForToken(token)?.serverHost===node.host)),
-    nodeUsage:(node,snapshot)=>{
-      if(typeof snapshot.generation!=='string'||snapshot.generation.length>100||!Array.isArray(snapshot.stat)||snapshot.stat.length>10000)throw new Error('Invalid stats');
-      const counters=new Map<string,number>();
-      for(const item of snapshot.stat){const value=Number(item.value);if(typeof item.name!=='string'||!Number.isSafeInteger(value)||value<0)throw new Error('Invalid counter');counters.set(item.name,value);}
-      const tokens=loadTokens();const previous=node.counters||{};const next:Record<string,number>={};
-      for(const token of tokens.filter(t=>protocolConfigForToken(t)?.serverHost===node.host)){
-        const prefix=`user>>>${xrayUserEmail(token)}>>>traffic>>>`;let delta=0;
-        for(const direction of ['uplink','downlink']){const key=prefix+direction;const value=counters.get(key)||0;delta+=node.generation!==snapshot.generation||value<(previous[key]||0)?value:value-(previous[key]||0);next[key]=value;}
-        if(token.status==='active'&&delta>0){token.bandwidthUsedGb=Math.min(token.bandwidthGb,token.bandwidthUsedGb+delta/(1024**3));if(token.bandwidthUsedGb>=token.bandwidthGb)token.status='quota_exceeded';}
+    nodeConfig: node => ({ format: 'abess-external-inventory-v1', host: node.host,
+      licences: loadTokens().filter(token => protocolConfigForToken(token)?.serverHost === node.host).map(token => ({
+        id: token.id, clientUuid: token.clientUuid, trafficId: xrayUserEmail(token), status: token.status,
+        expiresAt: token.expiresAt, bandwidthGb: token.bandwidthGb, bandwidthUsedGb: token.bandwidthUsedGb, deviceLimit: token.deviceLimit,
+        enabled: token.status === 'active' && Date.parse(token.expiresAt) > Date.now() && token.bandwidthUsedGb < token.bandwidthGb
+      })),
+      sshAccounts: readSsh().accounts.filter(account => account.nodeId === node.id).map(account => ({
+        id: account.id, username: account.username, enabled: account.enabled && Date.parse(account.expiresAt) > Date.now() && account.usedBytes < account.quotaBytes,
+        expiresAt: account.expiresAt, quotaBytes: account.quotaBytes, usedBytes: account.usedBytes, maxConnections: account.maxConnections
+      })) }),
+    nodeUsage: (node, snapshot) => {
+      const counters = new Map<string, number>(snapshot.stat.map((item: any) => [item.name, Number(item.value)]));
+      const tokens = loadTokens();
+      const previous = node.counters || {};
+      const next = node.generation === snapshot.generation ? {...previous} : {};
+      for (const token of tokens.filter(t => protocolConfigForToken(t)?.serverHost === node.host)) {
+        let delta = 0;
+        for (const direction of ['uplink', 'downlink']) {
+          const canonical = `user>>>${xrayUserEmail(token)}>>>traffic>>>${direction}`;
+          const key = counters.has(canonical) ? canonical : `user>>>${token.clientUuid}>>>traffic>>>${direction}`;
+          if (!counters.has(key)) continue;
+          const value = counters.get(key)!;
+          const old = next[canonical] || 0;
+          // A reset requires a new generation; out-of-order counters never add traffic.
+          if (value < old) throw new Error('Counter decreased within one generation');
+          delta += value - old;
+          next[canonical] = value;
+        }
+        if (delta > 0) {
+          token.bandwidthUsedGb += delta / 1024 ** 3;
+          if (token.status === 'active' && token.bandwidthUsedGb >= token.bandwidthGb) token.status = 'quota_exceeded';
+        }
       }
-      node.generation=snapshot.generation;node.counters=next;saveTokens(tokens);
+      const ssh = readSsh();
+      for (const account of ssh.accounts.filter(a => a.nodeId === node.id)) account.online = 0;
+      for (const sample of snapshot.accounts || []) {
+        const account = ssh.accounts.find(a => a.nodeId === node.id && a.id === sample.id);
+        if (!account) continue;
+        const counterKey = `ssh:${account.id}`;
+        const old = next[counterKey] || 0;
+        if (sample.usedBytes < old) throw new Error('SSH counter decreased');
+        account.usedBytes += sample.usedBytes - old;
+        account.online = sample.online || 0;
+        next[counterKey] = sample.usedBytes;
+      }
+      node.generation = snapshot.generation;
+      node.counters = next;
+      node.online = tokens.filter(t => protocolConfigForToken(t)?.serverHost === node.host).reduce((total, token) => {
+        const primary = `user>>>${xrayUserEmail(token)}>>>online`;
+        return total + (counters.get(primary) ?? counters.get(`user>>>${token.clientUuid}>>>online`) ?? 0);
+      }, 0) + ssh.accounts.filter(a => a.nodeId === node.id).reduce((total, a) => total + (a.online || 0), 0);
+      writeJsonAtomically(sshFile, ssh);
+      saveTokens(tokens);
     }
   });
 
@@ -2900,7 +2522,16 @@ async function startServer() {
       res.status(409).json({ error: 'Ce code token existe déjà. Générez-en un autre.' });
       return;
     }
-    const clientUuid = crypto.randomUUID();
+    const trafficId = req.body?.trafficId === undefined ? undefined : String(req.body.trafficId).trim();
+    if (trafficId !== undefined && !/^[a-zA-Z0-9_.@+\-]{1,128}$/.test(trafficId)) { res.status(400).json({error:'Identifiant trafic invalide.'}); return; }
+    const clientUuid = String(req.body?.clientUuid || crypto.randomUUID()).toLowerCase();
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(clientUuid)) {
+      res.status(400).json({error: 'UUID invalide.'}); return;
+    }
+    if (loadTokens().some(t => protocolConfigForToken(t)?.serverHost === profile.serverHost &&
+      [t.clientUuid, xrayUserEmail(t)].some(id => id === clientUuid || (trafficId !== undefined && id === trafficId)))) {
+      res.status(409).json({error: 'UUID déjà associé à une licence sur cet hôte.'}); return;
+    }
     const calculatedExpiresAt = expiresAt || new Date(Date.now() + (Number(days) || 30) * 24 * 3600 * 1000).toISOString();
     const expiryTimestamp = new Date(calculatedExpiresAt).getTime();
     if (!Number.isFinite(expiryTimestamp) || expiryTimestamp <= Date.now()) {
@@ -2940,7 +2571,7 @@ async function startServer() {
 
     const tokens = loadTokens();
     const newToken: ClientToken = {
-      id: 'tok_' + crypto.randomUUID(), token: finalToken, clientUuid,
+      id: 'tok_' + crypto.randomUUID(), token: finalToken, clientUuid, trafficId,
       resellerId: user.id, resellerName: user.name,
       plan: String(plan || `${requestedGb} GO CYBER VIP`).trim().slice(0, 80),
       bandwidthGb: requestedGb, bandwidthUsedGb: 0, expiresAt: calculatedExpiresAt, days: daysRemaining,
@@ -3424,7 +3055,7 @@ async function startServer() {
     }
     configs.push(created);
     saveProtocolConfigs(configs);
-    syncXrayConfig();
+    refreshTrafficTotals();
     res.status(201).json({ success: true, config: publicProtocolConfig(created), configs: configs.map(publicProtocolConfig) });
   });
   app.put('/api/v1/admin/protocol-configs/:id', authenticate, (req, res) => {
@@ -3461,7 +3092,7 @@ async function startServer() {
     }
     configs[index] = updated;
     saveProtocolConfigs(configs);
-    syncXrayConfig();
+    refreshTrafficTotals();
     res.json({ success: true, config: publicProtocolConfig(updated), configs: configs.map(publicProtocolConfig) });
   });
   app.delete('/api/v1/admin/protocol-configs/:id', authenticate, (req, res) => {
@@ -3486,7 +3117,7 @@ async function startServer() {
     }
     const remaining = configs.filter(config => config.id !== req.params.id);
     saveProtocolConfigs(remaining);
-    syncXrayConfig(tokens);
+    refreshTrafficTotals(tokens);
     res.json({ success: true, configs: remaining.map(publicProtocolConfig) });
   });
 
@@ -3525,7 +3156,11 @@ async function startServer() {
       });
       return;
     }
-    const effectivePort = requestedTransport === 'tcp' ? 10050 : 443;
+    const effectivePort = Number(req.body?.serverPort ?? current.serverPort);
+    const requestedPath = String(req.body?.path ?? current.path);
+    if (!Number.isInteger(effectivePort) || effectivePort < 1 || effectivePort > 65535 || requestedPath.length > 2048 || /[\r\n\x00]/.test(requestedPath)) {
+      res.status(400).json({error:'Port ou chemin invalide.'}); return;
+    }
     const updated: MasterServerConfig = {
       ...current,
       ...req.body,
@@ -3535,11 +3170,11 @@ async function startServer() {
       serverPort: effectivePort,
       protocol: requestedProtocol,
       transport: requestedTransport,
-      path: '/@abess237',
+      path: requestedPath,
       secretPassphrase: process.env.MASTER_SECRET || current.secretPassphrase
     };
     saveMasterConfig(updated);
-    syncXrayConfig();
+    refreshTrafficTotals();
     const { secretPassphrase: _secretPassphrase, ...safeConfig } = updated;
     res.json({ success: true, config: safeConfig });
   });
@@ -3548,6 +3183,7 @@ async function startServer() {
   // 5. GLOBAL METRICS & STATS
   // ==========================================
   app.get('/api/v1/admin/stats', authenticate, (req, res) => {
+    refreshTrafficTotals();
     const user: AppUser = (req as any).user;
     const users = loadUsers();
     const tokens = loadTokens();
@@ -4771,8 +4407,8 @@ async function startServer() {
       }
     }
     if (expired) saveTokens(tokens);
-    else syncXrayConfig(tokens);
-    reconcileXrayUsage();
+    else refreshTrafficTotals(tokens);
+    refreshTrafficTotals();
     }).catch(() => console.error('[DATABASE] Reconciliation postponed.'));
   }, 5000);
   xrayReconcileTimer.unref();
@@ -4818,7 +4454,7 @@ async function startServer() {
     loadRequests,
     saveRequests,
     getSystemDiagnostics,
-    syncXrayConfig,
+    refreshTrafficTotals,
     encryptConfig,
     buildDirectProtocolUrl,
     safeClientToken,
@@ -4828,8 +4464,7 @@ async function startServer() {
     saveAnnouncements,
     getServerUpdateStatus,
     executeServerUpdate,
-    xrayStatusFile,
-    xrayConfigFile,
+    isXrayReady,
     dataDir,
     backupsDir,
     startTime

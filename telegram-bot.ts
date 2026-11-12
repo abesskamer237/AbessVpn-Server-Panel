@@ -43,7 +43,7 @@ export interface TelegramBotContext {
   loadRequests?: () => MembershipRequest[];
   saveRequests?: (reqs: MembershipRequest[]) => void;
   getSystemDiagnostics?: () => any;
-  syncXrayConfig: (tokens?: ClientToken[]) => boolean;
+  refreshTrafficTotals: (tokens?: ClientToken[]) => boolean;
   encryptConfig: (plainJson: object, secret: string) => string;
   buildDirectProtocolUrl: (token: ClientToken, profile: ProtocolConfig) => string;
   safeClientToken: (token: ClientToken) => any;
@@ -53,8 +53,7 @@ export interface TelegramBotContext {
   saveAnnouncements?: (announcements: Announcement[]) => void;
   getServerUpdateStatus: () => Promise<ServerUpdateStatus>;
   executeServerUpdate: () => Promise<{ success: boolean; output: string; currentCommit: string }>;
-  xrayStatusFile: string;
-  xrayConfigFile: string;
+  isXrayReady: () => boolean;
   dataDir: string;
   backupsDir: string;
   startTime: number;
@@ -281,7 +280,7 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
   function getMainMenuText(userName = 'Administrateur'): string {
     const tokens = ctx.loadTokens();
     const active = tokens.filter(t => t.status === 'active').length;
-    const isXrayReady = fs.existsSync(ctx.xrayStatusFile);
+    const isXrayReady = ctx.isXrayReady();
     const totalAllocated = tokens.reduce((acc, t) => acc + (t.bandwidthGb || 0), 0);
     const totalUsed = tokens.reduce((acc, t) => acc + (t.bandwidthUsedGb || 0), 0);
 
@@ -312,7 +311,7 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
     const sysUptime = formatUptime(os.uptime());
     const srvUptime = formatUptime((Date.now() - ctx.startTime) / 1000);
     const loadAvg = os.loadavg().map(v => v.toFixed(2)).join(', ');
-    const isXrayReady = fs.existsSync(ctx.xrayStatusFile);
+    const isXrayReady = ctx.isXrayReady();
     const profiles = ctx.loadProtocolConfigs();
 
     return `📊 *MÉTRIQUES SYSTÈME & SANTÉ DU SERVEUR*\n` +
@@ -732,7 +731,7 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
   }
 
   function getXrayMenuText(): string {
-    const isXrayReady = fs.existsSync(ctx.xrayStatusFile);
+    const isXrayReady = ctx.isXrayReady();
     const profiles = ctx.loadProtocolConfigs();
 
     let profilesList = '';
@@ -743,12 +742,11 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
     return `⚙️ *STATUT DU MOTEUR XRAY-CORE & PROTOCOLES*\n` +
       `────────────────────────\n` +
       `🟢 *État Moteur :* ${isXrayReady ? '✅ Actif & Écoute' : '🔴 Inactif ou en démarrage'}\n` +
-      `📄 *Fichier Config :* \`${ctx.xrayConfigFile}\`\n` +
       `────────────────────────\n` +
       `*Profils de Protocoles Actifs (${profiles.length}) :*\n` +
       (profilesList || '_Aucun profil configuré._\n') +
       `────────────────────────\n` +
-      `_Toutes les modifications de tokens ou de profils synchronisent instantanément la matrice d'inbounds Xray-core._`;
+      '';
   }
 
   function getLedgerText(): string {
@@ -1116,13 +1114,13 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
         }
       } else if (data === 'action_reload_xray') {
         const tokens = ctx.loadTokens();
-        const ok = ctx.syncXrayConfig(tokens);
-        await answerCallbackQuery(cb.id, ok ? '✅ Configuration Xray rechargée avec succès !' : '⚠️ Erreur rechargement Xray.', true);
+        const ok = ctx.refreshTrafficTotals(tokens);
+        await answerCallbackQuery(cb.id, ok ? '✅ Statistiques actualisées.' : '⚠️ Statistiques indisponibles.', true);
         await editMessageText(chatId, messageId, getXrayMenuText(), {
           reply_markup: {
             inline_keyboard: [
               [
-                { text: '🔄 Recharger à nouveau', callback_data: 'action_reload_xray' },
+                { text: '🔄 Actualiser', callback_data: 'action_reload_xray' },
                 { text: '⬅️ Retour Menu', callback_data: 'menu_main' }
               ]
             ]
@@ -1133,7 +1131,7 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
           reply_markup: {
             inline_keyboard: [
               [
-                { text: '🔄 Recharger Config Xray', callback_data: 'action_reload_xray' },
+                { text: '🔄 Actualiser', callback_data: 'action_reload_xray' },
                 { text: '⬅️ Retour Menu', callback_data: 'menu_main' }
               ]
             ]
@@ -1300,7 +1298,7 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
         const tokens = ctx.loadTokens();
         tokens.unshift(newToken);
         ctx.saveTokens(tokens);
-        ctx.syncXrayConfig(tokens);
+        ctx.refreshTrafficTotals(tokens);
 
         targetReq.status = 'APPROVED';
         targetReq.assignedToken = tokenCode;
@@ -1532,7 +1530,7 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
       await sendMessage(chatId, getXrayMenuText(), {
         reply_markup: {
           inline_keyboard: [
-            [{ text: '🔄 Recharger Config Xray', callback_data: 'action_reload_xray' }, { text: '⬅️ Menu', callback_data: 'menu_main' }]
+            [{ text: '🔄 Actualiser', callback_data: 'action_reload_xray' }, { text: '⬅️ Menu', callback_data: 'menu_main' }]
           ]
         }
       });
@@ -1540,8 +1538,8 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
     }
 
     if (text === '/reload') {
-      const ok = ctx.syncXrayConfig(ctx.loadTokens());
-      await sendMessage(chatId, ok ? '✅ Configuration Xray rechargée avec succès !' : '⚠️ Erreur lors du rechargement de Xray.');
+      const ok = ctx.refreshTrafficTotals(ctx.loadTokens());
+      await sendMessage(chatId, ok ? '✅ Statistiques actualisées.' : '⚠️ Statistiques indisponibles.');
       return;
     }
 

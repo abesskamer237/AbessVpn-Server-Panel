@@ -1,81 +1,54 @@
-import fs from "node:fs/promises";
-import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
-const base = new URL(process.env.CONTROL_API_BASE_URL || "");
-if (
-  base.protocol !== "https:" ||
-  base.username ||
-  base.password ||
-  base.pathname !== "/" ||
-  base.search ||
-  base.hash
-)
-  throw new Error("HTTPS control-plane origin required");
-const nodeId = process.env.VPN_NODE_ID;
-const key = process.env.VPN_NODE_KEY;
-if (!nodeId || !key) throw new Error("VPN_NODE_ID and VPN_NODE_KEY required");
-const dir = process.env.SHARED_DIR || "/shared";
-await fs.mkdir(dir, { recursive: true });
-let running = true;
-for (const signal of ["SIGINT", "SIGTERM"])
-  process.on(signal, () => {
-    running = false;
-  });
-async function call(route, body) {
-  const response = await fetch(
-    new URL(`/api/v1/nodes/${encodeURIComponent(nodeId)}/${route}`, base),
-    {
-      method: body ? "POST" : "GET",
-      headers: {
-        Authorization: `Bearer ${key}`,
-        ...(body ? { "Content-Type": "application/json" } : {}),
-      },
-      body: body ? JSON.stringify(body) : undefined,
-      redirect: "error",
-      signal: AbortSignal.timeout(8000),
-    },
-  );
-  if (!response.ok)
-    throw new Error("Node authorization or control plane unavailable");
-  return response.json();
+import fs from 'node:fs/promises';
+import {pathToFileURL} from 'node:url';
+import {setTimeout as delay} from 'node:timers/promises';
+
+export function httpsOrigin(value) {
+  const url = new URL(value);
+  if (url.protocol !== 'https:' || url.username || url.password || url.pathname !== '/' || url.search || url.hash)
+    throw Error('HTTPS origin required');
+  return url;
 }
-let lastSuccess = Date.now();
-while (running) {
-  try {
-    const config = await call("config");
-    const serialized = JSON.stringify(config);
-    const file = path.join(dir, "xray-config.json");
-    const current = await fs.readFile(file, "utf8").catch(() => "");
-    if (current !== serialized) {
-      await fs.writeFile(file + ".agent.tmp", serialized, { mode: 0o640 });
-      await fs.rename(file + ".agent.tmp", file);
-    }
-    const snapshot = JSON.parse(
-      await fs
-        .readFile(path.join(dir, "xray-stats.json"), "utf8")
-        .catch(() => "null"),
-    );
-    const ready = Boolean(
-      snapshot?.observedAt &&
-      Date.now() - Date.parse(snapshot.observedAt) < 15000,
-    );
-    await call("heartbeat", {
-      ready,
-      version: "1",
-      ...(snapshot ? { snapshot } : {}),
-    });
-    lastSuccess = Date.now();
-    await fs.writeFile(
-      path.join(dir, "xray-control-heartbeat"),
-      JSON.stringify({ at: lastSuccess }),
-      { mode: 0o640 },
-    );
-  } catch {
-    console.error(
-      "[NODE AGENT] Synchronization unavailable; no credentials logged.",
-    );
+export async function readSnapshot(env = process.env, request = fetch) {
+  if (env.STATS_API_URL) {
+    const url = new URL(env.STATS_API_URL);
+    if (url.protocol !== 'https:' || url.username || url.password || url.hash) throw Error('HTTPS stats API required');
+    const token = env.STATS_API_TOKEN_FILE ? (await fs.readFile(env.STATS_API_TOKEN_FILE, 'utf8')).trim() : '';
+    const response = await request(url, {headers: token ? {Authorization: `Bearer ${token}`} : {},
+      redirect: 'error', signal: AbortSignal.timeout(8000)});
+    if (!response.ok) throw Error('Stats API unavailable');
+    return response.json();
   }
-  if (Date.now() - lastSuccess > 60000)
-    await fs.rm(path.join(dir, "xray-control-heartbeat"), { force: true });
-  await delay(5000);
+  if (!env.STATS_FILE) throw Error('STATS_FILE or STATS_API_URL required');
+  return JSON.parse(await fs.readFile(env.STATS_FILE, 'utf8'));
+}
+export async function reportOnce(env = process.env, request = fetch) {
+  const base = httpsOrigin(env.CONTROL_API_BASE_URL);
+  if (!env.VPN_NODE_ID || !env.VPN_NODE_KEY) throw Error('Node credentials required');
+  let snapshot;
+  try {
+    snapshot = await readSnapshot(env, request);
+    const age = Date.now() - Date.parse(snapshot.observedAt);
+    if (!snapshot.generation || !Array.isArray(snapshot.stat) || !Number.isFinite(age) || age < -5000 || age > 60000)
+      throw Error('Stale or invalid stats');
+  } catch { snapshot = undefined; }
+  const response = await request(new URL(`/api/v1/nodes/${encodeURIComponent(env.VPN_NODE_ID)}/heartbeat`, base), {
+    method: 'POST', headers: {Authorization: `Bearer ${env.VPN_NODE_KEY}`, 'Content-Type': 'application/json'},
+    body: JSON.stringify({ready: Boolean(snapshot), version: 'external-2', ...(snapshot ? {snapshot} : {})}),
+    redirect: 'error', signal: AbortSignal.timeout(8000),
+  });
+  if (!response.ok) throw Error('Heartbeat rejected');
+}
+async function main() {
+  httpsOrigin(process.env.CONTROL_API_BASE_URL);
+  if (!process.env.STATS_FILE && !process.env.STATS_API_URL) throw Error('STATS_FILE or STATS_API_URL required');
+  let running = true;
+  for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => { running = false; });
+  while (running) {
+    try { await reportOnce(); }
+    catch { console.error('[NODE AGENT] Reporting unavailable.'); }
+    if (running) await delay(5000);
+  }
+}
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch(() => {console.error('[NODE AGENT] Invalid configuration.'); process.exitCode = 1;});
 }

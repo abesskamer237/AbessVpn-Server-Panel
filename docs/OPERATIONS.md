@@ -12,7 +12,7 @@ Les fichiers Xray partagés sont des projections régénérables après commit. 
 2. Le workflow produit des mots de passe PostgreSQL distincts, les conserve dans le `.env` du VPS et préserve les paramètres opérationnels existants à chaque déploiement. L’API utilise `abess_app`, un rôle non superutilisateur ; le mot de passe superutilisateur est masqué dans son environnement.
 3. Au premier démarrage, le serveur importe les documents existants dans une transaction. Un JSON invalide annule la migration. Les fichiers sources restent inchangés. Les démarrages suivants n’importent pas à nouveau ces fichiers.
 4. Comparer les comptes, crédits, licences et historiques. Tester une création et un renouvellement, puis exporter et restaurer une sauvegarde sur une instance **isolée**.
-5. Vérifier le panneau Exploitation et `/api/v1/ping`. Le déploiement attend une réponse HTTPS publique et `dataPlane: ready`.
+5. Vérifier le panneau Exploitation et `/api/v1/ping`. Le déploiement manuel attend une réponse HTTPS publique `ok:true`. La disponibilité des agents externes est indépendante.
 
 Le schéma PostgreSQL initial et le rôle applicatif sont créés pour un volume neuf. Un volume PostgreSQL préexistant doit être examiné par son administrateur : ne jamais contourner une erreur de rôle ou de permissions en supprimant le volume.
 
@@ -20,9 +20,9 @@ Le mode fichiers est réservé au développement. En production sans `DATABASE_U
 
 ## Licences TLS et anciens profils TCP
 
-VLESS/TCP simple ne chiffre pas le trafic. Les profils commercialisés doivent employer WS, gRPC, HTTPUpgrade ou XHTTP avec TLS et un SNI couvert par le certificat du nœud. TCP/10050 est fermé par défaut et n’est pas provisionné dans la configuration sécurisée.
+VLESS/TCP simple ne chiffre pas le trafic. Les profils commercialisés doivent employer WS, gRPC, HTTPUpgrade ou XHTTP avec TLS et un SNI couvert par le certificat du nœud. Aucun listener VPN n’est créé par le Compose du panneau.
 
-Pour une ancienne licence TCP, créer un profil TLS valide puis utiliser `POST /api/v1/admin/tokens/:id/migrate-tls` avec `configurationId`. L’UUID, le quota et l’expiration sont conservés ; le client doit réimporter son token/lien. Pour une transition temporaire seulement, l’overlay `docker-compose.legacy-tcp.yml` active explicitement le transport non chiffré. Retirer cet overlay dès la migration terminée.
+Pour une ancienne licence TCP, créer un profil TLS valide puis utiliser `POST /api/v1/admin/tokens/:id/migrate-tls` avec `configurationId`. L’UUID, le quota et l’expiration sont conservés ; le client doit réimporter son token/lien. La migration du moteur reste manuelle sur le VPS externe ; l’ancien overlay TCP est inerte.
 
 ## Authentification et incident de compte
 
@@ -53,11 +53,11 @@ Ne pas extraire ni importer une archive sur la production avant de l’avoir con
 
 ## Déploiement et retour arrière
 
-Le workflow accepte l’IP (`VPS_HOST`), l’utilisateur (`VPS_USER`) et le mot de passe (`VPS_PASSWORD` ou `VPS_SSH_PASSWORD`) sans secret `VPS_KNOWN_HOSTS`. Il collecte automatiquement la clé publique SSH au début de chaque déploiement, puis exige la même clé pour toutes les connexions de cette exécution. Cette découverte initiale ne vérifie pas l’identité du serveur par une source indépendante. Le mot de passe est prioritaire sur une éventuelle clé privée. Les conteneurs API et Xray utilisent un utilisateur non privilégié, un système de fichiers en lecture seule et aucune capacité Linux supplémentaire, avec leurs volumes d’état et `/tmp` séparés.
+Le workflow accepte l’IP (`VPS_HOST`), l’utilisateur (`VPS_USER`) et le mot de passe (`VPS_PASSWORD` ou `VPS_SSH_PASSWORD`) sans secret `VPS_KNOWN_HOSTS`. Il collecte automatiquement la clé publique SSH au début de chaque déploiement, puis exige la même clé pour toutes les connexions de cette exécution. Cette découverte initiale ne vérifie pas l’identité du serveur par une source indépendante. Le mot de passe est prioritaire sur une éventuelle clé privée. Le conteneur API utilise un utilisateur non privilégié, un système de fichiers en lecture seule et aucune capacité Linux supplémentaire, avec leurs volumes d’état et `/tmp` séparés.
 
-Le workflow valide les types, les tests de sécurité/plateforme, les transactions PostgreSQL, les images et le trafic Xray avant déploiement. Il conserve les secrets existants, effectue une sauvegarde protégée et vérifie la disponibilité HTTPS/Xray.
+Le workflow valide les types, les tests de sécurité/plateforme, les transactions PostgreSQL, les images et le trafic Xray avant déploiement. Il conserve les secrets existants, effectue une sauvegarde protégée et vérifie la disponibilité HTTPS du backend.
 
-Lors d’une mise à jour d’une installation PostgreSQL déjà compatible, un échec des contrôles restaure les images API/Xray précédentes. La première migration depuis JSON ne revient pas automatiquement à un ancien serveur JSON : il pourrait diverger de la nouvelle base. En cas d’échec de cette première migration, maintenir la maintenance, examiner les journaux et restaurer le volume sauvegardé sous contrôle opérateur.
+Lors d’une mise à jour d’une installation PostgreSQL déjà compatible, un échec des contrôles restaure l’image API précédente. La première migration depuis JSON ne revient pas automatiquement à un ancien serveur JSON : il pourrait diverger de la nouvelle base. En cas d’échec de cette première migration, maintenir la maintenance, examiner les journaux et restaurer le volume sauvegardé sous contrôle opérateur.
 
 Le retour arrière du code ne remplace pas une restauration de données. Ne pas appliquer de migration destructive de schéma sans stratégie de compatibilité et sauvegarde vérifiée.
 
@@ -73,13 +73,7 @@ L’ancre affichée peut être conservée hors du serveur. Ce mécanisme détect
 
 ## Nœuds distants
 
-1. Enregistrer un hostname distinct dans Exploitation et conserver la clé de l’agent, affichée une seule fois.
-2. Sur le VPS du nœud, configurer `CONTROL_API_BASE_URL` (origine HTTPS), `VPN_NODE_ID`, `VPN_NODE_KEY`, `VPN_DOMAIN` et `ACME_EMAIL`.
-3. Exécuter `docker compose -f docker-compose.node.yml up -d --build` et vérifier DNS/TLS ainsi que les ports publics 80/443.
-4. Créer un profil dont l’hôte et le SNI correspondent au nœud. Les licences affectées à ce profil sont les seules transmises à son agent.
-5. Vérifier la connexion Android et les compteurs. Les compteurs reçus sont cumulatifs, rapprochés par génération pour éviter les doubles comptes. L’épuisement du quota retire l’utilisateur de la configuration suivante.
-
-Un nœud révoqué ne peut plus récupérer de configuration. Le watcher coupe le moteur après 60 secondes sans heartbeat du contrôleur/agent. Prévoir ce délai de convergence pour la révocation et le quota ; ne pas promettre une coupure instantanée ni un quota au dernier octet.
+Les moteurs et comptes sont configurés manuellement sur des VPS externes. Le panneau conserve les données commerciales ; l'agent fourni rapporte les statistiques sans modifier les services. Consulter le [contrat des serveurs externes](EXTERNAL_SERVERS.md) pour les champs, les compteurs par génération, l'import SSH, les exports client et l'application externe des restrictions. Aucune configuration serveur n'est générée par l'API.
 
 ## Supervision
 
@@ -89,6 +83,6 @@ L’overlay `docker-compose.monitoring.yml` fournit Prometheus et Blackbox Expor
 
 ## Limites de validation
 
-Les tests Docker locaux prouvent le trafic VLESS, les compteurs et le refus après épuisement/rechargement dans un réseau de test isolé. Ils ne remplacent pas les tests TLS, DNS/IPv6, batterie et reconnexion sur un appareil Android réel. La configuration S3, les certificats publics des VPS, les notifications externes et les encaissements réels exigent leurs services et identifiants. Ne pas déclarer ces intégrations actives sans les vérifier.
+Les tests Docker locaux prouvent le trafic VLESS, les compteurs externes et le refus de validation de licence après épuisement dans un réseau de test isolé. Ils ne remplacent pas les tests TLS, DNS/IPv6, batterie et reconnexion sur un appareil Android réel. La configuration S3, les certificats publics des VPS, les notifications externes et les encaissements réels exigent leurs services et identifiants. Ne pas déclarer ces intégrations actives sans les vérifier.
 
 Le workflow installe les prérequis absents sur un VPS Debian/Ubuntu : Docker Engine depuis le dépôt officiel signé, Compose, Buildx, curl, rsync et iproute2. Cette préparation requiert root ou sudo sans interaction. Un moteur Docker existant n’est pas redémarré et aucun service occupant les ports publics n’est arrêté.

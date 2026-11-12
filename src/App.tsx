@@ -392,6 +392,8 @@ export default function App() {
   const [batchResult, setBatchResult] = useState<ClientToken[] | null>(null);
 
   // Single Token Customer Note
+  const [newTokenTrafficId, setNewTokenTrafficId] = useState('');
+  const [newTokenUuid, setNewTokenUuid] = useState('');
   const [newTokenCustomerNote, setNewTokenCustomerNote] = useState<string>('');
 
   // Search & Filter State
@@ -788,6 +790,8 @@ export default function App() {
           deviceLimit: Number(newTokenDeviceLimit),
           allowedDeviceId: newTokenAllowedDeviceId.trim() || undefined,
           customerNote: newTokenCustomerNote.trim() || undefined,
+          clientUuid: newTokenUuid.trim() || undefined,
+          trafficId: newTokenTrafficId.trim() || undefined,
           configurationId: newTokenConfigurationId
         })
       });
@@ -2278,13 +2282,10 @@ export default function App() {
                     <input
                       type="number"
                       value={masterConfig.serverPort}
-                      readOnly={masterConfig.protocol !== 'ssh'}
                       onChange={(e) => setMasterConfig({ ...masterConfig, serverPort: Number(e.target.value) })}
                       className="w-full bg-[#03060e] border border-slate-800 rounded-lg px-3 py-3 text-slate-300"
                     />
-                    <p className="mt-1 text-slate-500">
-                      {masterConfig.protocol === 'ssh' ? 'Port Dropbear WebSocket (80 direct ou 8880 proxy).' : 'HTTPS (443). Le TCP sans TLS est réservé à une migration temporaire.'}
-                    </p>
+
                   </div>
                   <div>
                     <label className="block text-slate-300 font-semibold mb-1">Protocole</label>
@@ -2327,16 +2328,16 @@ export default function App() {
                       disabled={masterConfig.protocol === 'ssh'}
                       onChange={(e) => {
                         const transport = e.target.value;
-                        const serverPort = transport === 'tcp' ? 10050 : 443;
+                        const serverPort = masterConfig.serverPort;
                         setMasterConfig({ ...masterConfig, transport, serverPort, sniHost: transport === 'tcp' ? '' : masterConfig.sniHost });
                       }}
                       className="w-full bg-[#03060e] border border-emerald-900 rounded-lg px-3 py-3 text-emerald-200 disabled:opacity-50"
                     >
-                      <option value="ws">WebSocket sur TCP (Port 443 • Cloudflare / TLS)</option>
+                      <option value="ws">WebSocket / TLS</option>
                       <option value="tcp">TCP sans TLS (compatibilité temporaire)</option>
-                      <option value="grpc">gRPC sur TCP (Port 443 • Haute Vitesse HTTP/2)</option>
-                      <option value="httpupgrade">HTTPUpgrade sur TCP (Port 443)</option>
-                      <option value="xhttp">XHTTP sur TCP (Port 443)</option>
+                      <option value="grpc">gRPC / TLS</option>
+                      <option value="httpupgrade">HTTPUpgrade / TLS</option>
+                      <option value="xhttp">XHTTP / TLS</option>
                     </select>
                   </div>
 
@@ -2385,12 +2386,12 @@ export default function App() {
                       <div className="md:col-span-2 rounded-xl border border-amber-900/80 bg-amber-950/15 p-3">
                         <label className="block text-amber-200 font-semibold mb-1">SNI TLS — nom présenté au serveur TLS</label>
                         <input type="text" value={masterConfig.sniHost} onChange={(e) => setMasterConfig({ ...masterConfig, sniHost: e.target.value })} className="w-full bg-[#03060e] border border-amber-800 rounded-lg px-3 py-3 text-amber-100 disabled:opacity-50" placeholder={masterConfig.transport === 'tcp' ? 'Non utilisé pour TCP direct' : 'Nom couvert par le certificat présenté'} disabled={masterConfig.transport === 'tcp'} required={masterConfig.transport !== 'tcp'} />
-                        <p className="mt-1 text-slate-400">Pour ce déploiement, Caddy présente le certificat associé à la variable VPN_DOMAIN. Pour WS, gRPC, HTTPUpgrade et XHTTP, le SNI doit donc être exactement ce domaine.</p>
+
                       </div>
                       <div className="md:col-span-2">
                         <label className="block text-slate-300 font-semibold mb-1">Chemin de transport</label>
-                        <input type="text" value={masterConfig.path || '/@abess237'} readOnly className="w-full bg-[#03060e] border border-slate-800 rounded-lg px-3 py-2 text-slate-300" />
-                        <p className="mt-1 text-slate-500">Le chemin technique est généré par Xray selon le protocole et le transport.</p>
+                        <input type="text" value={masterConfig.path || ''} onChange={e => setMasterConfig({...masterConfig, path:e.target.value})} className="w-full bg-[#03060e] border border-slate-800 rounded-lg px-3 py-2 text-slate-300" />
+
                       </div>
                     </>
                   )}
@@ -2550,7 +2551,7 @@ export default function App() {
         )}
 
         {/* ========================================================================= */}
-        
+
         {/* ========================================================================= */}
         {/* TAB: AUDIT LEDGER & TRANSACTIONS */}
         {/* ========================================================================= */}
@@ -3585,6 +3586,12 @@ export default function App() {
                 </div>
               </div>
 
+              <label className="block text-sm text-slate-300">Identifiant trafic
+                <input aria-label="Identifiant trafic" value={newTokenTrafficId} onChange={e => setNewTokenTrafficId(e.target.value)} className="w-full bg-slate-950 rounded-lg p-3" />
+              </label>
+              <label className="block text-sm text-slate-300">UUID
+                <input aria-label="UUID VPN" value={newTokenUuid} onChange={e => setNewTokenUuid(e.target.value)} className="w-full bg-slate-950 rounded-lg p-3" />
+              </label>
               <div>
                 <label className="block text-slate-300 mb-1 font-bold">Nom / Référence Client (Facultatif)</label>
                 <input
@@ -3711,7 +3718,7 @@ export default function App() {
       )}
 
       {/* ========================================================================= */}
-      
+
       {/* ========================================================================= */}
       {/* MODAL: BATCH / BULK TOKEN GENERATION (COMMERCIAL VOUCHERS) */}
       {/* ========================================================================= */}

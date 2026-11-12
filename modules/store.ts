@@ -47,8 +47,7 @@ const names = [
 ];
 
 /** Transactional document adapter preserves the established API while moving
- * every commercial aggregate into one PostgreSQL commit. Runtime Xray files
- * remain on the shared volume. JSON mode is explicitly development-only. */
+ * every commercial aggregate and external counter baseline into one PostgreSQL commit. JSON mode is explicitly development-only. */
 export class DocumentStore {
   readonly pool: Pool | null;
   private context = new AsyncLocalStorage<Transaction>();

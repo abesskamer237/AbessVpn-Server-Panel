@@ -147,10 +147,6 @@ export function OperationsCenter({
         <h3>
           <Server /> Nœuds VPN
         </h3>
-        <p>
-          Associez ensuite l’hôte du nœud à un profil d’infrastructure. L’agent
-          récupère uniquement les licences affectées à cet hôte.
-        </p>
         <form
           className="node-form"
           onSubmit={(e) => {

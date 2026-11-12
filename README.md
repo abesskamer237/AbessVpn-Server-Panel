@@ -1,6 +1,6 @@
-# ABESS VPN — panneau, licences et Xray
+# ABESS VPN — backend de serveurs VPN externes
 
-Control plane Node/Express, panneau React et data plane officiel Xray-core, avec HTTPS Caddy. Le client Android Flutter est maintenu dans [AbessVpn-Cyber](https://github.com/abesskamer237/AbessVpn-Cyber).
+Backend Node/Express et panneau React pour des serveurs VPN configurés manuellement sur des VPS externes. Caddy sert uniquement le panneau HTTPS. Le client Android Flutter est maintenu dans [AbessVpn-Cyber](https://github.com/abesskamer237/AbessVpn-Cyber).
 
 ## Fonctions
 
@@ -9,9 +9,11 @@ Control plane Node/Express, panneau React et data plane officiel Xray-core, avec
 - Double authentification TOTP, codes de récupération à usage unique, sessions révocables, changement de mot de passe et cookie de panneau HttpOnly.
 - Règlements **manuels** MTN MoMo / Orange Money, déclaration de référence, vérification par un administrateur et factures après confirmation.
 - Sauvegardes AES-GCM, copie S3 optionnelle, supervision et alertes.
-- Agent de nœud distant avec isolation des licences, rapprochement des compteurs et arrêt du moteur après perte prolongée du contrôle.
+- API de relevés authentifiés par VPS et agent facultatif en lecture seule, isolation des licences et rapprochement persistant des compteurs réels.
 
-Les transports commercialisés sont **VLESS avec TLS** : WebSocket, gRPC, HTTPUpgrade et XHTTP. VMess, Trojan, Shadowsocks, WireGuard, SSH et mKCP ne sont pas provisionnés. VLESS/TCP sans TLS est désactivé par défaut ; TCP/10050 n’est pas exposé par le Compose sécurisé.
+Les exports client prennent en charge **VLESS avec TLS** : WebSocket, gRPC, HTTPUpgrade et XHTTP. Aucun service VPN ni utilisateur SSH n’est provisionné. Les comptes SSH existants peuvent être importés et exportés. VLESS/TCP sans TLS est désactivé par défaut ; TCP/10050 n’est pas exposé par le Compose sécurisé.
+
+Configuration manuelle, API de compteurs, import SSH et responsabilités d’application des quotas : [Serveurs externes](docs/EXTERNAL_SERVERS.md).
 
 ## Développement
 
@@ -24,6 +26,8 @@ npm run build
 npm run build:server
 node scripts/test-security.mjs
 node --import tsx scripts/test-platform.mjs
+node --import tsx scripts/test-external-backend.mjs
+node scripts/test-mobile-contract.mjs
 # TEST_DATABASE_URL doit désigner une base de test où créer/supprimer un schéma isolé.
 node --import tsx scripts/test-postgres.mjs
 npx playwright install chromium
@@ -49,9 +53,9 @@ Configurer dans GitHub Actions :
 | `ADMIN_INITIAL_PASSWORD`, `MASTER_SECRET` | Secrets optionnels | Générés lors du premier déploiement si absents, puis préservés |
 | `ADMIN_NAME`, `VPS_PORT` | Variables optionnelles | Nom et port SSH |
 
-Le workflow `Deploy ABESS VPN to VPS` valide puis déploie sur `main`. Les identifiants initiaux générés sont conservés dans `~/abessvpn-server/INITIAL_ADMIN_CREDENTIALS.txt`, mode 600 ; les enregistrer dans un gestionnaire sécurisé puis retirer ce fichier. Le `.env` du VPS conserve les clés et mots de passe PostgreSQL stables. Les options S3, MFA et alertes saisies sur le VPS sont préservées lors des déploiements suivants.
+Le workflow `Deploy ABESS VPN to VPS` se lance uniquement manuellement sur `main` (`workflow_dispatch`). Les pushes ne déploient pas. Le Compose central lance seulement PostgreSQL, le backend et Caddy ; aucun moteur VPN. Les identifiants initiaux générés sont conservés dans `~/abessvpn-server/INITIAL_ADMIN_CREDENTIALS.txt`, mode 600 ; les enregistrer dans un gestionnaire sécurisé puis retirer ce fichier. Le `.env` du VPS conserve les clés et mots de passe PostgreSQL stables. Les options S3, MFA et alertes saisies sur le VPS sont préservées lors des déploiements suivants.
 
-Le domaine du control plane ne remplit pas automatiquement les profils commerciaux. Configurer explicitement l’hôte public et le SNI corrects dans Infrastructure avant émission. Le SNI doit correspondre au domaine Caddy du contrôleur ou à celui d’un nœud enregistré.
+Le domaine du control plane ne remplit pas automatiquement les profils commerciaux. Configurer explicitement l’hôte public et le SNI corrects dans Infrastructure avant émission. Le port, le chemin et le SNI doivent correspondre au service réellement configuré sur le VPS externe ; le domaine du panneau ne les impose pas.
 
 Après déploiement, vérifier `/api/v1/ping`, les pages Sécurité/Exploitation et une connexion Android réelle. Un build réussi ou un ping prêt ne prouve pas, à lui seul, l’absence de fuite DNS/IPv6 ni un tunnel utilisable sur téléphone.
 
@@ -81,6 +85,6 @@ Les essais gratuits et l’émission de licences SSH restent désactivés. Aucun
 
 ## Comptes SSH et application Android
 
-Le menu **Comptes SSH** permet de créer des accès SSH TCP et WebSocket/TLS, puis d’exporter leur configuration pour ABESS VPN 2.5.0+. Voir [le guide SSH](docs/SSH.md) pour les ports, l’import et les limites.
+Le menu **Comptes SSH** permet d’importer des accès SSH TCP et WebSocket/TLS existants, puis d’exporter leur configuration pour ABESS VPN 2.5.0+. Voir [Serveurs externes](docs/EXTERNAL_SERVERS.md) pour l’import et les limites.
 
 Le mode **SSH-WS HTTP Upgrade brut** est maintenant disponible sur 80/85, avec variantes TLS 443/2084, pour l’APK ABESS VPN 2.5.4+. Voir [le guide SSH-WS et la comparaison X-net](docs/SSH_WS_COMPATIBILITY.md).
