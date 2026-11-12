@@ -157,6 +157,23 @@ try{
   node.body.key=rotated.body.key;
   assert.equal((await send(lastAccepted)).status,200);assert.equal((await used()).bandwidthUsedGb,beforeRotation,'key rotation preserves traffic baselines');
   await call(`admin/nodes/${node.body.id}`,undefined,admin,'DELETE');assert.equal((await send(sample(1))).status,401);
+  // Resellers can import independent supplier accounts, but cannot own infrastructure or charge a peer.
+  const importer = await call('admin/resellers',{email:'ssh-importer@example.test',name:'SSH Importer',password:sellerPassword,initialCredits:2},admin);
+  assert.equal(importer.status,201);
+  const importerSession = (await call('auth/login',{email:'ssh-importer@example.test',password:sellerPassword})).body.token;
+  const supplierBody = {
+    config:{...config,host:'supplier.example.test',username:'supplier_imported',transport:'tcp',port:22,tls:false,payload:undefined},
+    days:7,quotaGb:1,maxConnections:1,resellerId:peer.body.id
+  };
+  const imported = await call('admin/ssh/accounts',supplierBody,importerSession);
+  assert.equal(imported.status,201,'reseller can register a provider-issued SSH account');
+  assert.equal(imported.body.resellerId,importer.body.id,'resellerId spoof cannot charge or assign a peer');
+  assert.equal((await call('auth/me',undefined,importerSession)).body.credits,1);
+  assert.equal((await call('admin/ssh/accounts',{...supplierBody,nodeId:node.body.id,config:{...supplierBody.config,username:'forbidden_import'}},importerSession)).status,403);
+  const importedConfig = await call(`admin/ssh/accounts/${imported.body.id}/config`,{transport:'tcp'},importerSession);
+  assert.equal(importedConfig.status,200);
+  assert.ok(!JSON.stringify(imported.body).includes(config.password),'imports never return supplier secrets in list metadata');
+
   console.log(`External backend passed (${database?'PostgreSQL':'JSON'}): manual endpoints/UUID, client exports, node isolation, real counters, duplicate/reset/replay validation, SSH import/export, persistence, reporting-only agent, no provisioned services.`);
 }finally{
   await stop();await rm(dir,{recursive:true,force:true});
