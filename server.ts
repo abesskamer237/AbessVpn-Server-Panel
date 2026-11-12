@@ -3021,7 +3021,7 @@ async function startServer() {
   app.get('/api/v1/admin/transactions', authenticate, (req, res) => {
     const user: AppUser = (req as any).user;
     const all = loadTransactions();
-    if (user.role === 'SUPER_ADMIN') {
+    if (user.role === 'SUPER_ADMIN' || user.role === 'ADMIN') {
       res.json(all);
     } else {
       res.json(all.filter(t => t.resellerId === user.id));
