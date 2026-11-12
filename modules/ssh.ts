@@ -12,6 +12,7 @@ export interface SshAccount {
   id: string; username: string; label: string;
   salt?: string; verifier?: string; nodeId?: string; connection?: SshConnection;
   resellerId?: string; resellerName?: string; renewalIds?: string[]; renewalRequests?: Record<string,{gb:number;days:number}>;
+  usageObservedAt?: string;
   online?: number; password: string; payload?: string;
   quotaBytes: number; usedBytes: number; maxConnections: number;
   expiresAt: string; enabled: boolean; createdAt: string;
@@ -19,7 +20,7 @@ export interface SshAccount {
 export interface SshState { accounts: SshAccount[] }
 export function safeSshAccount(a: SshAccount) {
   const {password, payload, salt, verifier, renewalIds, renewalRequests, ...safe} = a;
-  return safe;
+  return {...safe,trafficVerified:Boolean(a.usageObservedAt),usedBytes:a.usageObservedAt?a.usedBytes:null,online:a.usageObservedAt?a.online??null:null};
 }
 export function sshPayload(host: string, port = 80, pathname = '/ws-ssh') {
   const authority = [80,443].includes(port) ? host : `${host}:${port}`;
@@ -49,12 +50,15 @@ export function registerSsh(app:Express,d:{
       resellers:isAdmin?d.users().filter(u=>u.status==='active').map(u=>({id:u.id,name:u.name})):[],
       accounts:d.read().accounts.filter(a=>allowed(actor,a)).map(a=>({...safeSshAccount(a),
         connection:isAdmin?a.connection:a.connection?{transport:a.connection.transport,port:a.connection.port,hasPayload:a.connection.hasPayload}:undefined,
-        ready:ready(a.nodeId),effectiveEnabled:active(a),online:ready(a.nodeId)?a.online||0:0}))});
+        ready:ready(a.nodeId),effectiveEnabled:active(a),
+        trafficVerified:Boolean(a.usageObservedAt),usedBytes:a.usageObservedAt?a.usedBytes:null,
+        online:ready(a.nodeId)&&a.usageObservedAt?a.online||0:null}))});
   });
   app.post('/api/v1/admin/ssh/accounts',d.authenticate,admin,(req,res)=>{
     const actor=(req as any).user;
-    const nodeId=String(req.body?.nodeId||''), node=d.nodes().find(n=>n.id===nodeId&&n.enabled), config=req.body?.config;
-    if(!node||!config||config.host!==node.host||!SSH_MODES.includes(config.transport)||
+    const nodeId=String(req.body?.nodeId||'')||undefined, node=nodeId?d.nodes().find(n=>n.id===nodeId&&n.enabled):undefined, config=req.body?.config;
+    if((nodeId&&!node)||!config||typeof config.host!=='string'||!/^[a-zA-Z0-9](?:[a-zA-Z0-9.-]{0,251}[a-zA-Z0-9])?$/.test(config.host)||
+      (node&&config.host!==node.host)||!SSH_MODES.includes(config.transport)||
       !Number.isInteger(config.port)||config.port<1||config.port>65535||
       typeof config.password!=='string'||!config.password.length||config.password.length>1024||
       typeof config.fingerprint!=='string'||!/^SHA256:[A-Za-z0-9+/]{43}=?$/.test(config.fingerprint)||
@@ -71,7 +75,7 @@ export function registerSsh(app:Express,d:{
       !Number.isInteger(days)||days<1||days>366||!Number.isFinite(quotaGb)||quotaGb<0.01||quotaGb>100000||
       !Number.isInteger(maxConnections)||maxConnections<1||maxConnections>10)return res.status(400).json({error:'Client, durée, quota ou connexions invalides.'});
     const state=d.read();
-    if(state.accounts.length>=5000||state.accounts.some(a=>a.username===username&&a.nodeId===nodeId))return res.status(409).json({error:'Utilisateur déjà présent ou capacité atteinte.'});
+    if(state.accounts.length>=5000||state.accounts.some(a=>a.username===username&&a.connection?.host.toLowerCase()===config.host.toLowerCase()))return res.status(409).json({error:'Utilisateur déjà présent ou capacité atteinte.'});
     const payload=config.payload||'';
     const account:SshAccount={id:'ssh_'+crypto.randomUUID(),username,label,nodeId,resellerId:owner.id,resellerName:owner.name,
       connection:{host:config.host,port:config.port,transport:config.transport,fingerprint:config.fingerprint.replace(/=+$/,''),
@@ -118,11 +122,11 @@ export function registerSsh(app:Express,d:{
     const a=d.read().accounts.find(a=>a.id===req.params.id),actor=(req as any).user;
     if(!a)return res.sendStatus(404);if(!allowed(actor,a))return res.sendStatus(403);
     if(!a.connection||req.body?.transport!==a.connection.transport)return res.sendStatus(400);
-    if(!active(a)||!ready(a.nodeId))return res.status(503).json({error:'Accès SSH indisponible.'});
+    if(!active(a))return res.status(503).json({error:'Accès SSH indisponible.'});
     const {hasPayload,...connection}=a.connection;
     d.audit({action:'SSH_CREDENTIALS_EXPORTED',actor:actor.id,role:actor.role,details:a.id});
     res.set('Cache-Control','no-store').json({format:'abess-ssh-v1',protocol:'ssh',...connection,username:a.username,password:unseal(a.password,d.key),
       payload:a.payload?unseal(a.payload,d.key):a.connection.wire==='http-upgrade'?sshPayload(a.connection.tls?(a.connection.sni||a.connection.host):a.connection.host,a.connection.port,a.connection.path):null,
-      expiresAt:a.expiresAt,quotaGb:a.quotaBytes/1024**3,usedGb:a.usedBytes/1024**3});
+      expiresAt:a.expiresAt,quotaGb:a.quotaBytes/1024**3,usedGb:a.usageObservedAt?a.usedBytes/1024**3:null,trafficVerified:Boolean(a.usageObservedAt)});
   });
 }

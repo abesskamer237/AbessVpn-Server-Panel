@@ -75,6 +75,7 @@ export class Operations {
     private dir: string,
     private xrayReady: () => boolean,
     private postgres: () => boolean,
+    private monitoringConfigured: () => boolean = () => true,
   ) {}
   health() {
     let freeBytes = 0;
@@ -85,7 +86,7 @@ export class Operations {
     const alerts: string[] = [];
     this.errors=this.errors.filter(time=>Date.now()-time<300000);
     if(this.errors.length>5)alerts.push('API_ERRORS');
-    if (!this.xrayReady()) alerts.push("XRAY_NOT_READY");
+    if (this.monitoringConfigured() && !this.xrayReady()) alerts.push("XRAY_NOT_READY");
     if (!this.postgres()) alerts.push("POSTGRES_NOT_CONFIGURED");
     if (freeBytes < 1024 ** 3) alerts.push("LOW_DISK_SPACE");
     if (
@@ -102,6 +103,7 @@ export class Operations {
       ok: alerts.length === 0,
       alerts,
       xray: this.xrayReady(),
+      monitoringConfigured: this.monitoringConfigured(),
       storage: this.postgres() ? "postgresql" : "json-development",
       freeBytes,
       uptimeSeconds: Math.floor(process.uptime()),
@@ -110,8 +112,7 @@ export class Operations {
       backup: this.lastBackup,
     };
   }
-  async notify() {
-    const health = this.health();
+  async notify(health = this.health()) {
     const signature = health.alerts.join(",");
     if (!signature || !process.env.OPS_ALERT_WEBHOOK_URL) return;
     if (

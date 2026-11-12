@@ -1366,7 +1366,7 @@ const security = new SecurityService(
   () => process.env.MASTER_SECRET!
 );
 const activeSessions = security.sessions;
-const operations = new Operations(dataDir,isXrayReady,()=>Boolean(storage.pool));
+const operations = new Operations(dataDir,isXrayReady,()=>Boolean(storage.pool),()=>readExternalNodes().some(n=>n.enabled));
 
 // Anti-Brute-Force Rate Limiting for Authentication
 const loginAttempts = new Map<string, { count: number; blockedUntil: number }>();
@@ -1995,6 +1995,7 @@ async function startServer() {
         if (sample.usedBytes < old) throw new Error('SSH counter decreased');
         account.usedBytes += sample.usedBytes - old;
         account.online = sample.online || 0;
+        account.usageObservedAt = snapshot.observedAt;
         next[counterKey] = sample.usedBytes;
       }
       node.generation = snapshot.generation;
@@ -4442,7 +4443,7 @@ async function startServer() {
   await storage.transaction(performAutoBackup);
   const autoBackupTimer = setInterval(() => { void storage.transaction(performAutoBackup).catch(() => console.error('[BACKUP] Snapshot postponed.')); }, 24 * 3600 * 1000);
   autoBackupTimer.unref();
-  const operationsTimer=setInterval(()=>{void operations.notify().catch(()=>console.error('[MONITORING] Alert delivery unavailable.'));},60000);
+  const operationsTimer=setInterval(()=>{void storage.transaction(()=>operations.health()).then(health=>operations.notify(health)).catch(()=>console.error('[MONITORING] Alert delivery unavailable.'));},60000);
   operationsTimer.unref();
 
   // SSH provisioning is retired; do not run a background Dropbear account manager.

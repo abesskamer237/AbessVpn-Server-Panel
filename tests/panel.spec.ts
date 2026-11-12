@@ -100,7 +100,7 @@ test('SSH generator shows actual availability and protects credential export', a
   await login(page);
   await page.getByRole('navigation').getByRole('button', {name:'Comptes SSH',exact:true}).click();
   await expect(page.getByRole('heading', {name:'Comptes et tunnels SSH'})).toBeVisible();
-  await expect(page.getByText('● Passerelle indisponible', {exact:true})).toBeVisible();
+  await expect(page.getByText('● Sans suivi distant', {exact:true})).toBeVisible();
   await expect(page.getByRole('button', {name:'Importer le compte',exact:true})).toBeDisabled();
   await expect(page.getByRole('button', {name:'Afficher les paramètres et identifiants',exact:true})).toBeDisabled();
   await page.getByLabel('Transport SSH').selectOption('wss-alt');
@@ -200,4 +200,25 @@ test('sells a TCP payload account and lets its reseller renew it', async ({page,
   const ownerToken=(await ownerSession.json()).token;
   const owner=(await (await request.get('/api/v1/auth/me',{headers:{Authorization:`Bearer ${ownerToken}`}})).json());
   expect(owner.credits).toBe(5);
+});
+
+
+test('imports and exports a supplier account without any agent',async({page,request})=>{
+  const token=await login(page);
+  await page.getByRole('navigation').getByRole('button',{name:'Comptes SSH',exact:true}).click();
+  await page.getByLabel('Hôte SSH',{exact:true}).fill('supplier-browser.example.test');
+  await page.getByLabel('Utilisateur SSH',{exact:true}).fill('supplier_browser');
+  await page.getByLabel('Mot de passe SSH',{exact:true}).fill('supplier-account-fixture-password');
+  await page.getByLabel('Empreinte SSH').fill('SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA');
+  await page.getByRole('button',{name:'Importer le compte',exact:true}).click();
+  const row=page.getByRole('row').filter({has:page.locator('strong').filter({hasText:'supplier_browser'})});
+  await expect(row.getByRole('cell',{name:'Importé',exact:true})).toBeVisible();
+  await expect(row).toContainText('— / 10.00 Go');
+  await expect(row).toContainText('— / 1');
+  await page.getByRole('button',{name:'Afficher les paramètres et identifiants',exact:true}).click();
+  await expect(page.locator('pre')).toContainText('supplier-browser.example.test');
+  await expect(page.locator('pre')).toContainText('"trafficVerified": false');
+  const accounts=(await (await request.get('/api/v1/admin/ssh',{headers:{Authorization:`Bearer ${token}`}})).json()).accounts;
+  const account=accounts.find((a:any)=>a.username==='supplier_browser');
+  expect(account.nodeId).toBeUndefined();expect(account.usedBytes).toBeNull();expect(account.online).toBeNull();
 });

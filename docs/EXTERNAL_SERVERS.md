@@ -1,8 +1,16 @@
-# Serveurs externes configurés manuellement
+# Comptes et serveurs externes
 
 Le panneau gère les données commerciales et les exports client. Il ne crée, ne démarre, ne recharge ni n'arrête un moteur VPN, un compte système SSH ou un proxy de tunnel. Le Compose central contient PostgreSQL, l'API et Caddy pour le panneau HTTPS. Le Compose de nœud ne contient qu'un agent de statistiques, sans port entrant et avec un montage de statistiques en lecture seule.
 
-## Association
+## Import simple d’un compte fournisseur
+
+Un compte créé chez un fournisseur peut être importé sans posséder son VPS, sans API et sans agent. Dans Comptes SSH, saisir l’hôte, le port, l’utilisateur, le mot de passe, l’empreinte SHA-256 vérifiée, le transport et les paramètres éventuels de payload/TLS. Le sélecteur de serveur géré est facultatif. Un JSON peut aussi être importé directement sans `nodeId`. L’export est disponible sans heartbeat distant ; aucun serveur ni agent n’est créé automatiquement.
+
+La consommation et les connexions sont inconnues tant qu’aucune source ne les mesure : l’API retourne `usedBytes:null`, `online:null`, `trafficVerified:false` et l’interface affiche « — ». Le statut « Importé » n’affirme pas que le fournisseur a validé les identifiants. Une source facultative peut enrichir ces données ultérieurement ; les mesures déjà reçues restent conservées avec leur date.
+
+Les crédits, ventes, suspensions, quotas et dates du panneau restent des données commerciales locales. Prolonger un dossier ou suspendre son export ne renouvelle ni ne coupe le compte chez le fournisseur. Le propriétaire doit effectuer cette opération chez son fournisseur et conserver des dates cohérentes. Aucun trafic réel, débit ou renouvellement distant n’est inventé.
+
+## Association facultative à un serveur avec agent
 
 1. Configurer le VPN et ses utilisateurs indépendamment, sur chaque VPS. Conserver ses volumes et ses services existants.
 2. Enregistrer le VPS dans **Exploitation**. Conserver son ID et sa clé unique dans un gestionnaire de secrets. Chaque clé ne peut transmettre que les relevés du VPS correspondant.

@@ -37,6 +37,17 @@ const observed=()=>new Date(Date.now()+(++tick)).toISOString();
 try{
   await start();
   const auth=await call('auth/login',{email:env.ADMIN_EMAIL,password});assert.equal(auth.status,200);const admin=auth.body.token;
+  const standaloneConfig={host:'supplier.example.test',port:22,username:'supplier_user',password:'existing-supplier-fixture',transport:'tcp',fingerprint:'SHA256:'+'A'.repeat(43)};
+  const standalone=await call('admin/ssh/accounts',{config:standaloneConfig,days:3,quotaGb:1,maxConnections:1},admin);
+  assert.equal(standalone.status,201);assert.equal(standalone.body.nodeId,undefined);assert.equal(standalone.body.usedBytes,null);
+  const standaloneExport=await call(`admin/ssh/accounts/${standalone.body.id}/config`,{transport:'tcp'},admin);
+  assert.equal(standaloneExport.status,200,'an imported supplier account does not require an agent');
+  assert.equal(standaloneExport.body.host,standaloneConfig.host);assert.equal(standaloneExport.body.usedGb,null);assert.equal(standaloneExport.body.trafficVerified,false);
+  const standaloneList=(await call('admin/ssh',undefined,admin)).body.accounts.find(a=>a.id===standalone.body.id);
+  assert.equal(standaloneList.usedBytes,null);assert.equal(standaloneList.online,null);
+  assert.equal((await call('admin/nodes',undefined,admin)).body.length,0,'manual import does not create a managed server');
+  const manualHealth=(await call('admin/operations',undefined,admin)).body;
+  assert.equal(manualHealth.monitoringConfigured,false);assert.ok(!manualHealth.alerts.includes('XRAY_NOT_READY'));
   const node=await call('admin/nodes',{name:'Manual VPS',host:'external.example.test'},admin);assert.equal(node.status,201);
   const other=await call('admin/nodes',{name:'Other VPS',host:'other.example.test'},admin);assert.equal(other.status,201);
   const profile=await call('admin/protocol-configs',{name:'Manual TLS',serverHost:'external.example.test',serverPort:8443,protocol:'vless',transport:'ws',path:'/custom/vpn',sniHost:'certificate.example.test',host:'header.example.test'},admin);assert.equal(profile.status,201);
@@ -76,7 +87,7 @@ try{
   const invalidSsh=sample(250,'manual-process-2');invalidSsh.accounts=[{id:ssh.body.id,usedBytes:100}];
   assert.equal((await send(invalidSsh)).status,400);assert.equal((await used()).bandwidthUsedGb,beforeInvalidSsh,'SSH failure cannot partially bill VPN counters');
   const exported=await call(`admin/ssh/accounts/${ssh.body.id}/config`,{transport:config.transport},admin);assert.equal(exported.status,200);assert.equal(exported.body.password,config.password);assert.equal(exported.body.port,2084);assert.equal(exported.body.path,config.path);
-  const sshList=await call('admin/ssh',undefined,admin);assert.equal(sshList.body.accounts[0].usedBytes,1234);assert.ok(!JSON.stringify(sshList.body).includes(config.password));
+  const sshList=await call('admin/ssh',undefined,admin);assert.equal(sshList.body.accounts.find(a=>a.id===ssh.body.id).usedBytes,1234);assert.ok(!JSON.stringify(sshList.body).includes(config.password));
   // A paid SSH account follows the same credit ledger and tenant hierarchy as VLESS.
   const sellerPassword=randomBytes(24).toString('hex');
   const seller=await call('admin/resellers',{email:'ssh-seller@example.test',name:'SSH Seller',password:sellerPassword,initialCredits:4},admin);assert.equal(seller.status,201);

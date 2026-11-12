@@ -22,6 +22,7 @@ export function SshCenter({ token, isAdmin = true }: { token: string; isAdmin?: 
   const [path, setPath] = useState('/ws-ssh');
   const [sni, setSni] = useState('');
   const [importJson, setImportJson] = useState("");
+  const [host, setHost] = useState('');
   const [nodeId, setNodeId] = useState("");
   const [label, setLabel] = useState("");
   const [days, setDays] = useState(30);
@@ -93,8 +94,8 @@ export function SshCenter({ token, isAdmin = true }: { token: string; isAdmin?: 
         </div>
         <span className={state?.ready ? "text-emerald-400" : "text-amber-400"}>
           {state?.ready
-            ? "● Passerelle opérationnelle"
-            : "● Passerelle indisponible"}
+            ? "● Suivi connecté"
+            : "● Sans suivi distant"}
         </span>
         <button
           onClick={() => void action(refresh)}
@@ -116,10 +117,10 @@ export function SshCenter({ token, isAdmin = true }: { token: string; isAdmin?: 
           e.preventDefault();
           void action(async () => {
             const a = await call("/accounts", {
-              config: importJson.trim() ? JSON.parse(importJson) : {host:state.nodes.find((n: any)=>n.id===nodeId)?.host,
+              config: importJson.trim() ? JSON.parse(importJson) : {host:host.trim(),
                 transport:mode,port,username,password,fingerprint,payload:['tcp','ws','ws-alt','wss-raw','wss-raw-alt'].includes(mode)?payload||undefined:undefined,path,tls:mode.startsWith('wss'),sni},
               resellerId: resellerId || undefined,
-              nodeId,
+              nodeId:nodeId||undefined,
               label,
               days,
               quotaGb,
@@ -135,11 +136,12 @@ export function SshCenter({ token, isAdmin = true }: { token: string; isAdmin?: 
       >
         <label className="text-sm">
           Serveur
-          <select aria-label="Serveur SSH" required value={nodeId} onChange={e => setNodeId(e.target.value)} className="w-full bg-slate-950 p-2">
+          <select aria-label="Serveur SSH" value={nodeId} onChange={e => {setNodeId(e.target.value);setHost(state?.nodes.find((n:any)=>n.id===e.target.value)?.host||'');}} className="w-full bg-slate-950 p-2">
             <option value="">—</option>
             {state?.nodes?.map((n: any) => <option key={n.id} value={n.id}>{n.name}</option>)}
           </select>
         </label>
+        <label className="text-sm">Hôte<input aria-label="Hôte SSH" value={host} onChange={e=>{setHost(e.target.value);setNodeId('');}} className="w-full bg-slate-950 p-2" /></label>
         <label className="text-sm">Revendeur
           <select aria-label="Revendeur SSH" value={resellerId} onChange={e=>setResellerId(e.target.value)} className="w-full bg-slate-950 p-2">
             <option value="">—</option>{state?.resellers?.map((r:any)=><option key={r.id} value={r.id}>{r.name}</option>)}
@@ -208,7 +210,7 @@ export function SshCenter({ token, isAdmin = true }: { token: string; isAdmin?: 
           />
         </label>
         <button
-          disabled={busy || !nodeId || (!importJson && (!username || !password || !fingerprint))}
+          disabled={busy || (!importJson && (!host.trim() || !username || !password || !fingerprint))}
           className="self-end bg-emerald-500 text-slate-950 font-bold rounded-lg p-2 disabled:opacity-40"
         >
           Importer le compte
@@ -262,14 +264,14 @@ export function SshCenter({ token, isAdmin = true }: { token: string; isAdmin?: 
                           ? "Expiré"
                           : a.usedBytes >= a.quotaBytes
                             ? "Quota épuisé"
-                            : "Actif"}
+                            : a.trafficVerified ? "Actif" : "Importé"}
                     </td>
                     <td className="p-3">
-                      {(a.usedBytes / 1024 ** 3).toFixed(3)} /{" "}
+                      {a.trafficVerified ? (a.usedBytes / 1024 ** 3).toFixed(3) : "—"} /{" "}
                       {(a.quotaBytes / 1024 ** 3).toFixed(2)} Go
                     </td>
                     <td className="p-3">
-                      {a.online} / {a.maxConnections}
+                      {a.online ?? "—"} / {a.maxConnections}
                     </td>
                     <td className="p-3">
                       {new Date(a.expiresAt).toLocaleDateString("fr-FR")}

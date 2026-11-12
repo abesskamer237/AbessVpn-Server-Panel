@@ -77,7 +77,7 @@ export function OperationsCenter({
                 Stockage : <strong>{health.storage}</strong>
               </p>
               <p>
-                Xray : <strong>{health.xray ? "Prêt" : "Indisponible"}</strong>
+                Suivi : <strong>{!health.monitoringConfigured ? "Non configuré" : health.xray ? "Prêt" : "Indisponible"}</strong>
               </p>
               <p>
                 Disque disponible : {(health.freeBytes / 1024 ** 3).toFixed(1)}{" "}

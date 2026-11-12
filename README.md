@@ -1,6 +1,6 @@
 # ABESS VPN — backend de serveurs VPN externes
 
-Backend Node/Express et panneau React pour des serveurs VPN configurés manuellement sur des VPS externes. Caddy sert uniquement le panneau HTTPS. Le client Android Flutter est maintenu dans [AbessVpn-Cyber](https://github.com/abesskamer237/AbessVpn-Cyber).
+Backend Node/Express et panneau React pour des comptes VPN/SSH créés ailleurs et, facultativement, des VPS externes avec agent de suivi. Caddy sert uniquement le panneau HTTPS. Le client Android Flutter est maintenu dans [AbessVpn-Cyber](https://github.com/abesskamer237/AbessVpn-Cyber).
 
 ## Fonctions
 
@@ -14,7 +14,7 @@ Backend Node/Express et panneau React pour des serveurs VPN configurés manuelle
 
 Les exports client prennent en charge **VLESS avec TLS** : WebSocket, gRPC, HTTPUpgrade et XHTTP. Aucun service VPN ni utilisateur SSH n’est provisionné. Les comptes SSH existants peuvent être importés et exportés. VLESS/TCP sans TLS est désactivé par défaut ; TCP/10050 n’est pas exposé par le Compose sécurisé.
 
-Configuration manuelle, API de compteurs, import SSH et responsabilités d’application des quotas : [Serveurs externes](docs/EXTERNAL_SERVERS.md).
+Import d’un compte fournisseur sans API ni agent, API de compteurs facultative, import SSH et responsabilités d’application des quotas : [Serveurs externes](docs/EXTERNAL_SERVERS.md).
 
 ## Développement
 
