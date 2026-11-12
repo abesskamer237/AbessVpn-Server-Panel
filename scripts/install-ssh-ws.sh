@@ -27,8 +27,13 @@ if [[ ! -f node_modules/ws/package.json ]]; then
 fi
 install -d -m 0700 /etc/abess-ssh-ws /var/lib/abess-ssh-ws
 if ! getent group abessvpn >/dev/null; then groupadd --system abessvpn; fi
+if ! getent group abess-gateway >/dev/null; then groupadd --system abess-gateway; fi
 if ! id abess-gateway >/dev/null 2>&1; then
-  useradd --system --no-create-home --shell /usr/sbin/nologin abess-gateway
+  useradd --system --gid abess-gateway --no-create-home --shell /usr/sbin/nologin abess-gateway
+fi
+if [[ "$(id -gn abess-gateway)" != "abess-gateway" ]]; then
+  echo "The existing abess-gateway user must have its dedicated private group." >&2
+  exit 1
 fi
 # The unprivileged gateway reads a root-written policy and writes only its own counters.
 chmod 0751 /var/lib/abess-ssh-ws
