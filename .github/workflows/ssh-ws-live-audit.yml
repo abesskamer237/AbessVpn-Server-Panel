@@ -48,8 +48,23 @@ jobs:
           set -euo pipefail
           PORT="${VPS_PORT:-22}"
           install -d -m 700 "$HOME/.ssh"
-          ssh-keyscan -T 10 -p "$PORT" -t ed25519 "$VPS_HOST" 2>/dev/null > "$HOME/.ssh/known_hosts"
-          ssh-keygen -lf "$HOME/.ssh/known_hosts" -E sha256 | grep -Fq 'SHA256:LgoMnkXsbf7RYOw5LRm0ErLVQ6n0JDJBJIAltFxOChc'
+          matched=no
+          for attempt in 1 2 3; do
+            ssh-keyscan -T 12 -p "$PORT" -t ed25519 "$VPS_HOST" 2>/dev/null > "$HOME/.ssh/known_hosts" || true
+            if [[ -s "$HOME/.ssh/known_hosts" ]]; then
+              echo "SSH_SCAN_PRESENT=yes"
+              ssh-keygen -lf "$HOME/.ssh/known_hosts" -E sha256 | sed -E 's/^.*(SHA256:[A-Za-z0-9+/]+).*$/SSH_SCAN_FINGERPRINT=\\1/'
+              if ssh-keygen -lf "$HOME/.ssh/known_hosts" -E sha256 | grep -Fq 'SHA256:LgoMnkXsbf7RYOw5LRm0ErLVQ6n0JDJBJIAltFxOChc'; then
+                matched=yes
+                break
+              fi
+              echo "::error::VPS SSH host key differs from pinned pre-install fingerprint"
+              exit 1
+            fi
+            echo "::warning::VPS SSH scan attempt $attempt did not return an Ed25519 key"
+            sleep 3
+          done
+          [[ "$matched" = yes ]] || { echo "::error::VPS SSH fingerprint could not be checked"; exit 1; }
           chmod 0600 "$HOME/.ssh/known_hosts"
           sudo apt-get update -qq
           sudo apt-get install -y -qq sshpass >/dev/null
