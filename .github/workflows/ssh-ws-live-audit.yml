@@ -66,11 +66,18 @@ jobs:
           done
           [[ "$matched" = yes ]] || { echo "::error::VPS SSH fingerprint could not be checked"; exit 1; }
           chmod 0600 "$HOME/.ssh/known_hosts"
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq sshpass >/dev/null
+          echo 'STAGE_SSH_HOST_FINGERPRINT=verified'
+          if ! command -v sshpass >/dev/null 2>&1; then
+            echo 'STAGE_SSHPASS_INSTALL=starting'
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq sshpass >/dev/null
+          fi
+          echo 'STAGE_SSHPASS=ready'
           export SSHPASS="$VPS_PASSWORD"
+          echo 'STAGE_REMOTE_SSH=connecting'
           sshpass -e ssh -p "$PORT" -o StrictHostKeyChecking=yes -o PubkeyAuthentication=no -o PreferredAuthentications=password,keyboard-interactive "$VPS_USER@$VPS_HOST" 'bash -s' <<'REMOTE'
           set -euo pipefail
+          echo 'STAGE_REMOTE_SSH=authenticated'
           for service in abess-ssh-ws-sshd abess-ssh-ws-gateway abess-ssh-ws-reconciler; do
             systemctl is-active --quiet "$service" || exit 1
             echo "SERVICE_${service}=active"
