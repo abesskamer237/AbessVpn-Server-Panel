@@ -50,7 +50,7 @@ const connect=async token=>{
   await once(ws,'open');
   return ws;
 };
-const rejected=async token=>{
+const rejected=async (token,step='unknown')=>{
   const ws=new WebSocket(`ws://127.0.0.1:${gateway.port}/ssh-ws/${token}`);
   return new Promise((resolve,reject)=>{
     ws.once('unexpected-response',(_req,response)=>{
@@ -59,21 +59,22 @@ const rejected=async token=>{
       resolve(status);
     });
     ws.once('error',reject);
-    ws.once('open',()=>reject(Error('Unexpected connection authorization')));
+    ws.once('open',()=>reject(Error('Unexpected connection authorization at '+step)));
   });
 };
 try {
   const health=await (await fetch(`http://127.0.0.1:${gateway.port}/healthz`)).json();
   assert.equal(health.policyReady,true);
-  assert.equal(await rejected('invalid'),404);
-  assert.equal(await rejected(key.slice(0,-1)+'A'),404);
-  assert.equal(await rejected(''),404);
+  assert.equal(await rejected('invalid','invalid-token'),404);
+  const altered=key.slice(0,-1)+(key.endsWith('A')?'B':'A');
+  assert.equal(await rejected(altered,'tampered-token'),404);
+  assert.equal(await rejected('','empty-token'),404);
   const a=await connect(key);
   const received=once(a,'message');
   // The banner may already have been emitted immediately after opening;
   // use a second connection with a listener installed before its open event.
   assert.equal(gateway.ledger.online(id),1);
-  assert.equal(await rejected(key),404,'a second socket must not bypass per-user maxConnections');
+  assert.equal(await rejected(key,'concurrent-connection-limit'),404,'a second socket must not bypass per-user maxConnections');
   const b=await connect(keyB);
   assert.equal(gateway.ledger.online(idB),1);
   const message=once(b,'message');
@@ -93,8 +94,8 @@ try {
   a.send(Buffer.alloc(3500,0x34));
   await exhausted;
   assert.ok(gateway.ledger.used(id)<=4096);
-  assert.ok(gateway.ledger.used(id)>0);
-  assert.equal(await rejected(key),404,'a spent quota is not reset by reconnecting');
+  assert.equal(gateway.ledger.used(id),4096,'full duplex SSH byte cap must be exact');
+  assert.equal(await rejected(key,'spent-quota'),404,'a spent quota is not reset by reconnecting');
   b.close();
   await once(b,'close');
 
@@ -116,7 +117,7 @@ try {
   const before=JSON.parse(fs.readFileSync(usageFile,'utf8')).balances[id];
   gateway=await startGateway(gatewayOptions);
   assert.ok(gateway.ledger.used(id)>=before,'restart must not reset consumed bytes');
-  assert.equal(await rejected(key),404);
+  assert.equal(await rejected(key,'disabled-after-restart'),404);
   assert.throws(()=>new QuotaLedger({usageFile:'/missing/usage.json',reportFile:''}));
 } finally {
   await gateway.close().catch(()=>{});
