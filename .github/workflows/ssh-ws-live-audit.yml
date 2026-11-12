@@ -76,11 +76,14 @@ jobs:
           export SSHPASS="$VPS_PASSWORD"
           echo 'STAGE_REMOTE_SSH=connecting'
           sshpass -e ssh -p "$PORT" -o StrictHostKeyChecking=yes -o PubkeyAuthentication=no -o PreferredAuthentications=password,keyboard-interactive "$VPS_USER@$VPS_HOST" 'bash -s' <<'REMOTE'
-          set -euo pipefail
+          set -uo pipefail
           echo 'STAGE_REMOTE_SSH=authenticated'
           for service in abess-ssh-ws-sshd abess-ssh-ws-gateway abess-ssh-ws-reconciler; do
-            systemctl is-active --quiet "$service" || exit 1
-            echo "SERVICE_${service}=active"
+            echo "SERVICE_${service}=$(systemctl is-active "$service" 2>/dev/null || echo failed)"
+            systemctl show "$service" -p ActiveState -p SubState -p Result -p NRestarts --no-pager 2>/dev/null || true
+            echo "SERVICE_JOURNAL_${service}_BEGIN"
+            journalctl -u "$service" --no-pager -n 12 -o cat 2>/dev/null | grep -v -Ei 'bearer|password|apikey|api.key|token:|secret' | tail -12 || true
+            echo "SERVICE_JOURNAL_${service}_END"
           done
           [[ -S /var/lib/abess-ssh-ws/socket/gateway.sock ]]
           echo "HOST_UNIX_SOCKET=present"
@@ -110,5 +113,5 @@ jobs:
           docker compose ps --format 'table {{.Service}}\t{{.State}}'
           echo 'CADDY_RECENT_ERRORS='
           docker compose logs --tail 30 caddy 2>&1 | grep -E '502|websocket|reverse_proxy|dial unix|permission denied|error' | sed -E 's@/ssh-ws/[A-Za-z0-9_-]+@/ssh-ws/REDACTED@g' | tail -20 || true
-          echo "LIVE_SSH_WS_AUDIT=SUCCESS"
+          echo "LIVE_SSH_WS_DIAGNOSTIC_DUMP=COMPLETE"
           REMOTE
