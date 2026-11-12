@@ -23,7 +23,14 @@ export function ResellerCenter({resellers,accounts,busy,currentUser,request,refr
 
   const rows=useMemo(()=>resellers.map(r=>{
     const mine=accounts.filter(a=>a.resellerId===r.id&&a.managed);
-    const branchIds=new Set([r.id,...resellers.filter(x=>Array.isArray(x.hierarchyPath)&&x.hierarchyPath.includes(r.name)).map(x=>x.id)]);
+    const branchIds=new Set<string>([r.id]);
+    const pending=[r.id];
+    while(pending.length){
+      const parent=pending.pop()!;
+      for(const child of resellers){
+        if(child.parentId===parent&&!branchIds.has(child.id)){branchIds.add(child.id);pending.push(child.id)}
+      }
+    }
     const branch=accounts.filter(a=>a.resellerId&&branchIds.has(a.resellerId)&&a.managed);
     const active=mine.filter(a=>a.effectiveEnabled).length;
     const soldGb=mine.reduce((n,a)=>n+bytesToGb(a.quotaBytes),0);
