@@ -1,0 +1,477 @@
+name: One-time ABESS panel and managed SSH-WS installation
+
+on:
+  push:
+    branches: [deploy/sshws-first-install-20261112]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: abessvpn-production-deploy
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.event.head_commit.message == 'ops: perform one-time full VPS and SSH-WS installation'
+    services:
+      postgres:
+        image: postgres:16-bookworm
+        env:
+          POSTGRES_USER: abess
+          POSTGRES_PASSWORD: ci-only-disposable-postgres-password
+          POSTGRES_DB: abess_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U abess -d abess_test"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    name: Validate code and container images
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Security regression tests
+        run: node --import tsx scripts/test-security.mjs
+
+      - name: Validate and test SSH-WS gateway and reconciler
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/install-ssh-ws.sh
+          node --check scripts/ssh-ws-gateway.mjs
+          node --check scripts/ssh-ws-reconciler.mjs
+          node scripts/test-ssh-ws.mjs
+
+      - name: Verify MFA, backup encryption and manual transfer approval
+        run: node --import tsx scripts/test-platform.mjs
+
+      - name: Verify PostgreSQL migration and concurrent transactions
+        env:
+          TEST_DATABASE_URL: postgresql://abess:ci-only-disposable-postgres-password@127.0.0.1:5432/abess_test
+        run: node --import tsx scripts/test-postgres.mjs
+
+      - name: TypeScript check
+        run: npm run lint
+
+      - name: Build admin panel
+        run: npm run build
+
+      - name: Build API image
+        run: docker build --pull -f Dockerfile -t abessvpn-api:ci .
+
+      - name: Verify deployment commands preserve the remote script input
+        run: node scripts/test-deploy-stdin.mjs
+
+      - name: Verify external backend contract
+        run: node --import tsx scripts/test-external-backend.mjs
+
+      - name: Verify mobile API contract
+        run: node scripts/test-mobile-contract.mjs
+
+      - name: Verify official Xray traffic and real quota accounting
+        run: python3 scripts/test-xray-traffic.py
+
+      - name: Validate Compose file
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp .env.example .env
+          docker compose config -q
+          rm -f .env
+
+  deploy:
+    name: Deploy backend, HTTPS, independent SSH-WS and Caddy socket bridge
+    if: github.ref == 'refs/heads/deploy/sshws-first-install-20261112' && github.event.head_commit.message == 'ops: perform one-time full VPS and SSH-WS installation'
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+
+      - name: Select TLS domain for the fresh VPS
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          REQUESTED_DOMAIN: ${{ vars.VPN_DOMAIN }}
+        run: |
+          set -euo pipefail
+          domain="${REQUESTED_DOMAIN:-}"
+          if [[ "$VPS_HOST" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+            if [[ -n "$domain" ]] && ! getent ahostsv4 "$domain" | awk '{print $1}' | grep -Fxq "$VPS_HOST"; then
+              echo "::warning::The configured domain does not resolve to this fresh VPS, using the public IPv4 DNS name."
+              domain=""
+            fi
+            if [[ -z "$domain" ]]; then domain="$VPS_HOST.sslip.io"; fi
+            getent ahostsv4 "$domain" | awk '{print $1}' | grep -Fxq "$VPS_HOST" || {
+              echo "::error::Selected WSS domain does not resolve to the VPS IP"; exit 1;
+            }
+          fi
+          [[ -n "$domain" ]] || { echo "::error::No valid VPN_DOMAIN"; exit 1; }
+          echo "VPN_DOMAIN=$domain" >> "$GITHUB_ENV"
+          echo "Chosen HTTPS/WSS hostname: $domain"
+
+      - name: Validate deployment settings and prepare private environment file
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD || secrets.VPS_PASSWORD }}
+          VPS_PORT: ${{ vars.VPS_PORT }}
+          ACME_EMAIL: ${{ vars.ACME_EMAIL }}
+          ADMIN_EMAIL: ${{ vars.ADMIN_EMAIL }}
+          ADMIN_NAME: ${{ vars.ADMIN_NAME }}
+          ADMIN_INITIAL_PASSWORD: ${{ secrets.ADMIN_INITIAL_PASSWORD }}
+          MASTER_SECRET: ${{ secrets.MASTER_SECRET }}
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const crypto = require('node:crypto');
+          const required = ['VPS_HOST', 'VPS_USER', 'VPN_DOMAIN', 'ADMIN_EMAIL'];
+          for (const key of required) {
+            if (!process.env[key] || !process.env[key].trim()) {
+              throw new Error(`Missing GitHub secret/variable: ${key}`);
+            }
+          }
+          if (!process.env.VPS_SSH_KEY?.trim() && !process.env.VPS_SSH_PASSWORD?.trim()) {
+            throw new Error('Set VPS_SSH_KEY, VPS_SSH_PASSWORD, or VPS_PASSWORD in GitHub Actions secrets.');
+          }
+
+          // Generate unique credentials when the optional GitHub secrets are absent.
+          // The remote deployment persists them and preserves them on later deployments.
+          const generatedAdminPassword = !process.env.ADMIN_INITIAL_PASSWORD?.trim();
+          const adminInitialPassword = process.env.ADMIN_INITIAL_PASSWORD?.trim() || crypto.randomBytes(24).toString('hex');
+          const masterSecret = process.env.MASTER_SECRET?.trim() || crypto.randomBytes(32).toString('hex');
+          console.log(`::add-mask::${adminInitialPassword}`);
+          console.log(`::add-mask::${masterSecret}`);
+          if (adminInitialPassword.length < 16) {
+            throw new Error('ADMIN_INITIAL_PASSWORD must be at least 16 characters.');
+          }
+          if (masterSecret.length < 32) {
+            throw new Error('MASTER_SECRET must be at least 32 random characters.');
+          }
+          const hostname = process.env.VPN_DOMAIN;
+          const hostnamePattern = /^(?=.{1,253}$)([a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)(\.([a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?))*$/;
+          if (!hostnamePattern.test(hostname)) {
+            throw new Error('VPN_DOMAIN must be a hostname only, without https://, a port, or a path.');
+          }
+
+          const databasePassword = crypto.randomBytes(32).toString('hex');
+          const appDatabasePassword = crypto.randomBytes(32).toString('hex');
+          console.log(`::add-mask::${appDatabasePassword}`);
+          console.log(`::add-mask::${databasePassword}`);
+          const values = {
+            POSTGRES_PASSWORD: databasePassword,
+            POSTGRES_APP_PASSWORD: appDatabasePassword,
+            VPN_DOMAIN: hostname,
+            SSH_WS_HOST: process.env.VPS_HOST.trim(),
+            ACME_EMAIL: process.env.ACME_EMAIL || process.env.ADMIN_EMAIL,
+            ADMIN_EMAIL: process.env.ADMIN_EMAIL,
+            ADMIN_NAME: process.env.ADMIN_NAME || 'ABESS VPN Administrator',
+            ADMIN_INITIAL_PASSWORD: adminInitialPassword,
+            MASTER_SECRET: masterSecret
+          };
+          const envText = Object.entries(values)
+            .map(([key, value]) => key + '=' + JSON.stringify(value))
+            .join('\n') + '\n';
+          fs.writeFileSync('.deploy.env', envText, { mode: 0o600 });
+          if (generatedAdminPassword) {
+            const credentialsText = [
+              'ABESS VPN — identifiants initiaux du Super Administrateur',
+              'Email: ' + process.env.ADMIN_EMAIL,
+              'Mot de passe initial: ' + adminInitialPassword,
+              'Conservez ce fichier en lieu sûr, puis supprimez-le du VPS après sauvegarde des identifiants.',
+              ''
+            ].join('\n');
+            fs.writeFileSync('.deploy.credentials', credentialsText, { mode: 0o600 });
+          }
+          NODE
+
+      - name: Configure SSH authentication
+        shell: bash
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_SSH_KNOWN_HOSTS: ${{ secrets.VPS_SSH_KNOWN_HOSTS }}
+          VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD || secrets.VPS_PASSWORD }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_PORT: ${{ vars.VPS_PORT }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.ssh" "$HOME/.local/bin"
+          if [[ -n "${VPS_SSH_KEY:-}" ]]; then
+            printf '%s\n' "$VPS_SSH_KEY" > "$HOME/.ssh/id_ed25519"
+            chmod 600 "$HOME/.ssh/id_ed25519"
+          elif [[ -n "${VPS_SSH_PASSWORD:-}" ]]; then
+            if ! command -v sshpass >/dev/null 2>&1; then
+              sudo apt-get update
+              sudo apt-get install -y sshpass
+            fi
+          else
+            echo "Provide VPS_SSH_KEY (recommended) or VPS_SSH_PASSWORD." >&2
+            exit 1
+          fi
+          # SSH TOFU on a fresh, publicly scanned VPS: only use the exact
+          # Ed25519 host key fingerprint seen in the earlier preflight.
+          if [[ -z "${VPS_SSH_KNOWN_HOSTS:-}" ]]; then
+            echo "::warning::SSH trust-on-first-use: public key checked against previously recorded fingerprint."
+            ssh-keyscan -T 10 -p "${VPS_PORT:-22}" -t ed25519 "$VPS_HOST" 2>/dev/null > "$HOME/.ssh/known_hosts"
+          else
+            printf '%s\n' "$VPS_SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          fi
+          test -s "$HOME/.ssh/known_hosts"
+          ssh-keygen -lf "$HOME/.ssh/known_hosts" -E sha256 |
+            grep -Fq 'SHA256:LgoMnkXsbf7RYOw5LRm0ErLVQ6n0JDJBJIAltFxOChc' || {
+              echo "::error::Unexpected SSH host key; refusing to send credentials"; exit 1;
+            }
+          chmod 600 "$HOME/.ssh/known_hosts"
+          cat > "$HOME/.local/bin/abess-ssh" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [[ -s "$HOME/.ssh/id_ed25519" ]]; then
+            exec ssh -o StrictHostKeyChecking=yes -i "$HOME/.ssh/id_ed25519" -o BatchMode=yes -o IdentitiesOnly=yes "$@"
+          fi
+          export SSHPASS="$VPS_SSH_PASSWORD"
+          exec sshpass -e ssh -o StrictHostKeyChecking=yes -o PreferredAuthentications=password,keyboard-interactive -o PubkeyAuthentication=no "$@"
+          SH
+          cat > "$HOME/.local/bin/abess-scp" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [[ -s "$HOME/.ssh/id_ed25519" ]]; then
+            exec scp -o StrictHostKeyChecking=yes -i "$HOME/.ssh/id_ed25519" -o BatchMode=yes -o IdentitiesOnly=yes "$@"
+          fi
+          export SSHPASS="$VPS_SSH_PASSWORD"
+          exec sshpass -e scp -o StrictHostKeyChecking=yes -o PreferredAuthentications=password,keyboard-interactive -o PubkeyAuthentication=no "$@"
+          SH
+          chmod 700 "$HOME/.local/bin/abess-ssh" "$HOME/.local/bin/abess-scp"
+      - name: Install missing VPS deployment prerequisites
+        shell: bash
+        env:
+          VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD || secrets.VPS_PASSWORD }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ vars.VPS_PORT }}
+        run: |
+          set -euo pipefail
+          "$HOME/.local/bin/abess-ssh" -p "${VPS_PORT:-22}" -o StrictHostKeyChecking=yes "${VPS_USER}@${VPS_HOST}" 'bash -s' < scripts/prepare-vps.sh
+
+      - name: Preflight VPS without stopping existing services
+        shell: bash
+        env:
+          VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD || secrets.VPS_PASSWORD }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ vars.VPS_PORT }}
+        run: |
+          set -euo pipefail
+          VPS_PORT="${VPS_PORT:-22}"
+          DEST="${VPS_USER}@${VPS_HOST}"
+          "$HOME/.local/bin/abess-ssh" -p "$VPS_PORT" -o StrictHostKeyChecking=yes "$DEST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          command -v docker >/dev/null 2>&1 || { echo "::error::Docker is not installed on the VPS." >&2; exit 1; }
+          docker compose version >/dev/null 2>&1 || { echo "::error::Docker Compose plugin is missing." >&2; exit 1; }
+          command -v rsync >/dev/null 2>&1 || { echo "::error::rsync is not installed on the VPS." >&2; exit 1; }
+          command -v ss >/dev/null 2>&1 || { echo "::error::iproute2/ss is not installed on the VPS." >&2; exit 1; }
+          command -v curl >/dev/null 2>&1 || { echo "::error::curl is not installed on the VPS." >&2; exit 1; }
+          docker info >/dev/null 2>&1 || { echo "::error::SSH user must be able to run Docker non-interactively." >&2; exit 1; }
+          mkdir -p "$HOME/abessvpn-server"
+          test -w "$HOME/abessvpn-server" || { echo "::error::Cannot write to ~/abessvpn-server." >&2; exit 1; }
+          if [ ! -f "$HOME/abessvpn-server/.env" ] && docker volume inspect abessvpn-server_abessvpn_data >/dev/null 2>&1; then
+            echo "::error::ABESS persistent data volume exists but the deployment .env file is missing. Restore the original .env before deploying to avoid changing the master encryption key or losing the initial admin credential." >&2
+            exit 1
+          fi
+
+          existing_caddy=""
+          if [ -f "$HOME/abessvpn-server/docker-compose.yml" ]; then
+            existing_caddy="$(cd "$HOME/abessvpn-server" && docker compose -f docker-compose.yml ps -q caddy 2>/dev/null || true)"
+          fi
+          busy="$(ss -ltnH 2>/dev/null | awk '$4 ~ /:(80|443)$/ {print $4}' || true)"
+          if [ -n "$busy" ] && [ -z "$existing_caddy" ]; then
+            echo "::error::Ports 80/443 are occupied by another service. Deployment stopped to protect it." >&2
+            echo "$busy" >&2
+            exit 1
+          fi
+          echo "VPS preflight passed."
+          REMOTE
+
+      - name: Upload application without touching persistent volumes or environment files
+        shell: bash
+        env:
+          VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD || secrets.VPS_PASSWORD }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ vars.VPS_PORT }}
+        run: |
+          set -euo pipefail
+          VPS_PORT="${VPS_PORT:-22}"
+          DEST="${VPS_USER}@${VPS_HOST}"
+          # shellcheck disable=SC2016
+          remote_dir="$("$HOME/.local/bin/abess-ssh" -p "$VPS_PORT" -o StrictHostKeyChecking=yes "$DEST" 'printf "%s/abessvpn-server" "$HOME"')"
+          if [[ ! "$remote_dir" =~ ^/[A-Za-z0-9._/-]+$ ]]; then
+            echo '::error::Cannot determine a safe absolute VPS deployment directory.' >&2
+            exit 1
+          fi
+          sha256sum docker-compose.yml Caddyfile modules/ssh.ts scripts/diagnose-ssh-origin.sh > .deploy-source.sha256
+          rsync -azc --delete -e "$HOME/.local/bin/abess-ssh -p $VPS_PORT -o StrictHostKeyChecking=yes" \
+            --exclude '.git/' \
+            --exclude 'node_modules/' \
+            --exclude 'dist/' \
+            --exclude 'data/' \
+            --exclude 'deployment-backups/' \
+            --exclude '.rollback.yml' \
+            --exclude '.env' \
+            --exclude '.deploy.env' \
+            --exclude '.deploy.credentials' \
+            --exclude '.initial-admin-credentials.new' \
+            --exclude 'INITIAL_ADMIN_CREDENTIALS.txt' \
+            ./ "$DEST:${remote_dir}/"
+          "$HOME/.local/bin/abess-scp" -P "$VPS_PORT" -o StrictHostKeyChecking=yes .deploy.env "$DEST:${remote_dir}/.env.new"
+          if [[ -f .deploy.credentials ]]; then
+            "$HOME/.local/bin/abess-scp" -P "$VPS_PORT" -o StrictHostKeyChecking=yes .deploy.credentials "$DEST:${remote_dir}/.initial-admin-credentials.new"
+          fi
+          # shellcheck disable=SC2016
+          "$HOME/.local/bin/abess-ssh" -p "$VPS_PORT" -o StrictHostKeyChecking=yes "$DEST" 'chmod 600 "$HOME/abessvpn-server/.env.new"; if [ -f "$HOME/abessvpn-server/.initial-admin-credentials.new" ]; then chmod 600 "$HOME/abessvpn-server/.initial-admin-credentials.new"; fi'
+
+      - name: Build and start services, then verify public HTTPS
+        shell: bash
+        env:
+          VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD || secrets.VPS_PASSWORD }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ vars.VPS_PORT }}
+        run: |
+          set -euo pipefail
+          VPS_PORT="${VPS_PORT:-22}"
+          DEST="${VPS_USER}@${VPS_HOST}"
+          if [[ ! "$VPS_HOST" =~ ^[A-Za-z0-9.-]+$ ]]; then
+            echo '::error::VPS_HOST must be an IPv4 address or hostname without a protocol, port or whitespace.' >&2
+            exit 1
+          fi
+          "$HOME/.local/bin/abess-ssh" -p "$VPS_PORT" -o StrictHostKeyChecking=yes "$DEST" "SSH_WS_HOST='$VPS_HOST' VPN_DOMAIN='$VPN_DOMAIN' bash -s" <<'REMOTE'
+          set -euo pipefail
+          cd "$HOME/abessvpn-server"
+          export COMPOSE_FILE="$PWD/docker-compose.yml"
+          dc() { command docker compose -f "$PWD/docker-compose.yml" "$@"; }
+          umask 077
+          if ! sha256sum --check .deploy-source.sha256; then
+            echo '::error::Transferred deployment sources do not match the GitHub commit. Refusing to build stale configuration.' >&2
+            exit 1
+          fi
+          rm -f .deploy.credentials
+          if [ -f .env ]; then
+            # Preserve the initial administrator password and master key on redeploys.
+            # Keep all local operational credentials; redeploy must not erase
+            # S3, MFA, alert or PostgreSQL settings entered on the VPS.
+            while IFS= read -r existing_line; do
+              key="${existing_line%%=*}"
+              [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+              case "$key" in VPN_DOMAIN|SSH_WS_HOST|ADMIN_EMAIL|ADMIN_NAME|ACME_EMAIL) continue ;; esac
+              grep -v "^${key}=" .env.new > .env.merged || true
+              printf '%s\n' "$existing_line" >> .env.merged
+              mv .env.merged .env.new
+            done < .env
+            rm -f .initial-admin-credentials.new
+          else
+            if docker volume inspect abessvpn-server_abessvpn_data >/dev/null 2>&1; then
+              echo "ABESS persistent data exists but .env is missing; refusing to replace its secrets." >&2
+              exit 1
+            fi
+            if [ -f .initial-admin-credentials.new ]; then
+              mv .initial-admin-credentials.new INITIAL_ADMIN_CREDENTIALS.txt
+              chmod 600 INITIAL_ADMIN_CREDENTIALS.txt
+              echo "Initial login details were saved to ~/abessvpn-server/INITIAL_ADMIN_CREDENTIALS.txt (owner-only permissions)."
+            fi
+          fi
+          rollback_allowed=0
+          if [ -f .env ] && grep -q '^POSTGRES_PASSWORD=' .env; then
+            old_api="$(dc images -q api | head -n1)"
+            if [ -n "$old_api" ]; then
+              docker tag "$old_api" abessvpn-api:rollback
+              printf 'services:\n  api:\n    image: abessvpn-api:rollback\n' > .rollback.yml
+              chmod 600 .rollback.yml
+              rollback_allowed=1
+            fi
+          fi
+          mkdir -p deployment-backups
+          chmod 700 deployment-backups
+          if docker volume inspect abessvpn-server_abessvpn_data >/dev/null 2>&1; then
+            docker run --rm --env-file .env -v abessvpn-server_abessvpn_data:/source:ro -v "$PWD/deployment-backups:/backup" -v "$PWD/scripts:/tools:ro" node:22-alpine node /tools/snapshot-volume.mjs encrypt /source "/backup/pre-deploy-$(date +%s).tgz.enc"
+          fi
+          if docker volume inspect abessvpn-server_ssh_data >/dev/null 2>&1; then
+            docker run --rm --env-file .env -v abessvpn-server_ssh_data:/source:ro -v "$PWD/deployment-backups:/backup" -v "$PWD/scripts:/tools:ro" node:22-alpine node /tools/snapshot-volume.mjs encrypt /source "/backup/ssh-pre-deploy-$(date +%s).tgz.enc"
+          fi
+          if [ "$rollback_allowed" -eq 1 ]; then
+            dc exec -T --interactive=false database pg_dump -U abess -Fc abess | docker run --rm -i --env-file .env -v "$PWD/deployment-backups:/backup" -v "$PWD/scripts:/tools:ro" node:22-alpine node /tools/snapshot-volume.mjs encrypt - "/backup/postgres-$(date +%s).dump.enc"
+          fi
+          # Persist the exact direct origin supplied to this deployment.
+          grep -v '^SSH_WS_HOST=' .env.new > .env.origin || true
+          printf 'SSH_WS_HOST=%s\n' "$SSH_WS_HOST" >> .env.origin
+          mv .env.origin .env.new
+          mv .env.new .env
+          chmod 600 .env
+          dc config -q
+          deploy_failed=0
+          dc up -d --build database api caddy || deploy_failed=1
+          # Reload API environment and the Caddyfile bind mount even when
+          # their Compose service definitions or image tags stayed unchanged.
+          # Preserve databases, SSH accounts, tunnel sessions and volumes.
+          if [ "$deploy_failed" -eq 0 ]; then
+            dc up -d --no-deps --force-recreate api caddy || deploy_failed=1
+          fi
+          dc ps
+
+          ready=0
+          for ((attempt=1; attempt<=30; attempt++)); do
+            response="$(curl --silent --show-error --fail --max-time 8 "https://${VPN_DOMAIN}/api/v1/ping" 2>/dev/null || true)"
+            if printf '%s' "$response" | grep -q '"ok":true'; then
+              ready=1
+              break
+            fi
+            sleep 5
+          done
+
+          if [ "$ready" -ne 1 ] || [ "$deploy_failed" -ne 0 ]; then
+            if [ "$rollback_allowed" -eq 1 ]; then
+              echo 'Health checks failed; restoring the previous PostgreSQL-compatible API image.' >&2
+              dc -f .rollback.yml up -d --no-build api caddy
+            else
+              echo 'Automatic image rollback is unavailable for the first JSON-to-PostgreSQL migration; restore from the protected pre-deployment archive under maintenance.' >&2
+            fi
+            echo 'Public HTTPS readiness check failed. Recent service logs follow.' >&2
+            dc ps >&2 || true
+            dc logs --tail=100 api caddy >&2 || true
+            exit 1
+          fi
+          printf '%s\n' "$response"
+          echo 'ABESS backend HTTPS readiness verified.'
+          REMOTE
+
+          rm -f .deploy.env
+
+      - name: Install SSH-WS host services and register scoped VPN node
+        shell: bash
+        env:
+          VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD || secrets.VPS_PASSWORD }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ vars.VPS_PORT }}
+        run: |
+          set -euo pipefail
+          "$HOME/.local/bin/abess-ssh" -p "${VPS_PORT:-22}" -o StrictHostKeyChecking=yes \
+            "${VPS_USER}@${VPS_HOST}" 'cd "$HOME/abessvpn-server" && bash -s' \
+            < scripts/ssh-ws-postdeploy.sh
+
+      - name: Remove temporary deployment material
+        if: always()
+        run: rm -f .deploy.env .deploy.credentials .deploy-source.sha256
