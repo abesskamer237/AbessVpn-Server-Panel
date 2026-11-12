@@ -197,7 +197,7 @@ jobs:
           cat > "$HOME/.local/bin/abess-ssh" <<'SH'
           #!/usr/bin/env bash
           set -euo pipefail
-          if [[ -n "${VPS_SSH_KEY:-}" ]]; then
+          if [[ -s "$HOME/.ssh/id_ed25519" ]]; then
             exec ssh -o StrictHostKeyChecking=yes -i "$HOME/.ssh/id_ed25519" -o BatchMode=yes -o IdentitiesOnly=yes "$@"
           fi
           export SSHPASS="$VPS_SSH_PASSWORD"
@@ -206,7 +206,7 @@ jobs:
           cat > "$HOME/.local/bin/abess-scp" <<'SH'
           #!/usr/bin/env bash
           set -euo pipefail
-          if [[ -n "${VPS_SSH_KEY:-}" ]]; then
+          if [[ -s "$HOME/.ssh/id_ed25519" ]]; then
             exec scp -o StrictHostKeyChecking=yes -i "$HOME/.ssh/id_ed25519" -o BatchMode=yes -o IdentitiesOnly=yes "$@"
           fi
           export SSHPASS="$VPS_SSH_PASSWORD"
