@@ -43,25 +43,33 @@ export function registerSsh(app:Express,d:{
   charge:(payerId:string, quotaGb:number, id:string, renewal:boolean)=>boolean;
 }) {
   const admin:RequestHandler=(req,res,next)=>{if((req as any).user.role!=='SUPER_ADMIN')return res.sendStatus(403);next();};
+  // Generic VPN heartbeats and the managed SSH-WS reconciler report via
+  // different endpoints. Do not present one as the other in the panel.
   const ready=(id?:string)=>d.nodes().some(n=>n.id===id&&n.enabled&&n.ready&&Date.now()-Date.parse(n.observedAt||'')>=-5000&&Date.now()-Date.parse(n.observedAt||'')<=60000);
+  const managedOnline=(n:VpnNode)=>Boolean(n.enabled&&n.sshWsManaged&&n.sshWsAgentSeenAt&&
+    Number.isFinite(Date.parse(n.sshWsAgentSeenAt))&&
+    Date.now()-Date.parse(n.sshWsAgentSeenAt)>=-5000&&
+    Date.now()-Date.parse(n.sshWsAgentSeenAt)<60000);
+  const monitored=(a:SshAccount)=>a.managed?
+    d.nodes().some(n=>n.id===a.nodeId&&managedOnline(n)):ready(a.nodeId);
   const allowed=(actor:any,a:SshAccount)=>actor.role==='SUPER_ADMIN'||Boolean(a.resellerId&&d.canManage(actor,a.resellerId));
   const active=(a:SshAccount)=>a.enabled&&Number.isFinite(Date.parse(a.expiresAt))&&Date.parse(a.expiresAt)>Date.now()&&a.usedBytes<a.quotaBytes&&d.ownerActive(a.resellerId)&&
-    (!a.managed || (a.provisionState==='active'&&d.nodes().some(n=>n.id===a.nodeId&&n.enabled&&n.sshWsManaged&&
-      n.sshWsAgentSeenAt&&Date.now()-Date.parse(n.sshWsAgentSeenAt)<60000)));
+    (!a.managed || (a.provisionState==='active'&&monitored(a)));
   app.get('/api/v1/admin/ssh',d.authenticate,(req,res)=>{
     const actor=(req as any).user, isAdmin=actor.role==='SUPER_ADMIN';
     res.json({enabled:true,ready:d.nodes().some(n=>ready(n.id)),
+      sshWsReady:d.nodes().some(managedOnline),
       nodes:isAdmin?d.nodes().filter(n=>n.enabled).map(n=>({id:n.id,name:n.name,host:n.host})):[],
       managedNodes:d.nodes().filter(n=>n.enabled&&n.sshWsManaged).map(n=>({
         id:n.id,name:n.name,host:n.host,port:n.sshWsPort,path:n.sshWsPath,
-        agentOnline:Boolean(n.sshWsAgentSeenAt&&Date.now()-Date.parse(n.sshWsAgentSeenAt)<60000)
+        sni:n.sshWsSni||n.host,agentOnline:managedOnline(n)
       })),
       resellers:isAdmin?d.users().filter(u=>u.status==='active').map(u=>({id:u.id,name:u.name})):[],
       accounts:d.read().accounts.filter(a=>allowed(actor,a)).map(a=>({...safeSshAccount(a),
         connection:isAdmin?a.connection:a.connection?{transport:a.connection.transport,port:a.connection.port,hasPayload:a.connection.hasPayload}:undefined,
-        ready:ready(a.nodeId),effectiveEnabled:active(a),
+        ready:monitored(a),effectiveEnabled:active(a),
         trafficVerified:Boolean(a.usageObservedAt),usedBytes:a.usageObservedAt?a.usedBytes:null,
-        online:ready(a.nodeId)&&a.usageObservedAt?a.online||0:null}))});
+        online:monitored(a)&&a.usageObservedAt?a.online||0:null}))});
   });
   // Resellers may register *existing* supplier credentials, never provision system users.
   // Only Super Admin may associate a record with a managed VPS/node.
