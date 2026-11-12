@@ -43,6 +43,9 @@ jobs:
       - name: Security regression tests
         run: node --import tsx scripts/test-security.mjs
 
+      - name: Verify portable VPN subscription formats
+        run: node --import tsx scripts/test-exports.mjs
+
       - name: Verify MFA, backup encryption and manual transfer approval
         run: node --import tsx scripts/test-platform.mjs
 
