@@ -1978,10 +1978,12 @@ async function startServer() {
       format:'abess-managed-ssh-ws-v1',
       observedAt:new Date().toISOString(),
       accounts:readSsh().accounts.filter(a=>a.managed&&a.nodeId===node.id).map(a=>{
-        const enabled=a.enabled&&sshOwnerActive(a.resellerId)&&
+        const enabled=Boolean(a.wsAccessHash && a.wsAccessKey && a.enabled&&sshOwnerActive(a.resellerId)&&
           Number.isFinite(Date.parse(a.expiresAt))&&Date.parse(a.expiresAt)>Date.now()&&
-          a.usedBytes<a.quotaBytes;
+          a.usedBytes<a.quotaBytes);
         return {id:a.id,username:a.username,expiresAt:a.expiresAt,enabled,
+          tokenHash:a.wsAccessHash || '',quotaBytes:a.quotaBytes,
+          baselineUsedBytes:a.usedBytes,maxConnections:a.maxConnections,
           ...(enabled?{password:unseal(a.password,process.env.MASTER_SECRET!)}:{})};
       })
     }),
@@ -1992,9 +1994,17 @@ async function startServer() {
       for(const report of reports){
         const a=state.accounts.find(v=>v.managed&&v.nodeId===node.id&&v.id===report.id);
         if(!a)continue;
-        const canBeActive=a.enabled&&sshOwnerActive(a.resellerId)&&Date.parse(a.expiresAt)>Date.now()&&a.usedBytes<a.quotaBytes;
-        const wanted=report.state==='active'&&!canBeActive?'error':report.state;
-        a.provisionState=wanted as 'active'|'blocked'|'error';
+        if(report.usedBytes!==undefined){
+          // The gateway reports cumulative exact binary SSH stream payload.
+          // Across restarts the local durable upper bound may be larger; never
+          // decrease the server-side verified counter.
+          a.usedBytes=Math.max(a.usedBytes,report.usedBytes);
+          a.online=report.online;
+          a.usageObservedAt=now;
+        }
+        const allowed=a.enabled&&sshOwnerActive(a.resellerId)&&
+          Date.parse(a.expiresAt)>Date.now()&&a.usedBytes<a.quotaBytes;
+        a.provisionState=(report.state==='active'&&!allowed?'blocked':report.state) as 'active'|'blocked'|'error';
         a.lastAppliedAt=now;
         changed=true;
       }
@@ -2027,10 +2037,10 @@ async function startServer() {
         }
       }
       const ssh = readSsh();
-      for (const account of ssh.accounts.filter(a => a.nodeId === node.id)) account.online = 0;
+      for (const account of ssh.accounts.filter(a => a.nodeId === node.id && !a.managed)) account.online = 0;
       for (const sample of snapshot.accounts || []) {
         const account = ssh.accounts.find(a => a.nodeId === node.id && a.id === sample.id);
-        if (!account) continue;
+        if (!account || account.managed) continue; // managed SSH uses authenticated quota ledger reports.
         const counterKey = `ssh:${account.id}`;
         const old = next[counterKey] || 0;
         if (sample.usedBytes < old) throw new Error('SSH counter decreased');
