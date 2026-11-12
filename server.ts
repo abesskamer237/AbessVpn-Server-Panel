@@ -119,7 +119,7 @@ export interface AppUser {
   email: string;
   passwordHash: string; // Plain or sha256
   name: string;
-  role: 'SUPER_ADMIN' | 'RESELLER';
+  role: 'SUPER_ADMIN' | 'ADMIN' | 'RESELLER';
   credits: number; // Balance in credits / GB
   totalTokensCreated: number;
   totalBandwidthAllocatedGb: number;
@@ -729,7 +729,7 @@ function validRestoredUsers(value: unknown): value is AppUser[] {
         typeof user.email !== 'string' || !user.email.trim() ||
         typeof user.passwordHash !== 'string' || !user.passwordHash ||
         typeof user.name !== 'string' ||
-        !['SUPER_ADMIN', 'RESELLER'].includes(user.role) ||
+        !['SUPER_ADMIN', 'ADMIN', 'RESELLER'].includes(user.role) ||
         !['active', 'suspended'].includes(user.status) ||
         !Number.isFinite(user.credits) || user.credits < 0) return false;
     const email = user.email.trim().toLowerCase();
@@ -739,7 +739,7 @@ function validRestoredUsers(value: unknown): value is AppUser[] {
   }
   if (!value.some(user => user.role === 'SUPER_ADMIN' && user.status === 'active')) return false;
   for (const user of value) {
-    if (user.role === 'SUPER_ADMIN' && user.parentId) return false;
+    if (user.role !== 'RESELLER' && user.parentId) return false;
     const visited = new Set<string>([user.id]);
     let parentId = user.parentId;
     while (parentId) {
@@ -1813,7 +1813,7 @@ async function startServer() {
       parentId = parent.parentId;
     }
 
-    if (process.env.REQUIRE_ADMIN_MFA === 'true' && user.role === 'SUPER_ADMIN' && !security.enabled(user.id) && !req.path.startsWith('/api/v1/auth/')) {
+    if (process.env.REQUIRE_ADMIN_MFA === 'true' && (user.role === 'SUPER_ADMIN' || user.role === 'ADMIN') && !security.enabled(user.id) && !req.path.startsWith('/api/v1/auth/')) {
       res.status(403).json({error:'Activez la double authentification dans Sécurité.',mfaRequired:true});return;
     }
     (req as any).user = user;
@@ -2112,7 +2112,7 @@ async function startServer() {
   }
 
   function canManageToken(user: AppUser, targetResellerId: string, allUsers: AppUser[]): boolean {
-    if (user.role === 'SUPER_ADMIN') return true;
+    if (user.role === 'SUPER_ADMIN' || user.role === 'ADMIN') return true;
     if (targetResellerId === user.id) return true;
     const descendantIds = new Set(getSubResellerIdsRecursive(user.id, allUsers));
     return descendantIds.has(targetResellerId);
