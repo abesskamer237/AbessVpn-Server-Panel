@@ -2160,13 +2160,13 @@ async function startServer() {
   // ==========================================
   app.get('/api/v1/admin/resellers', authenticate, (req, res) => {
     const user: AppUser = (req as any).user;
-    if (user.role !== 'SUPER_ADMIN' && user.role !== 'RESELLER') {
+    if (user.role !== 'SUPER_ADMIN' && user.role !== 'ADMIN' && user.role !== 'RESELLER') {
       res.status(403).json({ error: 'Accès non autorisé.' });
       return;
     }
 
     const users = loadUsers();
-    if (user.role === 'SUPER_ADMIN') {
+    if (user.role === 'SUPER_ADMIN' || user.role === 'ADMIN') {
       const resellers = users
         .filter(u => u.role === 'RESELLER')
         .map(({ passwordHash, ...rest }) => ({
@@ -2188,7 +2188,7 @@ async function startServer() {
 
   app.post('/api/v1/admin/resellers', authenticate, (req, res) => {
     const user: AppUser = (req as any).user;
-    if (user.role !== 'SUPER_ADMIN' && user.role !== 'RESELLER') {
+    if (user.role !== 'SUPER_ADMIN' && user.role !== 'ADMIN' && user.role !== 'RESELLER') {
       res.status(403).json({ error: 'Accès non autorisé.' });
       return;
     }
@@ -2285,10 +2285,25 @@ async function startServer() {
     });
   });
 
+  app.put('/api/v1/admin/resellers/:id/pricing', authenticate, (req,res)=>{
+    const actor:AppUser=(req as any).user;
+    if(actor.role!=='SUPER_ADMIN'&&actor.role!=='ADMIN')return res.sendStatus(403);
+    const perGb=Number(req.body?.pricePerGbCfa),perLicence=Number(req.body?.pricePerLicenceCfa);
+    if(!Number.isFinite(perGb)||perGb<0||perGb>10000000||!Number.isFinite(perLicence)||perLicence<0||perLicence>10000000)
+      return res.status(400).json({error:'Tarifs invalides.'});
+    const users=loadUsers(),reseller=users.find(u=>u.id===req.params.id&&u.role==='RESELLER');
+    if(!reseller)return res.sendStatus(404);
+    reseller.pricePerGbCfa=Math.round(perGb);
+    reseller.pricePerLicenceCfa=Math.round(perLicence);
+    saveUsers(users);
+    logAudit({actor:actor.id,role:actor.role,action:'RESELLER_PRICING_UPDATED',details:JSON.stringify({id:reseller.id,perGb:reseller.pricePerGbCfa,perLicence:reseller.pricePerLicenceCfa})});
+    const {passwordHash,...safe}=reseller;return res.json(safe);
+  });
+
   // Credit / Recharge Reseller
   app.put('/api/v1/admin/resellers/:id/credit', authenticate, (req, res) => {
     const user: AppUser = (req as any).user;
-    if (user.role !== 'SUPER_ADMIN' && user.role !== 'RESELLER') {
+    if (user.role !== 'SUPER_ADMIN' && user.role !== 'ADMIN' && user.role !== 'RESELLER') {
       res.status(403).json({ error: 'Accès non autorisé.' });
       return;
     }
@@ -2436,7 +2451,7 @@ async function startServer() {
   // Toggle Reseller Status (Active / Suspended)
   app.put('/api/v1/admin/resellers/:id/status', authenticate, (req, res) => {
     const user: AppUser = (req as any).user;
-    if (user.role !== 'SUPER_ADMIN' && user.role !== 'RESELLER') {
+    if (user.role !== 'SUPER_ADMIN' && user.role !== 'ADMIN' && user.role !== 'RESELLER') {
       res.status(403).json({ error: 'Accès non autorisé.' });
       return;
     }
@@ -2468,7 +2483,7 @@ async function startServer() {
   // returned to the direct parent; every associated licence and session is revoked.
   app.delete('/api/v1/admin/resellers/:id', authenticate, (req, res) => {
     const user: AppUser = (req as any).user;
-    if (user.role !== 'SUPER_ADMIN' && user.role !== 'RESELLER') {
+    if (user.role !== 'SUPER_ADMIN' && user.role !== 'ADMIN' && user.role !== 'RESELLER') {
       res.status(403).json({ error: 'Accès non autorisé.' });
       return;
     }
@@ -3294,7 +3309,7 @@ async function startServer() {
     const users = loadUsers();
     const tokens = loadTokens();
 
-    if (user.role === 'SUPER_ADMIN') {
+    if (user.role === 'SUPER_ADMIN' || user.role === 'ADMIN') {
       const resellers = users.filter(u => u.role === 'RESELLER');
       const totalCreditsInCirculation = resellers.reduce((sum, r) => sum + r.credits, 0);
       const totalBandwidthAllocated = tokens.reduce((sum, t) => sum + t.bandwidthGb, 0);
