@@ -321,7 +321,7 @@ export function registerOperations(
       if (!/^SHA256:[A-Za-z0-9+/]{43}=?$/.test(fingerprint) ||
           !/^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(sni) ||
           !Number.isInteger(p) || p < 1 || p > 65535 ||
-          !/^\\/[A-Za-z0-9/_-]{1,80}$/.test(wsPath)) {
+          !/^\/[A-Za-z0-9/_-]{1,80}$/.test(wsPath)) {
         return res.status(400).json({error:'Fingerprint SSH, SNI, chemin ou port WSS invalide.'});
       }
       node.sshWsFingerprint = fingerprint.replace(/=+$/, '');
