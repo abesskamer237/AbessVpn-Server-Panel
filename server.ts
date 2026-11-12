@@ -1544,6 +1544,11 @@ async function startServer() {
       const retiredPath=
         p.startsWith('/api/v1/admin/tokens') ||
         p.startsWith('/api/v1/admin/protocol-configs') ||
+        p==='/api/v1/admin/server-config' ||
+        p==='/api/v1/admin/available-configs' ||
+        p==='/api/vpn/heartbeat' ||
+        p==='/api/traffic/heartbeat' ||
+        p==='/api/v1/vpn/heartbeat' ||
         p.startsWith('/api/v1/client/') ||
         p.startsWith('/api/v1/ssh/config/') ||
         p.startsWith('/ssh/config/') ||
