@@ -54,6 +54,7 @@ jobs:
           node --check scripts/ssh-ws-gateway.mjs
           node --check scripts/ssh-ws-reconciler.mjs
           node scripts/test-ssh-ws.mjs
+          node scripts/benchmark-ssh-ws.mjs
 
       - name: Verify MFA, backup encryption and manual transfer approval
         run: node --import tsx scripts/test-platform.mjs
