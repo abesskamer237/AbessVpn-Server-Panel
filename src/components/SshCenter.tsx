@@ -26,6 +26,8 @@ export function SshCenter({inventory,resellers,role,audit,request,refresh,create
   const [working,setWorking]=useState(false);
   const [error,setError]=useState('');
   const [label,setLabel]=useState('');
+  const [username,setUsername]=useState('abv_');
+  const [password,setPassword]=useState('');
   const [days,setDays]=useState(30);
   const [quotaGb,setQuotaGb]=useState(10);
   const [maxConnections,setMaxConnections]=useState(1);
@@ -77,10 +79,10 @@ export function SshCenter({inventory,resellers,role,audit,request,refresh,create
     e.preventDefault();
     await run(async()=>{
       const result=await request('/api/v1/admin/ssh/managed','POST',{
-        nodeId,label:label.trim()||'Nouveau client',days,quotaGb,maxConnections,
+        nodeId,label:label.trim(),username:username.trim().toLowerCase(),password,days,quotaGb,maxConnections,
         ...(canOperate&&resellerId?{resellerId}:{})
       });
-      setSelectedId(result.id);setCreateOpen(false);setLabel('');setConfig(null);
+      setSelectedId(result.id);setCreateOpen(false);setLabel('');setUsername('abv_');setPassword('');setConfig(null);
     });
   }
   async function exportConfig(){
@@ -169,6 +171,8 @@ export function SshCenter({inventory,resellers,role,audit,request,refresh,create
         </div></div>
         <div className="form-grid">
         <label className="field-block"><span className="field-label">Nom du client</span><input className="field" autoFocus required maxLength={80} value={label} onChange={e=>setLabel(e.target.value)} placeholder="Ex. Jean Dupont"/></label>
+        <label className="field-block"><span className="field-label">Nom d’utilisateur SSH</span><input className="field" required minLength={7} maxLength={32} pattern="abv_[a-z0-9][a-z0-9_-]{2,27}" autoComplete="off" value={username} onChange={e=>setUsername(e.target.value.toLowerCase())} placeholder="abv_jean237"/><span className="field-help">Obligatoire · commence par abv_ · lettres minuscules, chiffres, _ et -.</span></label>
+        <label className="field-block"><span className="field-label">Mot de passe SSH</span><input className="field" type="password" required minLength={8} maxLength={96} pattern="[A-Za-z0-9@#$%&*+=._-]{8,96}" autoComplete="new-password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="8 caractères minimum"/><span className="field-help">Obligatoire · 8 à 96 caractères.</span></label>
         <label className="field-block"><span className="field-label">Serveur</span><select className="select" required value={nodeId} onChange={e=>setNodeId(e.target.value)}>{inventory?.managedNodes.map(n=><option key={n.id} value={n.id} disabled={!n.agentOnline}>{n.name} · {n.agentOnline?'en ligne':'hors ligne'}</option>)}</select></label>
         <label className="field-block"><span className="field-label">Durée</span><select className="select" value={days} onChange={e=>setDays(Number(e.target.value))}><option value={7}>7 jours</option><option value={30}>30 jours</option><option value={60}>60 jours</option><option value={90}>90 jours</option><option value={180}>180 jours</option><option value={365}>365 jours</option></select></label>
         <label className="field-block"><span className="field-label">Quota (Go)</span><input className="field" type="number" min=".01" step=".01" required value={quotaGb} onChange={e=>setQuotaGb(Number(e.target.value))}/></label>
