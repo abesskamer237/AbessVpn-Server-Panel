@@ -118,7 +118,7 @@ export function registerSsh(app:Express,d:{
     const state=d.read();
     if(state.accounts.length>=5000||state.accounts.filter(a=>a.nodeId===node.id&&a.managed).length>=2000)
       return res.status(409).json({error:'Capacité maximale atteinte.'});
-    let username;
+    let username: string;
     do{username='abv_'+crypto.randomBytes(6).toString('hex');}while(state.accounts.some(a=>a.username===username));
     const password=crypto.randomBytes(32).toString('base64url');
     const account:SshAccount={
