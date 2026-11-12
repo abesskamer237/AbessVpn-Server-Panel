@@ -4499,8 +4499,9 @@ async function startServer() {
   }
 
   // Do not read/reconcile defunct VLESS traffic every five seconds in WSS-only production.
+  let xrayReconcileTimer:ReturnType<typeof setInterval>|undefined;
   if(process.env.SSH_WSS_ONLY!=='true') {
-  const xrayReconcileTimer = setInterval(() => {
+  xrayReconcileTimer = setInterval(() => {
     void storage.transaction(() => {
     const tokens = loadTokens();
     let expired = false;
@@ -4579,7 +4580,8 @@ async function startServer() {
   let shuttingDown=false;
   const shutdown=()=>{
     if(shuttingDown)return;shuttingDown=true;
-    clearInterval(xrayReconcileTimer);clearInterval(autoBackupTimer);clearInterval(operationsTimer);
+    if(xrayReconcileTimer)clearInterval(xrayReconcileTimer);
+    clearInterval(autoBackupTimer);clearInterval(operationsTimer);
     telegramBot?.stop();
     server.closeIdleConnections();
     server.close(()=>{void storage.pool?.end().finally(()=>process.exit(0));if(!storage.pool)process.exit(0);});
