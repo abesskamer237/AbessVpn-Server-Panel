@@ -24,14 +24,14 @@ function meter(ledger,id,kill){
     highWaterMark:64*1024,
     transform(chunk,_encoding,callback){
       try{
-        if(!Buffer.isBuffer(chunk)||chunk.length>65536){kill();return callback(new Error('Invalid binary frame'));}
+        if(!Buffer.isBuffer(chunk)||chunk.length>65536){kill();return callback();}
         const take=ledger.consume(id,chunk.length);
         if(take===chunk.length)return callback(null,chunk);
         // Deliver no bytes beyond the exact remaining allowance.
         if(take>0)this.push(chunk.subarray(0,take));
         kill();
-        return callback(new Error('SSH-WS quota exhausted'));
-      }catch{kill();return callback(new Error('SSH-WS accounting unavailable'));}
+        return callback();
+      }catch{kill();return callback();}
     }
   });
 }
@@ -121,8 +121,12 @@ export async function startGateway(options={}){
     ws.on('message',(_data,isBinary)=>{if(!isBinary)kill();});
     upstream.once('connect',()=>{
       upstream.setTimeout(0);
-      stream.pipe(meter(ledger,id,kill)).pipe(upstream);
-      upstream.pipe(meter(ledger,id,kill)).pipe(stream);
+      const uplink=meter(ledger,id,kill);
+      const downlink=meter(ledger,id,kill);
+      uplink.on('error',kill);
+      downlink.on('error',kill);
+      stream.pipe(uplink).pipe(upstream);
+      upstream.pipe(downlink).pipe(stream);
     });
     upstream.on('error',kill);
     upstream.on('close',()=>{if(ws.readyState===ws.OPEN)ws.close(1000);});
