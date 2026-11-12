@@ -9,6 +9,12 @@ import {
 import { RenewLicence } from './RenewLicence';
 export function SshCenter({ token, isAdmin = true }: { token: string; isAdmin?: boolean }) {
   const [state, setState] = useState<any>(null);
+  const [managedNodeId,setManagedNodeId] = useState('');
+  const [setupNodeId,setSetupNodeId] = useState('');
+  const [managedFingerprint,setManagedFingerprint] = useState('');
+  const [managedSni,setManagedSni] = useState('');
+  const [managedPort,setManagedPort] = useState(443);
+  const [managedPath,setManagedPath] = useState('/ssh-ws');
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [renewId, setRenewId] = useState<string | null>(null);
@@ -111,6 +117,95 @@ export function SshCenter({ token, isAdmin = true }: { token: string; isAdmin?: 
           {error}
         </p>
       )}
+      {isAdmin && <form
+        aria-label="Autoriser un VPS pour SSH-WS"
+        className="rounded-2xl border border-cyan-700/40 p-4 flex flex-wrap gap-3 items-end"
+        onSubmit={e=>{
+          e.preventDefault();
+          void action(async ()=>{
+            const response=await fetch(`/api/v1/admin/nodes/${setupNodeId}/ssh-ws`,{
+              method:'PUT',headers,
+              body:JSON.stringify({enabled:true,fingerprint:managedFingerprint,sni:managedSni,
+                port:managedPort,path:managedPath})
+            });
+            if(!response.ok){const payload=await response.json().catch(()=>({}));throw Error(payload.error||'Activation refusée');}
+          });
+        }}
+      >
+        <p className="w-full text-sm text-cyan-300 font-semibold">Autoriser SSH-WS sur un VPS après installation manuelle des services</p>
+        <label className="text-xs">VPS
+          <select aria-label="VPS à autoriser SSH-WS" value={setupNodeId} onChange={e=>{
+            setSetupNodeId(e.target.value);
+            setManagedSni(state?.nodes?.find((n:any)=>n.id===e.target.value)?.host||'');
+          }} className="block bg-slate-950 p-2">
+            <option value="">Choisir</option>
+            {state?.nodes?.map((n:any)=><option value={n.id} key={n.id}>{n.name}</option>)}
+          </select>
+        </label>
+        <label className="text-xs">Empreinte SSH Ed25519 vérifiée
+          <input aria-label="Empreinte SSH du VPS" className="block bg-slate-950 p-2 w-64" value={managedFingerprint}
+            onChange={e=>setManagedFingerprint(e.target.value)} placeholder="SHA256:…" />
+        </label>
+        <label className="text-xs">SNI HTTPS
+          <input aria-label="SNI SSH-WS" className="block bg-slate-950 p-2" value={managedSni}
+            onChange={e=>setManagedSni(e.target.value)} />
+        </label>
+        <label className="text-xs">Port WSS
+          <input aria-label="Port WSS" type="number" className="block bg-slate-950 p-2 w-24"
+            value={managedPort} onChange={e=>setManagedPort(Number(e.target.value))}/>
+        </label>
+        <label className="text-xs">Chemin WebSocket
+          <input aria-label="Chemin WSS" className="block bg-slate-950 p-2" value={managedPath}
+            onChange={e=>setManagedPath(e.target.value)}/>
+        </label>
+        <button type="submit" disabled={busy||!setupNodeId||!managedFingerprint}
+          className="bg-cyan-600 text-white px-3 py-2 rounded disabled:opacity-40">Activer SSH-WS</button>
+        <p className="w-full text-slate-400 text-xs">Cette étape n'installe rien sur le VPS. L'agent distant doit être installé et connecté avant la livraison d'un compte.</p>
+      </form>}
+      <form
+        aria-label="Créer un client SSH-WS administré"
+        className="rounded-2xl border border-emerald-700/40 p-4 flex flex-wrap items-end gap-3"
+        onSubmit={e=>{
+          e.preventDefault();
+          void action(async()=>{
+            const result=await call('/managed',{nodeId:managedNodeId,label:label||'Client SSH-WS',
+              days,quotaGb,maxConnections:connections});
+            setSelected(result.id);setConfig(null);
+          });
+        }}
+      >
+        <p className="w-full text-sm font-semibold text-emerald-300">Créer un client SSH-WS sur un VPS administré</p>
+        <label className="text-xs">Serveur administré
+          <select aria-label="Serveur administré SSH-WS" value={managedNodeId}
+            onChange={e=>setManagedNodeId(e.target.value)} className="block bg-slate-950 p-2">
+            <option value="">Choisir</option>
+            {state?.managedNodes?.map((n:any)=><option key={n.id} value={n.id}>
+              {n.name} — {n.agentOnline?'Agent connecté':'Agent non connecté'}
+            </option>)}
+          </select>
+        </label>
+        <label className="text-xs">Client
+          <input aria-label="Nom du client SSH-WS" value={label} onChange={e=>setLabel(e.target.value)}
+            className="block bg-slate-950 p-2" maxLength={80}/>
+        </label>
+        <label className="text-xs">Jours
+          <input aria-label="Durée SSH-WS" type="number" min={1} max={366} value={days}
+            onChange={e=>setDays(Number(e.target.value))} className="block bg-slate-950 p-2 w-20"/>
+        </label>
+        <label className="text-xs">Quota commercial (Go)
+          <input aria-label="Quota SSH-WS" type="number" min={0.01} max={100000} step={0.01}
+            value={quotaGb} onChange={e=>setQuota(Number(e.target.value))}
+            className="block bg-slate-950 p-2 w-24"/>
+        </label>
+        <button type="submit" disabled={busy||!managedNodeId}
+          className="bg-emerald-600 text-white px-3 py-2 rounded disabled:opacity-40">
+          Créer le compte SSH-WS
+        </button>
+        <p className="w-full text-slate-400 text-xs">
+          Les identifiants sont distribués uniquement après confirmation de l'agent du VPS.
+          Les quotas et limites de connexions exigent une mesure/contrainte serveur supplémentaire.
+        </p>
+      </form>
       <form
         aria-label={isAdmin ? "Importer un compte SSH fournisseur" : "Ajouter un compte SSH fournisseur existant"}
         className="rounded-2xl border border-slate-700 p-5 grid sm:grid-cols-2 lg:grid-cols-6 gap-4"
@@ -259,7 +354,9 @@ export function SshCenter({ token, isAdmin = true }: { token: string; isAdmin?: 
                       <div className="text-slate-400">{a.label}</div>
                     </td>
                     <td className="p-3">
-                      {!a.enabled
+                      {a.managed && a.provisionState!=='active'
+                        ? (a.provisionState==='pending'?'Provisionnement en cours':a.provisionState==='error'?'Erreur VPS':'Non actif sur VPS')
+                        : !a.enabled
                         ? "Suspendu"
                         : Date.parse(a.expiresAt) <= Date.now()
                           ? "Expiré"
