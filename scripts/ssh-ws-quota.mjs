@@ -16,6 +16,13 @@ import crypto from 'node:crypto';
 const ID=/^ssh_[0-9a-f-]{36}$/;
 const HEX=/^[0-9a-f]{64}$/;
 const USER=/^abv_[0-9a-f]{12}$/;
+export function validSourceIp(ip) {
+  if(typeof ip!=='string')return false;
+  const m=/^127\.120\.([0-9]{1,3})\.([0-9]{1,3})$/.exec(ip);
+  if(!m)return false;
+  const a=Number(m[1]),b=Number(m[2]);
+  return a>=0&&a<=255&&b>=1&&b<=254;
+}
 const MAX_SAFE=Number.MAX_SAFE_INTEGER;
 const MAX_ACCOUNTS=2000;
 
@@ -27,15 +34,15 @@ export function validatePolicy(value, now=Date.now()) {
      !Array.isArray(value.accounts) || value.accounts.length>MAX_ACCOUNTS ||
      !Number.isFinite(Date.parse(value.generatedAt)) ||
      Date.parse(value.generatedAt)>now+5000) throw Error('Invalid gateway policy');
-  const ids=new Set(),tokens=new Set(),out=[];
+  const ids=new Set(),tokens=new Set(),ips=new Set(),out=[];
   for(const a of value.accounts) {
     if(!a || !ID.test(a.id) || !USER.test(a.username) ||
-       !HEX.test(a.tokenHash) || typeof a.enabled!=='boolean' ||
+       !HEX.test(a.tokenHash) || !validSourceIp(a.sourceIp) || typeof a.enabled!=='boolean' ||
        !integer(a.quotaBytes,1) || !integer(a.baselineUsedBytes,0) ||
        !integer(a.maxConnections,1,10) ||
        !Number.isFinite(Date.parse(a.expiresAt)) ||
-       ids.has(a.id) || tokens.has(a.tokenHash)) throw Error('Invalid gateway licence');
-    ids.add(a.id);tokens.add(a.tokenHash);
+       ids.has(a.id) || tokens.has(a.tokenHash) || ips.has(a.sourceIp)) throw Error('Invalid gateway licence');
+    ids.add(a.id);tokens.add(a.tokenHash);ips.add(a.sourceIp);
     out.push({...a});
   }
   return {generatedAt:Date.parse(value.generatedAt),accounts:out};
@@ -136,6 +143,9 @@ export class QuotaLedger {
     if(!p || !v || !p.enabled || Date.parse(p.expiresAt)<=now ||
        v.usedBytes>=p.quotaBytes)return null;
     return p;
+  }
+  sourceIp(id,now=Date.now()) {
+    return this._profile(id,now)?.sourceIp || null;
   }
   authorized(id,now=Date.now()) {
     return !!this._profile(id,now);
