@@ -36,6 +36,8 @@ assert.throws(()=>validatePolicy({...policy,accounts:[{...policy.accounts[0],quo
 fs.writeFileSync(policyFile,JSON.stringify(policy));
 
 const tcp=net.createServer(socket=>{
+  // The gateway intentionally resets streams when a hard quota is reached.
+  socket.on('error',()=>{});
   socket.write('SSH-2.0-ABESS-test\r\n');
   socket.on('data',chunk=>socket.write(chunk));
 });
