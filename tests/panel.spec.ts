@@ -100,7 +100,7 @@ test('SSH generator shows actual availability and protects credential export', a
   await login(page);
   await page.getByRole('navigation').getByRole('button', {name:'Comptes SSH',exact:true}).click();
   await expect(page.getByRole('heading', {name:'Comptes et tunnels SSH'})).toBeVisible();
-  await expect(page.getByText('● Sans suivi distant', {exact:true})).toBeVisible();
+  await expect(page.getByText('● Aucun serveur SSH-WS configuré', {exact:true})).toBeVisible();
   await expect(page.getByRole('button', {name:'Importer le compte',exact:true})).toBeDisabled();
   await expect(page.getByRole('button', {name:'Afficher les paramètres et identifiants',exact:true})).toBeDisabled();
   await page.getByLabel('Transport SSH').selectOption('wss-alt');
@@ -142,6 +142,7 @@ test('imports an existing SSH account and exports its exact remote endpoint', as
   expect(response.status()).toBe(201);
   const node = await response.json();
   await page.getByRole('navigation').getByRole('button',{name:'Comptes SSH',exact:true}).click();
+  await page.getByText('Option avancée : importer un compte SSH fournisseur existant (TCP ou autre protocole)').click();
   await page.getByLabel('Serveur SSH').selectOption(node.id);
   const config={host:'ssh-browser.example.test',username:'browser_user',password:'browser-only-fixture-password',port:8443,transport:'wss-raw',tls:true,sni:'ssh-cert.example.test',path:'/existing-ssh',fingerprint:'SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'};
   await page.getByLabel('Configuration SSH JSON').fill(JSON.stringify(config));
@@ -168,6 +169,7 @@ test('sells a TCP payload account and lets its reseller renew it', async ({page,
   expect(resellerResponse.status()).toBe(201);const reseller=await resellerResponse.json();
   const nodeResponse=await request.post('/api/v1/admin/nodes',{headers,data:{name:'TCP Payload Browser',host:'tcp-browser.example.test'}});const node=await nodeResponse.json();
   await page.getByRole('navigation').getByRole('button',{name:'Comptes SSH',exact:true}).click();
+  await page.getByText('Option avancée : importer un compte SSH fournisseur existant (TCP ou autre protocole)').click();
   await page.getByLabel('Serveur SSH').selectOption(node.id);
   await page.getByLabel('Revendeur SSH').selectOption(reseller.id);
   await page.getByLabel('Port SSH',{exact:true}).fill('8080');
@@ -187,6 +189,7 @@ test('sells a TCP payload account and lets its reseller renew it', async ({page,
   await page.getByLabel('Mot de passe',{exact:true}).fill(resellerPassword);
   await page.getByRole('button',{name:'Se connecter',exact:true}).click();
   await page.getByRole('navigation').getByRole('button',{name:'Comptes SSH',exact:true}).click();
+  await page.getByText('Option avancée : importer un compte SSH fournisseur existant (TCP ou autre protocole)').click();
   // Resellers may import existing supplier accounts without seeing managed VPS controls.
   await expect(page.getByRole('button',{name:'Importer le compte',exact:true})).toHaveCount(1);
   await expect(page.getByLabel('Serveur SSH')).toHaveCount(0);
@@ -209,6 +212,7 @@ test('sells a TCP payload account and lets its reseller renew it', async ({page,
 test('imports and exports a supplier account without any agent',async({page,request})=>{
   const token=await login(page);
   await page.getByRole('navigation').getByRole('button',{name:'Comptes SSH',exact:true}).click();
+  await page.getByText('Option avancée : importer un compte SSH fournisseur existant (TCP ou autre protocole)').click();
   await page.getByLabel('Hôte SSH',{exact:true}).fill('supplier-browser.example.test');
   await page.getByLabel('Utilisateur SSH',{exact:true}).fill('supplier_browser');
   await page.getByLabel('Mot de passe SSH',{exact:true}).fill('supplier-account-fixture-password');
