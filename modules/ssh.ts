@@ -121,17 +121,21 @@ export function registerSsh(app:Express,d:{
     const ownerId=['SUPER_ADMIN','ADMIN'].includes(actor.role)?String(req.body?.resellerId||actor.id):actor.id;
     const owner=d.users().find(u=>u.id===ownerId&&u.status==='active');
     const days=Number(req.body?.days),quotaGb=Number(req.body?.quotaGb),maxConnections=Number(req.body?.maxConnections);
-    const label=String(req.body?.label||'Client SSH-WS').trim();
-    if(!owner||!d.ownerActive(ownerId)||!label||label.length>80||!Number.isInteger(days)||days<1||days>366||
+    const label=String(req.body?.label||'').trim();
+    const username=String(req.body?.username||'').trim().toLowerCase();
+    const password=String(req.body?.password||'');
+    if(!owner||!d.ownerActive(ownerId)||!label||label.length>80||
+      !/^abv_[a-z0-9][a-z0-9_-]{2,27}$/.test(username)||
+      !/^[A-Za-z0-9@#$%&*+=._-]{8,96}$/.test(password)||
+      !Number.isInteger(days)||days<1||days>366||
       !Number.isFinite(quotaGb)||quotaGb<0.01||quotaGb>100000||
       !Number.isInteger(maxConnections)||maxConnections<1||maxConnections>10)
-      return res.status(400).json({error:'Client, crédits, durée ou quota incorrect.'});
+      return res.status(400).json({error:'Nom client, utilisateur, mot de passe, durée ou quota incorrect.'});
     const state=d.read();
     if(state.accounts.length>=5000||state.accounts.filter(a=>a.nodeId===node.id&&a.managed).length>=2000)
       return res.status(409).json({error:'Capacité maximale atteinte.'});
-    let username: string;
-    do{username='abv_'+crypto.randomBytes(6).toString('hex');}while(state.accounts.some(a=>a.username===username));
-    const password=crypto.randomBytes(32).toString('base64url');
+    if(state.accounts.some(a=>a.username===username))
+      return res.status(409).json({error:'Ce nom d’utilisateur SSH est déjà utilisé.'});
     const wsSecret=crypto.randomBytes(32).toString('base64url');
     const account:SshAccount={
       id:'ssh_'+crypto.randomUUID(), username, label, managed:true,
