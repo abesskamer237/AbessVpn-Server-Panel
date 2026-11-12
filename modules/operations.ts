@@ -63,6 +63,13 @@ export interface VpnNode {
   snapshotHash?: string;
   online?: number;
   counters?: Record<string, number>;
+  /** Explicit administrator opt-in to automated SSH-WS user provisioning. */
+  sshWsManaged?: boolean;
+  sshWsFingerprint?: string;
+  sshWsSni?: string;
+  sshWsPath?: string;
+  sshWsPort?: number;
+  sshWsAgentSeenAt?: string;
 }
 export class Operations {
   private errors: number[]=[];
@@ -163,6 +170,8 @@ export function registerOperations(
     audit: (event: any) => void;
     nodeConfig: (node: VpnNode) => unknown;
     nodeUsage: (node: VpnNode, snapshot: any) => void;
+    nodeSshDesired: (node: VpnNode) => unknown;
+    nodeSshReport: (node: VpnNode, reports: Array<{id: string; state: string}>) => void;
   },
 ) {
   const admin: RequestHandler = (req, res, next) => {
@@ -298,7 +307,38 @@ export function registerOperations(
     d.saveNodes(nodes);d.audit({action:'NODE_KEY_ROTATED',actor:(req as any).user.id,role:'SUPER_ADMIN',details:node.id});
     res.set('Cache-Control','no-store').json({id:node.id,key});
   });
-  const nodeAuth: RequestHandler = (req, res, next) => {
+  // Security boundary: admin must explicitly enable a managed node and pin its
+  // SSH server fingerprint. This endpoint performs no VPS deployment.
+  app.put('/api/v1/admin/nodes/:id/ssh-ws', d.authenticate, admin, (req, res) => {
+    const nodes = d.readNodes(), node = nodes.find(n => n.id === req.params.id && n.enabled);
+    if (!node) return res.sendStatus(404);
+    if (typeof req.body?.enabled !== 'boolean') return res.sendStatus(400);
+    if (req.body.enabled) {
+      const fingerprint = String(req.body.fingerprint || '');
+      const sni = String(req.body.sni || node.host).toLowerCase();
+      const p = req.body.port === undefined ? 443 : Number(req.body.port);
+      const wsPath = String(req.body.path || '/ssh-ws');
+      if (!/^SHA256:[A-Za-z0-9+/]{43}=?$/.test(fingerprint) ||
+          !/^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(sni) ||
+          !Number.isInteger(p) || p < 1 || p > 65535 ||
+          !/^\/[A-Za-z0-9/_-]{1,80}$/.test(wsPath)) {
+        return res.status(400).json({error:'Fingerprint SSH, SNI, chemin ou port WSS invalide.'});
+      }
+      node.sshWsFingerprint = fingerprint.replace(/=+$/, '');
+      node.sshWsSni = sni;
+      node.sshWsPort = p;
+      node.sshWsPath = wsPath;
+      node.sshWsManaged = true;
+    } else {
+      node.sshWsManaged = false;
+    }
+    d.saveNodes(nodes);
+    d.audit({action:'NODE_SSH_WS_POLICY',actor:(req as any).user.id,role:'SUPER_ADMIN',
+      details:JSON.stringify({nodeId:node.id,enabled:node.sshWsManaged})});
+    return res.json({id:node.id,sshWsManaged:node.sshWsManaged,sshWsSni:node.sshWsSni,
+      sshWsPort:node.sshWsPort,sshWsPath:node.sshWsPath,sshWsFingerprint:node.sshWsFingerprint});
+  });
+    const nodeAuth: RequestHandler = (req, res, next) => {
     const key = req.headers.authorization?.replace(/^Bearer /, "") || "";
     const node = d.readNodes().find((n) => n.id === req.params.id && n.enabled);
     if (
@@ -319,7 +359,27 @@ export function registerOperations(
       .set("Cache-Control", "no-store")
       .json(d.nodeConfig((req as any).vpnNode)),
   );
-  app.post("/api/v1/nodes/:id/heartbeat", d.limiter, nodeAuth, (req, res) => {
+  // Only the registered node's bearer key can read its own desired SSH user state.
+  // Credentials are never included in the ordinary inventory endpoint.
+  app.get('/api/v1/nodes/:id/ssh-ws/desired', d.limiter, nodeAuth, (req, res) => {
+    const node = (req as any).vpnNode as VpnNode;
+    if (!node.sshWsManaged) return res.sendStatus(403);
+    return res.set('Cache-Control','no-store').json(d.nodeSshDesired(node));
+  });
+  app.post('/api/v1/nodes/:id/ssh-ws/status', d.limiter, nodeAuth, (req, res) => {
+    const node = (req as any).vpnNode as VpnNode;
+    if (!node.sshWsManaged) return res.sendStatus(403);
+    const reports = req.body?.reports;
+    if (!Array.isArray(reports) || reports.length > 2000 ||
+        reports.some((x: any) => !x || typeof x.id !== 'string' ||
+          !/^ssh_[a-f0-9-]{36}$/.test(x.id) ||
+          !['active','blocked','error'].includes(x.state))) return res.sendStatus(400);
+    d.nodeSshReport(node, reports);
+    const nodes=d.readNodes(), current=nodes.find(n=>n.id===node.id);
+    if (current) {current.sshWsAgentSeenAt=new Date().toISOString();d.saveNodes(nodes);}
+    return res.set('Cache-Control','no-store').json({ok:true});
+  });
+    app.post("/api/v1/nodes/:id/heartbeat", d.limiter, nodeAuth, (req, res) => {
     const nodes = d.readNodes();
     const node = nodes.find((n) => n.id === (req as any).vpnNode.id)!;
     const snapshot = req.body?.snapshot;

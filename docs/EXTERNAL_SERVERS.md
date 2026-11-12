@@ -1,6 +1,10 @@
 # Comptes et serveurs externes
 
-Le panneau gère les données commerciales et les exports client. Il ne crée, ne démarre, ne recharge ni n'arrête un moteur VPN, un compte système SSH ou un proxy de tunnel. Le Compose central contient PostgreSQL, l'API et Caddy pour le panneau HTTPS. Le Compose de nœud ne contient qu'un agent de statistiques, sans port entrant et avec un montage de statistiques en lecture seule.
+Le panneau gère les données commerciales et les exports client. Il ne crée, ne démarre, ne recharge ni n'arrête un moteur VPN. Pour les serveurs externes en mode inventaire, il ne crée pas de compte système SSH et ne commande pas les tunnels. **Exception désormais disponible :** lorsqu'un administrateur autorise explicitement un VPS au mode SSH-WS administré et que l'opérateur installe les services dédiés sur ce VPS, un agent authentifié peut créer, suspendre et expirer les comptes SSH propres à ABESS (voir [SSH_WS_MANAGED.md](SSH_WS_MANAGED.md)). Rien n'est installé par un push GitHub. Le Compose central contient PostgreSQL, l'API et Caddy pour le panneau HTTPS. Le Compose de nœud ne contient qu'un agent de statistiques, sans port entrant et avec un montage de statistiques en lecture seule.
+
+## SSH-WS administré (nouveau mode, installation opérateur requise)
+
+L'interface **Comptes SSH** peut créer des clients sur un VPS explicitement configuré en SSH-WS. La passerelle RFC6455 et l'agent ne sont pas installés par le panneau ni par le workflow de vérification. Les comptes restent en provisionnement tant que l'agent du bon VPS n'a pas confirmé leur activation. Les suspensions et expirations sont appliquées sur OpenSSH par l'agent; les quotas en Go et les limites de connexions restent non garantis sans mesure/contrôle côté VPS. Voir [Installation et exploitation SSH-WS](SSH_WS_MANAGED.md).
 
 ## Import simple d’un compte fournisseur
 

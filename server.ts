@@ -15,7 +15,8 @@ import QRCode from 'qrcode';
 import { Operations, registerOperations, encryptedBackup, uploadBackup, type VpnNode } from './modules/operations.js';
 import { registerCommerce } from './modules/commerce.js';
 import { registerSsh, type SshState } from './modules/ssh.js';
-import { SecurityService, registerSecurityRoutes } from './modules/security.js';
+import { singBoxConfig, mihomoConfig } from './modules/subscriptions.js';
+import { SecurityService, registerSecurityRoutes, unseal } from './modules/security.js';
 import { DocumentStore } from './modules/store.js';
 import { startTelegramBot } from './telegram-bot.js';
 
@@ -132,6 +133,8 @@ export interface AppUser {
 export interface ClientToken {
   id: string;
   token: string;
+  /** 256-bit bearer credential for portable subscriptions; absent only on legacy licences. */
+  subscriptionKey?: string;
   /** Per-licence VLESS identity; legacy records are migrated on load. */
   clientUuid?: string;
   trafficId?: string;
@@ -140,6 +143,10 @@ export interface ClientToken {
   plan: string;
   bandwidthGb: number;
   bandwidthUsedGb: number;
+  /** Real directional Xray counters. Old records without full history omit the breakdown. */
+  trafficUpBytes?: number;
+  trafficDownBytes?: number;
+  trafficBreakdownComplete?: boolean;
   expiresAt: string;
   days: number;
   deviceLimit: number;
@@ -341,6 +348,8 @@ export interface MembershipRequest {
   planName?: string;
   paymentMethod?: 'ORANGE_MONEY' | 'MTN_MOMO' | 'WAVE' | 'FREE_TRIAL';
   paymentRef?: string;
+  /** SHA-256 of an unguessable claim secret returned once to the applicant. */
+  claimSecretHash?: string;
   status: 'PENDING' | 'APPROVED' | 'REJECTED';
   rejectionReason?: string;
   assignedTokenId?: string;
@@ -1283,15 +1292,17 @@ function protocolConfigForToken(token: ClientToken, configs = loadProtocolConfig
   }
   return configs[0] || null;
 }
-type SafeClientToken = Omit<ClientToken, 'configurationSnapshot' | 'sshConfig'> & {
+type SafeClientToken = Omit<ClientToken, 'configurationSnapshot' | 'sshConfig' | 'subscriptionKey'> & {
+  subscriptionUrl: string;
   sshConfig?: Omit<NonNullable<ClientToken['sshConfig']>, 'sshPassword'>;
 };
 
 function safeClientToken(token: ClientToken): SafeClientToken {
-  const { configurationSnapshot: _configurationSnapshot, sshConfig, ...safe } = token;
-  if (!sshConfig) return safe;
+  const { configurationSnapshot: _configurationSnapshot, sshConfig, subscriptionKey, ...safe } = token;
+  const subscriptionUrl = `/sub/${subscriptionKey || token.token}`;
+  if (!sshConfig) return { ...safe, subscriptionUrl };
   const { sshPassword: _sshPassword, ...safeSshConfig } = sshConfig;
-  return { ...safe, sshConfig: safeSshConfig };
+  return { ...safe, subscriptionUrl, sshConfig: safeSshConfig };
 }
 
 // Backups are Super Admin-only recovery artifacts: retain each token's immutable
@@ -1628,7 +1639,7 @@ async function startServer() {
   // The Android app previously called these routes, but they did not exist.
   // This endpoint only records client-reported usage; it is not authoritative
   // quota enforcement. The VLESS data plane must account server-side bytes.
-  app.post('/api/v1/client/telemetry', (req, res) => {
+  app.post('/api/v1/client/telemetry', publicApiRateLimiter, (req, res) => {
     const rawToken = req.body?.token == null ? '' : String(req.body.token).trim();
     if (!rawToken) {
       res.status(400).json({ ok: false, error: 'Token manquant' });
@@ -1949,6 +1960,7 @@ async function startServer() {
     writeJsonAtomically(sshFile, snapshot.ssh || { accounts: [] });
     if(Array.isArray(snapshot.nodes))writeJsonAtomically(nodesFile,snapshot.nodes);
     writeJsonAtomically(securityFile,{mfa:snapshot.security?.mfa||{},sessions:{}});
+    activeSessions.clear();
     if(Array.isArray(snapshot.auditEvents))storage.importAudit(snapshot.auditEvents);
   };
   registerOperations(app,{authenticate,limiter:publicApiRateLimiter,ops:operations,snapshot:fullSnapshot,restore:restoreSnapshot,readNodes:()=>hasDocument(nodesFile)?readDocument(nodesFile):[],saveNodes:v=>{writeJsonAtomically(nodesFile,v);},audit:logAudit,
@@ -1962,6 +1974,32 @@ async function startServer() {
         id: account.id, username: account.username, enabled: account.enabled && sshOwnerActive(account.resellerId) && Date.parse(account.expiresAt) > Date.now() && account.usedBytes < account.quotaBytes,
         expiresAt: account.expiresAt, quotaBytes: account.quotaBytes, usedBytes: account.usedBytes, maxConnections: account.maxConnections
       })) }),
+    nodeSshDesired: node => ({
+      format:'abess-managed-ssh-ws-v1',
+      observedAt:new Date().toISOString(),
+      accounts:readSsh().accounts.filter(a=>a.managed&&a.nodeId===node.id).map(a=>{
+        const enabled=a.enabled&&sshOwnerActive(a.resellerId)&&
+          Number.isFinite(Date.parse(a.expiresAt))&&Date.parse(a.expiresAt)>Date.now()&&
+          a.usedBytes<a.quotaBytes;
+        return {id:a.id,username:a.username,expiresAt:a.expiresAt,enabled,
+          ...(enabled?{password:unseal(a.password,process.env.MASTER_SECRET!)}:{})};
+      })
+    }),
+    nodeSshReport: (node,reports) => {
+      const state=readSsh();
+      let changed=false;
+      const now=new Date().toISOString();
+      for(const report of reports){
+        const a=state.accounts.find(v=>v.managed&&v.nodeId===node.id&&v.id===report.id);
+        if(!a)continue;
+        const canBeActive=a.enabled&&sshOwnerActive(a.resellerId)&&Date.parse(a.expiresAt)>Date.now()&&a.usedBytes<a.quotaBytes;
+        const wanted=report.state==='active'&&!canBeActive?'error':report.state;
+        a.provisionState=wanted as 'active'|'blocked'|'error';
+        a.lastAppliedAt=now;
+        changed=true;
+      }
+      if(changed)writeJsonAtomically(sshFile,state);
+    },
     nodeUsage: (node, snapshot) => {
       const counters = new Map<string, number>(snapshot.stat.map((item: any) => [item.name, Number(item.value)]));
       const tokens = loadTokens();
@@ -1977,7 +2015,10 @@ async function startServer() {
           const old = next[canonical] || 0;
           // A reset requires a new generation; out-of-order counters never add traffic.
           if (value < old) throw new Error('Counter decreased within one generation');
-          delta += value - old;
+          const newBytes = value - old;
+          delta += newBytes;
+          if (direction === 'uplink') token.trafficUpBytes = (token.trafficUpBytes || 0) + newBytes;
+          else token.trafficDownBytes = (token.trafficDownBytes || 0) + newBytes;
           next[canonical] = value;
         }
         if (delta > 0) {
@@ -2597,10 +2638,10 @@ async function startServer() {
 
     const tokens = loadTokens();
     const newToken: ClientToken = {
-      id: 'tok_' + crypto.randomUUID(), token: finalToken, clientUuid, trafficId,
+      id: 'tok_' + crypto.randomUUID(), token: finalToken, subscriptionKey: crypto.randomBytes(32).toString('base64url'), clientUuid, trafficId,
       resellerId: user.id, resellerName: user.name,
       plan: String(plan || `${requestedGb} GO CYBER VIP`).trim().slice(0, 80),
-      bandwidthGb: requestedGb, bandwidthUsedGb: 0, expiresAt: calculatedExpiresAt, days: daysRemaining,
+      bandwidthGb: requestedGb, bandwidthUsedGb: 0, trafficUpBytes: 0, trafficDownBytes: 0, trafficBreakdownComplete: true, expiresAt: calculatedExpiresAt, days: daysRemaining,
       deviceLimit: clientLimit, deviceIds: [], allowedDeviceId: allowedDeviceId || undefined,
       customerNote, customerContact,
       connectionCount: 0, lastSeenAt: null, lastSeenIp: null,
@@ -2660,6 +2701,20 @@ async function startServer() {
     saveUsers(users);saveTokens(tokens);
     logTransaction({resellerId:actor.id,resellerName:actor.name,type:'TOKEN_RENEW',amountGb:quota,balanceBefore:balance,balanceAfter:account.credits,note:`Renouvellement de la licence ${target.id} : ${days} jours.`});
     logAudit({actor:actor.id,role:actor.role,action:'TOKEN_RENEW',details:target.id});
+    res.json(safeClientToken(target));
+  });
+
+  // Explicitly rotate legacy/compromised subscription URLs without changing the commercial token or VLESS UUID.
+  app.post('/api/v1/admin/tokens/:id/rotate-subscription', authenticate, (req, res) => {
+    const actor = (req as any).user as AppUser;
+    const tokens = loadTokens();
+    const target = tokens.find(t => t.id === req.params.id);
+    if (!target) return res.sendStatus(404);
+    if (!canManageToken(actor, target.resellerId, loadUsers())) return res.sendStatus(403);
+    if (target.protocolType === 'ssh' || target.sshConfig) return res.sendStatus(409);
+    target.subscriptionKey = crypto.randomBytes(32).toString('base64url');
+    saveTokens(tokens);
+    logAudit({ actor: actor.id, role: actor.role, action: 'SUBSCRIPTION_ROTATED', details: target.id });
     res.json(safeClientToken(target));
   });
 
@@ -2764,12 +2819,14 @@ async function startServer() {
       const newToken: ClientToken = {
         id: 'tok_' + crypto.randomUUID(),
         token: finalToken,
+        subscriptionKey: crypto.randomBytes(32).toString('base64url'),
         clientUuid,
         resellerId: user.id,
         resellerName: user.name,
         plan,
         bandwidthGb: requestedGb,
         bandwidthUsedGb: 0,
+        trafficUpBytes: 0, trafficDownBytes: 0, trafficBreakdownComplete: true,
         expiresAt: calculatedExpiresAt,
         days: daysRemaining,
         deviceLimit: clientLimit,
@@ -2872,72 +2929,15 @@ async function startServer() {
     }
   });
 
-  // 1-Click System Backup Export (Super Admin only)
+  // Legacy plaintext backups are retired. Use encrypted /api/v1/admin/system/backup
+  // and /api/v1/admin/system/restore with the documented authenticated encryption format.
   app.get('/api/v1/admin/backup', authenticate, (req, res) => {
-    const user: AppUser = (req as any).user;
-    if (user.role !== 'SUPER_ADMIN') {
-      res.status(403).json({ error: 'Accès réservé au Super Administrateur.' });
-      return;
-    }
-
-    const { secretPassphrase: _secretPassphrase, ...safeMasterConfig } = loadMasterConfig();
-    const backupData = {
-      timestamp: new Date().toISOString(),
-      version: '2.5.0-commercial',
-      masterConfig: safeMasterConfig,
-      protocolConfigs: loadProtocolConfigs(),
-      users: loadUsers().map(u => ({ ...u, passwordHash: u.passwordHash })),
-      tokens: loadTokens().map(backupClientToken),
-      transactions: loadTransactions()
-    };
-
-    const dateStr = new Date().toISOString().slice(0, 10);
-    res.setHeader('Content-Type', 'application/json');
-    res.setHeader('Content-Disposition', `attachment; filename="abessvpn-backup-${dateStr}.json"`);
-    res.send(JSON.stringify(backupData, null, 2));
+    if (!requireSuperAdmin(req, res)) return;
+    res.status(410).json({ error: 'Export JSON non chiffré retiré. Utilisez /api/v1/admin/operations/backup.' });
   });
-
-  // System Backup Restore (Super Admin only)
   app.post('/api/v1/admin/backup/restore', authenticate, (req, res) => {
-    const user: AppUser = (req as any).user;
-    if (user.role !== 'SUPER_ADMIN') {
-      res.status(403).json({ error: 'Accès réservé au Super Administrateur.' });
-      return;
-    }
-
-    const payload = req.body;
-    if (!payload || !validRestoredUsers(payload.users) || !Array.isArray(payload.tokens)) {
-      res.status(400).json({ error: 'Fichier de sauvegarde invalide (structure users/tokens manquante).' });
-      return;
-    }
-
-    // Safety snapshot before restoring
-    const safetyBackupPath = path.resolve(backupsDir, `pre-restore-${Date.now()}.json`);
-    const { secretPassphrase: _secretPassphrase, ...safeMasterConfig } = loadMasterConfig();
-    const currentSnapshot = {
-      timestamp: new Date().toISOString(),
-      masterConfig: safeMasterConfig,
-      protocolConfigs: loadProtocolConfigs(),
-      users: loadUsers(),
-      tokens: loadTokens().map(backupClientToken),
-      transactions: loadTransactions()
-    };
-    writeJsonAtomically(safetyBackupPath, currentSnapshot);
-
-    // Apply restore
-    if (payload.masterConfig) saveMasterConfig(payload.masterConfig);
-    if (Array.isArray(payload.protocolConfigs)) saveProtocolConfigs(payload.protocolConfigs);
-    saveUsers(payload.users);
-    saveTokens(payload.tokens);
-    if (Array.isArray(payload.transactions)) writeJsonAtomically(transactionsFile, payload.transactions);
-
-    activeSessions.clear();
-    res.json({
-      success: true,
-      message: 'Sauvegarde restaurée avec succès. Un instantané de sécurité a été créé.',
-      usersCount: payload.users.length,
-      tokensCount: payload.tokens.length
-    });
+    if (!requireSuperAdmin(req, res)) return;
+    res.status(410).json({ error: 'Restauration JSON non chiffrée retirée. Utilisez /api/v1/admin/operations/restore.' });
   });
 
   async function performAutoBackup(): Promise<void> {
@@ -3698,6 +3698,7 @@ async function startServer() {
   // Dual-mode: Interactive HTML for browsers & Base64 for VPN clients
   // ==========================================
   app.get(['/sub/:token', '/nexus/sub/:token', '/api/v1/sub/:token'], publicApiRateLimiter, async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
     const rawToken = String(req.params.token || '').trim();
     if (!rawToken) {
       res.status(400).send('Jeton requis.');
@@ -3705,7 +3706,8 @@ async function startServer() {
     }
     const tokens = loadTokens();
     const cleanToken = rawToken.toUpperCase();
-    const matched = tokens.find(t => t.token.toUpperCase() === cleanToken);
+    // New subscriptions use high-entropy secrets; legacy tokens remain readable until rotated.
+    const matched = tokens.find(t => t.subscriptionKey ? t.subscriptionKey === rawToken : t.token.toUpperCase() === cleanToken);
     if (!matched) {
       res.status(404).send('Abonnement introuvable.');
       return;
@@ -3733,7 +3735,12 @@ async function startServer() {
       'darktunnel', 'httpcustom', 'matsuri', 'karing', 'flclash',
       'curl', 'wget', 'python', 'okhttp', 'go-http-client'
     ];
+    const format = String(req.query.format || 'base64').toLowerCase();
+    if (!['base64', 'raw', 'sing-box', 'mihomo'].includes(format)) {
+      return res.status(400).json({ error: 'Format demandé inconnu. Utilisez base64, raw, sing-box ou mihomo.' });
+    }
     const isBrowser =
+      format === 'base64' &&
       acceptHdr.includes('text/html') &&
       uaHdr.includes('mozilla') &&
       !vpnKeywords.some(k => uaHdr.includes(k)) &&
@@ -3742,6 +3749,36 @@ async function startServer() {
     const protocolConfigs = loadProtocolConfigs();
     const profile = protocolConfigForToken(matched, protocolConfigs);
     const variants = generateUserVlessVariants(matched, profile || undefined);
+
+    if (format === 'sing-box' || format === 'mihomo') {
+      if (!profile || !isXrayProtocol(profile.protocol)) {
+        return res.status(409).json({ error: 'Aucun profil VLESS exportable.' });
+      }
+      try {
+        const portable = {
+          name: `${profile.name} - ${matched.token}`,
+          host: profile.serverHost,
+          port: xrayPublicPort(profile.protocol, profile.transport, profile.serverPort),
+          uuid: matched.clientUuid || '',
+          transport: profile.transport,
+          sni: profile.sniHost || profile.serverHost,
+          httpHost: profile.host || profile.serverHost,
+          path: xrayProfilePath('vless', profile.transport as XrayTransport, profile.path)
+        };
+        if (format === 'sing-box') {
+          res.type('application/json; charset=utf-8');
+          return res.send(JSON.stringify(singBoxConfig(portable), null, 2));
+        }
+        res.type('text/yaml; charset=utf-8');
+        return res.send(mihomoConfig(portable));
+      } catch {
+        return res.status(422).json({ error: 'Transport incompatible avec cet exporteur. Utilisez le lien VLESS standard.' });
+      }
+    }
+    if (format === 'raw') {
+      res.type('text/plain; charset=utf-8');
+      return res.send(variants.map(v => v.uri).join('\n'));
+    }
 
     if (isBrowser) {
       const subTemplatePath = path.resolve(templatesDir, 'sub.html');
@@ -3769,14 +3806,14 @@ async function startServer() {
             name: userName,
             plan: matched.plan,
             quota_bytes: Math.round(matched.bandwidthGb * 1024 * 1024 * 1024),
-            used_bytes_up: Math.round(matched.bandwidthUsedGb * 0.25 * 1024 * 1024 * 1024),
-            used_bytes_down: Math.round(matched.bandwidthUsedGb * 0.75 * 1024 * 1024 * 1024),
+            used_bytes_up: matched.trafficBreakdownComplete ? matched.trafficUpBytes ?? 0 : null,
+            used_bytes_down: matched.trafficBreakdownComplete ? matched.trafficDownBytes ?? 0 : null,
             expires_at: matched.expiresAt,
             status: matched.status,
             is_valid: matched.status === 'active' && new Date(matched.expiresAt).getTime() > Date.now() && matched.bandwidthUsedGb < matched.bandwidthGb
           },
           variants: browserVariants,
-          sub_path: `/sub/${matched.token}`,
+          sub_path: `/sub/${matched.subscriptionKey || matched.token}`,
           support_phone: matched.customerContact || '+237690123456'
         };
 
@@ -3798,12 +3835,14 @@ async function startServer() {
     const b64Sub = Buffer.from(rawUris, 'utf8').toString('base64');
 
     const totalQuotaBytes = Math.round(matched.bandwidthGb * 1024 * 1024 * 1024);
-    const usedUpBytes = Math.round(matched.bandwidthUsedGb * 0.25 * 1024 * 1024 * 1024);
-    const usedDownBytes = Math.round(matched.bandwidthUsedGb * 0.75 * 1024 * 1024 * 1024);
+    const usedUpBytes = matched.trafficUpBytes ?? 0;
+    const usedDownBytes = matched.trafficDownBytes ?? 0;
     const expTs = Math.floor(new Date(matched.expiresAt).getTime() / 1000) || 0;
     const titleB64 = Buffer.from(`AbessVpn - ${matched.token}`).toString('base64');
 
-    res.setHeader('Subscription-Userinfo', `upload=${usedUpBytes}; download=${usedDownBytes}; total=${totalQuotaBytes}; expire=${expTs}`);
+    if (matched.trafficBreakdownComplete === true) {
+      res.setHeader('Subscription-Userinfo', `upload=${usedUpBytes}; download=${usedDownBytes}; total=${totalQuotaBytes}; expire=${expTs}`);
+    }
     res.setHeader('Profile-Update-Interval', '12');
     res.setHeader('Profile-Title', `base64:${titleB64}`);
     res.setHeader('Content-Disposition', `inline; filename="${matched.token}.txt"`);
@@ -3828,31 +3867,43 @@ async function startServer() {
     }
   });
 
+  // The repository contains placeholder APKs. Never claim a stub is a signed release.
+  function isInstallableApk(filepath: string): boolean {
+    try {
+      if (fs.statSync(filepath).size < 100 * 1024) return false;
+      const fd = fs.openSync(filepath, 'r');
+      try {
+        const header = Buffer.alloc(4);
+        fs.readSync(fd, header, 0, 4, 0);
+        return header[0] === 0x50 && header[1] === 0x4b && (header[2] === 3 || header[2] === 5 || header[2] === 7);
+      } finally { fs.closeSync(fd); }
+    } catch { return false; }
+  }
   app.get(['/download/:filename', '/nexus/download/:filename'], (req, res) => {
     const requested = path.basename(req.params.filename);
     const filePath = path.resolve(staticDir, requested);
-    if (fs.existsSync(filePath)) {
-      res.download(filePath, requested);
-    } else {
-      res.status(404).send('Fichier introuvable.');
+    if (!fs.existsSync(filePath) || (requested.toLowerCase().endsWith('.apk') && !isInstallableApk(filePath))) {
+      res.status(404).send('Aucune version APK installable publiée à cette adresse.');
+      return;
     }
+    res.download(filePath, requested);
   });
 
   app.get(['/api/download/info', '/api/v1/download/info'], (_req, res) => {
     const version = loadAppVersionConfig();
     const apkPath = path.resolve(staticDir, 'AbessVpn.apk');
-    let sizeBytes = 0;
-    if (fs.existsSync(apkPath)) {
-      try { sizeBytes = fs.statSync(apkPath).size; } catch {}
-    }
+    const available = isInstallableApk(apkPath);
+    const sizeBytes = available ? fs.statSync(apkPath).size : 0;
+    res.setHeader('Cache-Control', 'no-store');
     res.json({
       ok: true,
+      available,
       filename: 'AbessVpn.apk',
       version: version.latestVersion,
       sizeBytes,
-      sizeFormatted: sizeBytes > 0 ? `${(sizeBytes / (1024 * 1024)).toFixed(1)} Mo` : '20 Mo',
-      downloadUrl: '/download/AbessVpn.apk',
-      checksum: 'sha256-verified-release',
+      sizeFormatted: available ? `${(sizeBytes / (1024 * 1024)).toFixed(1)} Mo` : null,
+      downloadUrl: available ? '/download/AbessVpn.apk' : null,
+      checksum: available ? crypto.createHash('sha256').update(fs.readFileSync(apkPath)).digest('hex') : null,
       publishedAt: version.publishedAt
     });
   });
@@ -3889,7 +3940,10 @@ async function startServer() {
       return;
     }
     const { name, quotaGb, durationDays, priceCfa, badge, description } = req.body;
-    if (!name || Number(quotaGb) < 0 || Number(durationDays) <= 0) {
+    if (typeof name !== 'string' || !name.trim() || name.trim().length > 80 ||
+        !Number.isFinite(Number(quotaGb)) || Number(quotaGb) <= 0 || Number(quotaGb) > 100000 ||
+        !Number.isInteger(Number(durationDays)) || Number(durationDays) < 1 || Number(durationDays) > 3650 ||
+        !Number.isSafeInteger(Number(priceCfa ?? 0)) || Number(priceCfa ?? 0) < 0) {
       res.status(400).json({ error: 'Nom, quota en Go et durée en jours requis.' });
       return;
     }
@@ -3927,10 +3981,20 @@ async function startServer() {
       return;
     }
     const { name, quotaGb, durationDays, priceCfa, badge, description } = req.body;
-    if (name) plan.name = String(name).trim();
-    if (quotaGb !== undefined) plan.quotaGb = Number(quotaGb);
-    if (durationDays !== undefined) plan.durationDays = Number(durationDays);
-    if (priceCfa !== undefined) plan.priceCfa = Number(priceCfa);
+    const nextName = name === undefined ? plan.name : name;
+    const nextQuota = quotaGb === undefined ? plan.quotaGb : Number(quotaGb);
+    const nextDays = durationDays === undefined ? plan.durationDays : Number(durationDays);
+    const nextPrice = priceCfa === undefined ? plan.priceCfa : Number(priceCfa);
+    if (typeof nextName !== 'string' || !nextName.trim() || nextName.trim().length > 80 ||
+        !Number.isFinite(nextQuota) || nextQuota <= 0 || nextQuota > 100000 ||
+        !Number.isInteger(nextDays) || nextDays < 1 || nextDays > 3650 ||
+        !Number.isSafeInteger(nextPrice) || nextPrice < 0) {
+      return res.status(400).json({ error: 'Nom, quota (0–100000 Go), durée (1–3650 jours) ou prix FCFA invalide.' });
+    }
+    plan.name = nextName.trim();
+    plan.quotaGb = nextQuota;
+    plan.durationDays = nextDays;
+    plan.priceCfa = nextPrice;
     if (badge !== undefined) plan.badge = String(badge).trim();
     if (description !== undefined) plan.description = String(description).trim();
     savePlans(plans);
@@ -3979,6 +4043,8 @@ async function startServer() {
     const plan = plans.find(p => p.id === planId) || plans[0];
 
     const requests = loadRequests();
+    const claimSecret = crypto.randomBytes(32).toString('base64url');
+    const claimSecretHash = crypto.createHash('sha256').update(claimSecret).digest('hex');
     const existing = requests.find(r => r.deviceId && r.deviceId === deviceId && r.status === 'PENDING');
     if (existing) {
       existing.firstName = String(firstName).trim();
@@ -3991,8 +4057,11 @@ async function startServer() {
       existing.paymentMethod = paymentMethod;
       existing.paymentRef = paymentRef;
       existing.submittedAt = new Date().toISOString();
+      // Rotate the proof on every update so a leaked old claim cannot be reused.
+      existing.claimSecretHash = claimSecretHash;
       saveRequests(requests);
-      res.json({ status: 'pending', request: existing, message: 'Demande mise à jour et en attente d\'approbation.' });
+      const { claimSecretHash: _privateClaimHash, ...safeRequest } = existing;
+      res.json({ status: 'pending', request: safeRequest, claimSecret, message: 'Demande mise à jour et en attente d\'approbation.' });
       return;
     }
 
@@ -4015,27 +4084,31 @@ async function startServer() {
       planName: plan?.name,
       paymentMethod: paymentMethod || 'ORANGE_MONEY',
       paymentRef: paymentRef ? String(paymentRef).trim() : undefined,
+      claimSecretHash,
       status: 'PENDING',
       submittedAt: new Date().toISOString()
     };
     requests.push(newReq);
     saveRequests(requests);
-    res.json({ status: 'pending', request: newReq, message: 'Demande enregistrée avec succès. Vous recevrez un accès dès validation.' });
+    const { claimSecretHash: _privateClaimHash, ...safeRequest } = newReq;
+    res.json({ status: 'pending', request: safeRequest, claimSecret, message: 'Demande enregistrée avec succès. Conservez claimSecret pour consulter son statut.' });
   });
 
   app.get(['/api/membership/status', '/api/v1/membership/status'], publicApiRateLimiter, (req, res) => {
     const deviceId = req.query.device_id ? String(req.query.device_id).trim() : '';
     const requestId = req.query.request_id ? String(req.query.request_id).trim() : '';
-    const requests = loadRequests();
-    if (!requestId && !deviceId) {
-      res.status(400).json({ status: 'invalid_request', message: 'request_id ou device_id requis.' });
+    const claimSecret = String(req.get('X-Claim-Secret') || '');
+    if (!requestId || !/^[A-Za-z0-9_-]{43}$/.test(claimSecret)) {
+      res.status(400).json({ status: 'invalid_request', message: 'request_id et en-tête X-Claim-Secret requis.' });
       return;
     }
-    const reqFound = requests.find(r =>
-      (!requestId || r.id === requestId) && (!deviceId || r.deviceId === deviceId)
-    );
-    if (!reqFound) {
-      res.status(404).json({ status: 'not_found', message: 'Aucune demande trouvée pour cet appareil.' });
+    const requests = loadRequests();
+    const reqFound = requests.find(r => r.id === requestId && (!deviceId || r.deviceId === deviceId));
+    const suppliedHash = crypto.createHash('sha256').update(claimSecret).digest();
+    const expectedHash = reqFound?.claimSecretHash && /^[0-9a-f]{64}$/.test(reqFound.claimSecretHash)
+      ? Buffer.from(reqFound.claimSecretHash, 'hex') : Buffer.alloc(32);
+    if (!reqFound?.claimSecretHash || !crypto.timingSafeEqual(suppliedHash, expectedHash)) {
+      res.status(404).json({ status: 'not_found', message: 'Demande ou preuve introuvable.' });
       return;
     }
     if (reqFound.status === 'APPROVED' && reqFound.assignedToken) {
@@ -4048,7 +4121,7 @@ async function startServer() {
         expiresAt: token?.expiresAt,
         bandwidthGb: token?.bandwidthGb,
         downloadUrl: '/download/AbessVpn.apk',
-        subUrl: `/sub/${reqFound.assignedToken}`
+        subUrl: `/sub/${token?.subscriptionKey || reqFound.assignedToken}`
       });
       return;
     }
@@ -4135,12 +4208,14 @@ async function startServer() {
     const dummyToken: ClientToken = {
       id: 'tok_' + crypto.randomUUID(),
       token: tokenStr,
+      subscriptionKey: crypto.randomBytes(32).toString('base64url'),
       clientUuid: uuid,
       resellerId: user.id,
       resellerName: user.name,
       plan: selectedPlan.name,
       bandwidthGb,
       bandwidthUsedGb: 0,
+      trafficUpBytes: 0, trafficDownBytes: 0, trafficBreakdownComplete: true,
       expiresAt,
       days,
       deviceLimit: 1,
@@ -4294,51 +4369,15 @@ async function startServer() {
     res.json(loadAuditLogs());
   });
 
+  // Historical plaintext system endpoints are disabled, including restore.
+  // Use /api/v1/admin/operations/backup and /api/v1/admin/operations/restore.
   app.get(['/api/system/backup', '/api/v1/admin/system/backup'], authenticate, (req, res) => {
     if (!requireSuperAdmin(req, res)) return;
-    const { secretPassphrase: _secretPassphrase, ...safeConfig } = loadMasterConfig();
-    res.setHeader('Content-Disposition', `attachment; filename="abessvpn-full-backup-${Date.now()}.json"`);
-    res.json({
-      users: loadUsers(),
-      tokens: loadTokens().map(backupClientToken),
-      config: safeConfig,
-      protocolConfigs: loadProtocolConfigs(),
-      transactions: loadTransactions(),
-      plans: loadPlans(),
-      requests: loadRequests(),
-      auditLogs: loadAuditLogs(),
-      appVersion: loadAppVersionConfig(),
-      timestamp: new Date().toISOString()
-    });
+    res.status(410).json({ error: 'Sauvegardes JSON non chiffrées désactivées.' });
   });
-
   app.post(['/api/system/restore', '/api/v1/admin/system/restore'], authenticate, (req, res) => {
-    const user: AppUser = (req as any).user;
-    if (user.role !== 'SUPER_ADMIN') {
-      res.status(403).json({ error: 'Accès réservé au Super Administrateur.' });
-      return;
-    }
-    const payload = req.body;
-    if (!payload || typeof payload !== 'object' ||
-        (payload.users !== undefined && !validRestoredUsers(payload.users))) {
-      res.status(400).json({ error: 'Fichier de sauvegarde invalide.' });
-      return;
-    }
-    if (Array.isArray(payload.plans)) savePlans(payload.plans);
-    if (Array.isArray(payload.requests)) saveRequests(payload.requests);
-    // Audit history is append-only and is never overwritten by a restore.
-    if (Array.isArray(payload.users)) saveUsers(payload.users);
-    if (Array.isArray(payload.tokens)) saveTokens(payload.tokens);
-    if (payload.config) saveMasterConfig(payload.config);
-    if (Array.isArray(payload.protocolConfigs)) saveProtocolConfigs(payload.protocolConfigs);
-    logAudit({
-      actor: user.name,
-      role: user.role,
-      action: 'SYSTEM_RESTORE',
-      details: 'Restauration complète de la base de données.'
-    });
-    activeSessions.clear();
-    res.json({ ok: true, message: 'Base de données restaurée avec succès.' });
+    if (!requireSuperAdmin(req, res)) return;
+    res.status(410).json({ error: 'Restauration JSON non chiffrée désactivée.' });
   });
 
   app.get('/api/v1/admin/tokens/:id/variants', authenticate, (req, res) => {
@@ -4363,7 +4402,7 @@ async function startServer() {
     res.json({
       ok: true,
       token: token.token,
-      subscriptionUrl: `/sub/${token.token}`,
+      subscriptionUrl: `/sub/${token.subscriptionKey || token.token}`,
       variants,
       xrayClient
     });
