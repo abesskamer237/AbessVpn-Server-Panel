@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   validate:
-    if: github.event_name == 'workflow_dispatch' || github.event.head_commit.message == 'deploy: roll out SSH-WSS-only panel to VPS'
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, 'roll out SSH-WSS-only panel to VPS')
     services:
       postgres:
         image: postgres:16-bookworm
