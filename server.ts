@@ -1515,7 +1515,7 @@ async function startServer() {
   await storage.initialize();
   await storage.transaction(() => {
     loadUsers();
-    refreshTrafficTotals(loadTokens());
+    if(process.env.SSH_WSS_ONLY!=='true')refreshTrafficTotals(loadTokens());
   });
 
   const app = express();
@@ -1533,6 +1533,40 @@ async function startServer() {
   app.use(express.urlencoded({extended:false,limit:'64kb'}));
   app.use(express.json({ limit: '2mb' }));
   app.use(storage.middleware());
+
+  // Single-protocol production switch. Keep historical financial and account
+  // records intact for audit/reconciliation; retire legacy VLESS profiles,
+  // portable subscriptions, trial tokens and mobile VPN issuance completely.
+  // Enabled by SSH_WSS_ONLY=true on the actual VPS, not in legacy CI fixtures.
+  if(process.env.SSH_WSS_ONLY==='true') {
+    const retired=(req:express.Request,res:express.Response,next:express.NextFunction)=>{
+      const p=req.path;
+      const retiredPath=
+        p.startsWith('/api/v1/admin/tokens') ||
+        p.startsWith('/api/v1/admin/protocol-configs') ||
+        p==='/api/v1/admin/server-config' ||
+        p==='/api/v1/admin/available-configs' ||
+        p==='/api/vpn/heartbeat' ||
+        p==='/api/traffic/heartbeat' ||
+        p==='/api/v1/vpn/heartbeat' ||
+        p.startsWith('/api/v1/client/') ||
+        p.startsWith('/api/v1/ssh/config/') ||
+        p.startsWith('/ssh/config/') ||
+        p==='/api/v1/ssh/payloads' ||
+        p.startsWith('/api/v1/sub/') ||
+        p.startsWith('/sub/') ||
+        p.startsWith('/nexus/sub/') ||
+        p.startsWith('/api/v1/token/') ||
+        p.startsWith('/api/token/') ||
+        p==='/api/v1/auth/token' ||
+        /^(\/api\/v1\/nodes\/[^/]+\/config)$/.test(p);
+      if(retiredPath)return res.status(410).set('Cache-Control','no-store').json({
+        error:'Protocole supprimé. ABESS utilise uniquement SSH sur WebSocket TLS (WSS).'
+      });
+      next();
+    };
+    app.use(retired);
+  }
 
   // Same-origin panel access plus explicit local development or configured origins.
   const allowedOrigins = new Set<string>([
@@ -4469,7 +4503,10 @@ async function startServer() {
     });
   }
 
-  const xrayReconcileTimer = setInterval(() => {
+  // Do not read/reconcile defunct VLESS traffic every five seconds in WSS-only production.
+  let xrayReconcileTimer:ReturnType<typeof setInterval>|undefined;
+  if(process.env.SSH_WSS_ONLY!=='true') {
+  xrayReconcileTimer = setInterval(() => {
     void storage.transaction(() => {
     const tokens = loadTokens();
     let expired = false;
@@ -4487,6 +4524,7 @@ async function startServer() {
     }).catch(() => console.error('[DATABASE] Reconciliation postponed.'));
   }, 5000);
   xrayReconcileTimer.unref();
+  }
 
   // Daily automated backup & rolling 7-day retention
   await storage.transaction(performAutoBackup);
@@ -4547,7 +4585,8 @@ async function startServer() {
   let shuttingDown=false;
   const shutdown=()=>{
     if(shuttingDown)return;shuttingDown=true;
-    clearInterval(xrayReconcileTimer);clearInterval(autoBackupTimer);clearInterval(operationsTimer);
+    if(xrayReconcileTimer)clearInterval(xrayReconcileTimer);
+    clearInterval(autoBackupTimer);clearInterval(operationsTimer);
     telegramBot?.stop();
     server.closeIdleConnections();
     server.close(()=>{void storage.pool?.end().finally(()=>process.exit(0));if(!storage.pool)process.exit(0);});
