@@ -437,6 +437,19 @@ jobs:
 
           rm -f .deploy.env
 
+      - name: Refresh managed SSH-WSS host services and telemetry agent
+        shell: bash
+        env:
+          VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD || secrets.VPS_PASSWORD }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ vars.VPS_PORT }}
+        run: |
+          set -euo pipefail
+          "$HOME/.local/bin/abess-ssh" -p "${VPS_PORT:-22}" -o StrictHostKeyChecking=yes             "${VPS_USER}@${VPS_HOST}" 'cd "$HOME/abessvpn-server" && bash scripts/ssh-ws-postdeploy.sh'
+          "$HOME/.local/bin/abess-ssh" -p "${VPS_PORT:-22}" -o StrictHostKeyChecking=yes             "${VPS_USER}@${VPS_HOST}" 'for s in abess-ssh-ws-sshd abess-ssh-ws-gateway abess-ssh-ws-reconciler; do systemctl is-active --quiet "$s" || exit 1; done'
+          echo 'Managed SSH-WSS host services refreshed and healthy.'
+
       - name: Remove temporary deployment material
         if: always()
         run: rm -f .deploy.env .deploy.credentials .deploy-source.sha256
