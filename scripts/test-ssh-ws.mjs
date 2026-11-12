@@ -67,7 +67,8 @@ const request=async(url,options)=>{
   mockRequests.push({url:String(url),method:options.method,auth:options.headers.Authorization,body:options.body});
   return {ok:true,json:async()=>desired};
 };
-const store={state:{},lastSuccessfulAt:0};
+// In the real agent, the locally tracked ownership state is persisted between polls.
+const store={state:first.state,lastSuccessfulAt:0};
 await syncOnce({
   CONTROL_API_BASE_URL:'https://panel.example.test',VPN_NODE_ID:'0d94c3b5-87b4-4c1e-a444-a24c1da6780e',
   VPN_NODE_KEY:'ci-only-node-key'
