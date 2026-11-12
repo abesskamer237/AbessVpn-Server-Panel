@@ -74,6 +74,7 @@ export function registerSsh(app:Express,d:{
   // Resellers may register *existing* supplier credentials, never provision system users.
   // Only Super Admin may associate a record with a managed VPS/node.
   app.post('/api/v1/admin/ssh/accounts',d.authenticate,(req,res)=>{
+    if(process.env.SSH_WSS_ONLY==='true')return res.status(410).json({error:'Import TCP/WS désactivé : utilisez les comptes SSH-WSS administrés.'});
     const actor=(req as any).user;
     const nodeId=String(req.body?.nodeId||'')||undefined, node=nodeId?d.nodes().find(n=>n.id===nodeId&&n.enabled):undefined, config=req.body?.config;
     if (actor.role !== 'SUPER_ADMIN' && nodeId) return res.sendStatus(403);
@@ -182,6 +183,8 @@ export function registerSsh(app:Express,d:{
   });
   app.post('/api/v1/admin/ssh/accounts/:id/config',d.authenticate,(req,res)=>{
     const a=d.read().accounts.find(a=>a.id===req.params.id),actor=(req as any).user;
+    if(process.env.SSH_WSS_ONLY==='true' && a && (!a.managed || a.connection?.transport!=='wss'))
+      return res.status(410).json({error:'Seuls les comptes SSH-WSS administrés sont autorisés.'});
     if(!a)return res.sendStatus(404);if(!allowed(actor,a))return res.sendStatus(403);
     if(!a.connection||req.body?.transport!==a.connection.transport)return res.sendStatus(400);
     if(!active(a))return res.status(503).json({error:'Accès SSH indisponible.'});
