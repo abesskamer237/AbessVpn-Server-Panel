@@ -339,7 +339,6 @@ const autoBackupFiles = fs.readdirSync(`${dataDir}/backups`).filter(name => /^ab
 assert.ok(autoBackupFiles.length > 0, 'the daily auto-backup must be created at startup');
 const encryptedAutoBackup = JSON.parse(fs.readFileSync(`${dataDir}/backups/${autoBackupFiles[0]}`, 'utf8'));
 assert.equal(encryptedAutoBackup.format, 'abess-backup-v1');
-const { unseal } = await import(`file://${process.cwd()}/modules/security.ts`);
 const autoBackup = unseal(encryptedAutoBackup.sealed, process.env.MASTER_SECRET);
 assert.ok(!('secretPassphrase' in autoBackup.masterConfig), 'daily backups must not persist MASTER_SECRET');
 
