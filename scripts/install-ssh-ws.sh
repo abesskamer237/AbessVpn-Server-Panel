@@ -39,6 +39,7 @@ fi
 chmod 0751 /var/lib/abess-ssh-ws
 install -d -o root -g abess-gateway -m 0750 /var/lib/abess-ssh-ws/policy
 install -d -o abess-gateway -g abess-gateway -m 0700 /var/lib/abess-ssh-ws/gateway
+install -d -o abess-gateway -g abess-gateway -m 0750 /var/lib/abess-ssh-ws/socket
 cat > /etc/abess-ssh-ws/sshd_config <<'SSHD'
 Port 2222
 ListenAddress 127.0.0.1
@@ -93,7 +94,7 @@ Requires=abess-ssh-ws-sshd.service
 Type=simple
 User=abess-gateway
 WorkingDirectory=$PWD
-Environment=SSH_WS_LISTEN_PORT=2080
+Environment=SSH_WS_LISTEN_SOCKET=/var/lib/abess-ssh-ws/socket/gateway.sock
 Environment=SSH_WS_SSH_PORT=2222
 Environment=SSH_WS_PATH=/ssh-ws
 Environment=SSH_WS_MAX_CONNECTIONS=512
@@ -107,7 +108,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
-ReadWritePaths=/var/lib/abess-ssh-ws/gateway
+ReadWritePaths=/var/lib/abess-ssh-ws/gateway /var/lib/abess-ssh-ws/socket
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
 UMask=0077
@@ -150,7 +151,8 @@ WantedBy=multi-user.target
 UNIT
 systemctl daemon-reload
 systemctl enable --now abess-ssh-ws-sshd.service abess-ssh-ws-gateway.service abess-ssh-ws-reconciler.service
-printf 'SSH-WS on 127.0.0.1:2080 -> SSH on 127.0.0.1:2222\n'
+printf 'SSH-WS on private Unix socket -> SSH on 127.0.0.1:2222\n'
 printf 'Ed25519 SSH host fingerprint (verify independently):\n'
 ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub -E sha256
-printf 'Configure a separate Caddy HTTPS/WSS host route /ssh-ws manually.\n'
+printf 'Add SSH_WS_GATEWAY_GID=%s to the Docker Compose .env (only once) before restarting Caddy.\n' "$(id -g abess-gateway)"
+printf 'Caddy routes /ssh-ws/* to the private Unix socket using the GitHub Caddyfile.\n'
