@@ -62,6 +62,10 @@ services:
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
+    # Permission to connect to the private SSH-WS Unix socket, installed
+    # manually on the host. Missing socket keeps only /ssh-ws/* unavailable.
+    group_add:
+      - "${SSH_WS_GATEWAY_GID:-65534}"
     depends_on:
       api:
         condition: service_healthy
@@ -73,6 +77,7 @@ services:
       - "443:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - /var/lib/abess-ssh-ws/socket:/var/run/abess-ssh-ws:ro
       - caddy_data:/data
       - caddy_config:/config
     networks:
