@@ -387,9 +387,38 @@ export function registerOperations(
           (x.state==='active' && (x.usedBytes===undefined || x.online===undefined)) ||
           (x.usedBytes!==undefined && (!Number.isSafeInteger(x.usedBytes) || x.usedBytes<0)) ||
           (x.online!==undefined && (!Number.isInteger(x.online)||x.online<0||x.online>10)))) return res.sendStatus(400);
+    const telemetry=req.body?.telemetry;
+    let safeTelemetry:VpnNode['sshWsHost']|undefined;
+    if(telemetry!==undefined){
+      const observedAt=String(telemetry?.observedAt||'');
+      const age=Date.now()-Date.parse(observedAt);
+      const services=telemetry?.services;
+      const nums=['uptimeSeconds','load1','totalMemoryBytes','freeMemoryBytes','diskTotalBytes','diskFreeBytes'] as const;
+      if(!Number.isFinite(age)||age<-5000||age>60000||!services||
+        typeof services.sshd!=='boolean'||typeof services.gateway!=='boolean'||typeof services.reconciler!=='boolean'||
+        nums.some(key=>!Number.isFinite(Number(telemetry?.[key]))||Number(telemetry[key])<0)||
+        Number(telemetry.freeMemoryBytes)>Number(telemetry.totalMemoryBytes)||
+        Number(telemetry.diskFreeBytes)>Number(telemetry.diskTotalBytes)){
+        return res.sendStatus(400);
+      }
+      safeTelemetry={
+        observedAt,
+        uptimeSeconds:Math.floor(Number(telemetry.uptimeSeconds)),
+        load1:Number(telemetry.load1),
+        totalMemoryBytes:Math.floor(Number(telemetry.totalMemoryBytes)),
+        freeMemoryBytes:Math.floor(Number(telemetry.freeMemoryBytes)),
+        diskTotalBytes:Math.floor(Number(telemetry.diskTotalBytes)),
+        diskFreeBytes:Math.floor(Number(telemetry.diskFreeBytes)),
+        services:{sshd:services.sshd,gateway:services.gateway,reconciler:services.reconciler}
+      };
+    }
     d.nodeSshReport(node, reports);
     const nodes=d.readNodes(), current=nodes.find(n=>n.id===node.id);
-    if (current) {current.sshWsAgentSeenAt=new Date().toISOString();d.saveNodes(nodes);}
+    if (current) {
+      current.sshWsAgentSeenAt=new Date().toISOString();
+      if(safeTelemetry)current.sshWsHost=safeTelemetry;
+      d.saveNodes(nodes);
+    }
     return res.set('Cache-Control','no-store').json({ok:true});
   });
     app.post("/api/v1/nodes/:id/heartbeat", d.limiter, nodeAuth, (req, res) => {
