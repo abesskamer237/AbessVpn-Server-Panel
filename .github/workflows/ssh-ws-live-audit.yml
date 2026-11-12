@@ -1,0 +1,89 @@
+name: Live ABESS SSH-WS post-install read-only audit
+on:
+  push:
+    branches: [deploy/sshws-first-install-20261112]
+permissions:
+  contents: read
+jobs:
+  smoke:
+    name: Confirm actual SSH-WS services, private socket and public WSS routing
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      - run: npm ci --omit=dev --no-audit --no-fund
+      - name: Verify public ABESS HTTPS and WSS anonymous rejection
+        shell: bash
+        run: |
+          set -euo pipefail
+          API_URL="https://abessserveur.pagnol.xyz"
+          curl --fail --silent --show-error --max-time 15 "$API_URL/api/v1/ping" | grep -q '"ok":true'
+          echo "PUBLIC_PANEL_HTTPS=healthy"
+          node --input-type=module <<'JS'
+          import {WebSocket} from 'ws';
+          const url='wss://abessserveur.pagnol.xyz/ssh-ws/anonymous-is-not-allowed';
+          const observed=await new Promise((resolve,reject)=>{
+            const ws=new WebSocket(url,{handshakeTimeout:12000,perMessageDeflate:false});
+            ws.on('unexpected-response',(_req,res)=>{const code=res.statusCode;res.resume();resolve(code);});
+            ws.on('error',reject);
+            ws.on('open',()=>{ws.terminate();reject(Error('Unauthenticated WSS accepted'));});
+          });
+          if(observed!==404)throw Error('Unexpected WSS proxy response '+observed);
+          console.log('PUBLIC_WSS_ROUTING=healthy_anonymous_denied');
+          JS
+      - name: Verify host's isolated OpenSSH and gateway via SSH (read-only)
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD || secrets.VPS_PASSWORD }}
+          VPS_PORT: ${{ vars.VPS_PORT }}
+        run: |
+          set -euo pipefail
+          PORT="${VPS_PORT:-22}"
+          install -d -m 700 "$HOME/.ssh"
+          ssh-keyscan -T 10 -p "$PORT" -t ed25519 "$VPS_HOST" 2>/dev/null > "$HOME/.ssh/known_hosts"
+          ssh-keygen -lf "$HOME/.ssh/known_hosts" -E sha256 | grep -Fq 'SHA256:LgoMnkXsbf7RYOw5LRm0ErLVQ6n0JDJBJIAltFxOChc'
+          chmod 0600 "$HOME/.ssh/known_hosts"
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq sshpass >/dev/null
+          export SSHPASS="$VPS_PASSWORD"
+          sshpass -e ssh -p "$PORT" -o StrictHostKeyChecking=yes -o PubkeyAuthentication=no -o PreferredAuthentications=password,keyboard-interactive "$VPS_USER@$VPS_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          for service in abess-ssh-ws-sshd abess-ssh-ws-gateway abess-ssh-ws-reconciler; do
+            systemctl is-active --quiet "$service" || exit 1
+            echo "SERVICE_${service}=active"
+          done
+          [[ -S /var/lib/abess-ssh-ws/socket/gateway.sock ]]
+          echo "HOST_UNIX_SOCKET=present"
+          curl --fail --silent --show-error --max-time 8 --unix-socket /var/lib/abess-ssh-ws/socket/gateway.sock http://localhost/healthz | grep -q '"policyReady":true'
+          echo "GATEWAY_POLICY=ready"
+          /usr/sbin/sshd -t -f /etc/abess-ssh-ws/sshd_config
+          echo "ISOLATED_SSHD_CONFIG=valid"
+          ss -lntH | grep -Eq '127\.0\.0\.1:2222[[:space:]]'
+          if ss -lntH | grep -E ':2080[[:space:]]'; then echo "::error::Public TCP gateway socket unexpectedly open"; exit 1; fi
+          echo "ISOLATED_SSHD_LOCAL_ONLY=yes"
+          node -e '
+          const fs=require("node:fs");
+          const text=fs.readFileSync("/etc/abess-ssh-ws/agent.env","utf8");
+          const obj=Object.fromEntries(text.split("\n").filter(x=>x.includes("=")).map(x=>x.split(/=(.*)/s).slice(0,2)));
+          const id=obj.VPN_NODE_ID;
+          const key=fs.readFileSync(obj.VPN_NODE_KEY_FILE,"utf8").trim();
+          const url=obj.CONTROL_API_BASE_URL+"/api/v1/nodes/"+id+"/ssh-ws/desired";
+          fetch(url,{headers:{Authorization:"Bearer "+key},signal:AbortSignal.timeout(8000)}).then(async r=>{
+            if(!r.ok)throw Error("Node manifest unavailable: HTTP "+r.status);
+            const j=await r.json();
+            if(j.format!=="abess-managed-ssh-ws-v1")throw Error("Unexpected manifest format");
+            console.log("MANAGED_NODE_API=authenticated_healthy");
+            console.log("MANAGED_ACCOUNT_COUNT="+j.accounts.length);
+          }).catch(e=>{console.error(e.message);process.exitCode=1;});
+          '
+          cd "$HOME/abessvpn-server"
+          docker compose ps --format 'table {{.Service}}\t{{.State}}'
+          echo "LIVE_SSH_WS_AUDIT=SUCCESS"
+          REMOTE
