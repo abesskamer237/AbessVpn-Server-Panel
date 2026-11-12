@@ -132,7 +132,7 @@ export default function App(){
     {id:'security' as Tab,label:'Sécurité',icon:Shield},
     ...(user.role==='SUPER_ADMIN'?[{id:'team' as Tab,label:'Équipe',icon:UserCog}]:[])
   ];
-  const serverNodes=(nodes.filter(n=>n.sshWsManaged).map(n=>({
+  const serverNodes=(nodes.map(n=>({
     id:n.id,name:n.name,host:n.host,sni:n.sshWsSni||n.host,port:n.sshWsPort||443,path:n.sshWsPath||'/ssh-ws',
     agentOnline:Boolean(n.sshWsAgentSeenAt&&Date.now()-Date.parse(n.sshWsAgentSeenAt)<60000),hostTelemetry:n.sshWsHost||null,enabled:n.enabled,sshWsManaged:n.sshWsManaged,sshWsAgentSeenAt:n.sshWsAgentSeenAt
   })) as any[]);
