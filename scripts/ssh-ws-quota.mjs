@@ -60,6 +60,9 @@ export class QuotaLedger {
     if(!usageFile || !reportFile || !integer(reservationBytes,4096,1048576))
       throw Error('Invalid gateway ledger configuration');
     this.usageFile=usageFile;
+    // Isolate durable reservations by account. Each 256KiB reservation writes
+    // only ~100 bytes instead of rewriting a potentially huge multi-user JSON.
+    this.accountDir=usageFile+'.accounts';
     this.reportFile=reportFile;
     this.reservationBytes=reservationBytes;
     this.balances={}; // accountId -> {usedBytes, creditBytes, sessions}
@@ -70,18 +73,41 @@ export class QuotaLedger {
   _load() {
     let persisted;
     try{persisted=JSON.parse(fs.readFileSync(this.usageFile,'utf8'));}
-    catch(e){if(e.code==='ENOENT')return;throw Error('Usage ledger unreadable: refusing to open gateway');}
-    if(persisted?.format!=='abess-ssh-ws-ledger-v1' || !persisted.balances ||
-       typeof persisted.balances!=='object' || Array.isArray(persisted.balances)) throw Error('Corrupt usage ledger');
-    for(const [id,v] of Object.entries(persisted.balances)) {
-      if(!ID.test(id) || !integer(v,0))throw Error('Corrupt usage counter');
-      // Persisted number includes all committed reservations; conservative.
-      this.balances[id]={usedBytes:v,creditBytes:0,sessions:0};
+    catch(e){if(e.code!=='ENOENT')throw Error('Usage ledger unreadable: refusing to open gateway');}
+    if(persisted){
+      if(persisted.format!=='abess-ssh-ws-ledger-v1' || !persisted.balances ||
+         typeof persisted.balances!=='object' || Array.isArray(persisted.balances))
+        throw Error('Corrupt usage ledger');
+      for(const [id,v] of Object.entries(persisted.balances)) {
+        if(!ID.test(id) || !integer(v,0))throw Error('Corrupt usage counter');
+        this.balances[id]={usedBytes:v,creditBytes:0,sessions:0};
+      }
+    }
+    if(!fs.existsSync(this.accountDir))return;
+    for(const name of fs.readdirSync(this.accountDir)) {
+      if(!/^ssh_[0-9a-f-]{36}\\.json$/.test(name))throw Error('Unexpected quota data');
+      const record=JSON.parse(fs.readFileSync(path.join(this.accountDir,name),'utf8'));
+      if(record?.format!=='abess-ssh-ws-account-v1' ||
+         record.id+'.json'!==name || !integer(record.usedBytes,0))
+        throw Error('Invalid account usage record');
+      // Individual records are updated on every reservation/refund and are
+      // therefore authoritative over the compatibility summary snapshot.
+      this.balances[record.id]={usedBytes:record.usedBytes,creditBytes:0,sessions:0};
     }
   }
+  _persistOne(id) {
+    if(!ID.test(id))throw Error('Unsafe ledger identifier');
+    const v=this.balances[id];
+    if(!v || !integer(v.usedBytes+v.creditBytes,0))throw Error('Unsafe quota counter');
+    syncAtomic(path.join(this.accountDir,id+'.json'),{
+      format:'abess-ssh-ws-account-v1',id,usedBytes:v.usedBytes+v.creditBytes
+    });
+  }
   _persist() {
+    // Compact human-readable summary on graceful close; hot-path writes touch
+    // only one account's journal file, not the full account collection.
     const balances={};
-    for(const [id,v] of Object.entries(this.balances)) balances[id]=v.usedBytes+v.creditBytes;
+    for(const [id,v] of Object.entries(this.balances))balances[id]=v.usedBytes+v.creditBytes;
     syncAtomic(this.usageFile,{format:'abess-ssh-ws-ledger-v1',balances});
   }
   setPolicy(policy,now=Date.now()) {
@@ -89,13 +115,15 @@ export class QuotaLedger {
     // If a record already exists, the panel must NEVER reset local usage.
     for(const a of parsed.accounts) {
       const v=this.balances[a.id];
-      if(!v)this.balances[a.id]={usedBytes:a.baselineUsedBytes,creditBytes:0,sessions:0};
-      else if(a.baselineUsedBytes>v.usedBytes+v.creditBytes) {
+      if(!v){
+        this.balances[a.id]={usedBytes:a.baselineUsedBytes,creditBytes:0,sessions:0};
+        this._persistOne(a.id);
+      } else if(a.baselineUsedBytes>v.usedBytes+v.creditBytes) {
         v.usedBytes=a.baselineUsedBytes;
         v.creditBytes=0;
+        this._persistOne(a.id);
       }
     }
-    this._persist();
     this.policy=parsed;
     this.lastGoodPolicyAt=now;
     return parsed;
@@ -131,7 +159,7 @@ export class QuotaLedger {
     if(b.sessions===0 && b.creditBytes>0) {
       // Refund unused reservations after clean connection closure.
       b.creditBytes=0;
-      this._persist();
+      this._persistOne(id);
     }
     this.report();
   }
@@ -145,7 +173,7 @@ export class QuotaLedger {
       const extra=Math.min(Math.max(this.reservationBytes,allowance-b.creditBytes),remaining);
       if(!integer(extra,1))throw Error('Unsafe byte reservation');
       b.creditBytes+=extra;
-      try{this._persist();}catch(e){b.creditBytes-=extra;throw e;}
+      try{this._persistOne(id);}catch(e){b.creditBytes-=extra;throw e;}
     }
     const count=Math.min(allowance,b.creditBytes);
     b.usedBytes+=count;
