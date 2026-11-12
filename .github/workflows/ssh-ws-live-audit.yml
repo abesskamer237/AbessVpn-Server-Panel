@@ -34,6 +34,7 @@ jobs:
             ws.on('open',()=>{ws.terminate();reject(Error('Unauthenticated WSS accepted'));});
           });
           console.log('PUBLIC_WSS_RESPONSE_HTTP_'+observed);
+          process.exit(0); // force-close client HTTP upgrade probe socket
           console.log('PUBLIC_WSS_ROUTING=healthy_anonymous_denied');
           JS
       - name: Verify host's isolated OpenSSH and gateway via SSH (read-only)
