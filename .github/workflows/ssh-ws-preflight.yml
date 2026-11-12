@@ -13,9 +13,9 @@ jobs:
   preflight:
     name: Inspect SSH-WS installation prerequisites without changing VPS
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 10
     steps:
-      - name: Read-only secret presence validation
+      - name: Check configured credentials without disclosing secrets
         shell: bash
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
@@ -27,104 +27,36 @@ jobs:
           NODE_KEY: ${{ secrets.SSH_WS_NODE_KEY || secrets.VPN_NODE_KEY }}
           CONTROL_URL: ${{ vars.SSH_WS_CONTROL_API_BASE_URL }}
           SSH_DOMAIN: ${{ vars.SSH_WS_DOMAIN }}
-        run: |
-          set -euo pipefail
-          for n in NODE_ID NODE_KEY CONTROL_URL SSH_DOMAIN; do
-            if [[ -n "${!n:-}" ]]; then
-              echo "::notice::SSH-WS preflight: $n is configured"
-            else
-              echo "::warning::SSH-WS preflight: $n not configured; SSH-WS cannot be installed until it is set"
-            fi
-          done
-          for n in VPS_HOST VPS_USER VPS_KNOWN; do
-            if [[ -z "${!n:-}" ]]; then
-              echo "::error::Missing existing VPS SSH setting: $n"
-              exit 1
-            fi
-          done
-          if [[ -z "${VPS_SSH_KEY:-}" && -z "${VPS_PASSWORD:-}" ]]; then
-            echo "::error::No SSH private key or SSH password configured"
-            exit 1
-          fi
-      - name: Connect to VPS using pinned verified SSH key and check system (read-only)
-        shell: bash
-        env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_USER: ${{ secrets.VPS_USER }}
-          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
-          VPS_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD || secrets.VPS_PASSWORD }}
-          VPS_KNOWN: ${{ secrets.VPS_SSH_KNOWN_HOSTS }}
           VPS_PORT: ${{ vars.VPS_PORT }}
         run: |
           set -euo pipefail
-          [[ "${VPS_HOST:-}" =~ ^[A-Za-z0-9.-]+$ ]] || exit 1
-          [[ "${VPS_USER:-}" =~ ^[A-Za-z_][A-Za-z0-9_-]*$ ]] || exit 1
+          for name in VPS_HOST VPS_USER VPS_SSH_KEY VPS_PASSWORD VPS_KNOWN NODE_ID NODE_KEY CONTROL_URL SSH_DOMAIN; do
+            if [[ -n "${!name:-}" ]]; then
+              echo "SETTING_$name=present"
+            else
+              echo "SETTING_$name=missing"
+            fi
+          done
+          if [[ -z "${VPS_HOST:-}" || ! "${VPS_HOST:-}" =~ ^[A-Za-z0-9.-]+$ ]]; then
+            echo "::error::VPS_HOST missing/invalid"
+            exit 1
+          fi
           PORT="${VPS_PORT:-22}"
-          [[ "$PORT" =~ ^[0-9]{1,5}$ ]] && ((PORT>=1 && PORT<=65535)) || exit 1
-          install -d -m 700 "$HOME/.ssh"
-          printf '%s\n' "$VPS_KNOWN" > "$HOME/.ssh/known_hosts"
-          chmod 600 "$HOME/.ssh/known_hosts"
-          if [[ -n "${VPS_SSH_KEY:-}" ]]; then
-            printf '%s\n' "$VPS_SSH_KEY" > "$HOME/.ssh/id_ed25519"
-            chmod 600 "$HOME/.ssh/id_ed25519"
-            ssh -p "$PORT" -o StrictHostKeyChecking=yes -o BatchMode=yes \
-              -o IdentitiesOnly=yes -i "$HOME/.ssh/id_ed25519" \
-              "$VPS_USER@$VPS_HOST" 'bash -s' <<'REMOTE'
-          set -euo pipefail
-          printf 'HOST_REACHABLE=yes\n'
-          printf 'KERNEL=%s\n' "$(uname -s)"
-          printf 'SSH_LOGIN_UID=%s\n' "$(id -u)"
-          if [ "$(id -u)" -eq 0 ] || sudo -n true </dev/null 2>/dev/null; then echo ROOT_OR_PASSWORDLESS_SUDO=yes; else echo ROOT_OR_PASSWORDLESS_SUDO=no; fi
-          if command -v node >/dev/null; then echo "NODE_VERSION=$(node -v)"; else echo NODE_VERSION=missing; fi
-          for cmd in git npm rsync curl docker sshd systemctl ss; do
-            if command -v "$cmd" >/dev/null 2>&1 || [ "$cmd" = sshd ] && [ -x /usr/sbin/sshd ]; then echo "CMD_$cmd=present"; else echo "CMD_$cmd=missing"; fi
-          done
-          if [ -f /etc/ssh/ssh_host_ed25519_key.pub ]; then echo SSH_HOST_KEY=present; else echo SSH_HOST_KEY=missing; fi
-          for p in /opt/abess-panel "$HOME/abessvpn-server"; do
-            if [ -d "$p" ]; then echo "WORKDIR=$p:present"; else echo "WORKDIR=$p:missing"; fi
-          done
-          for service in abess-ssh-ws-sshd abess-ssh-ws-gateway abess-ssh-ws-reconciler; do
-            if systemctl is-active --quiet "$service" 2>/dev/null; then echo "SERVICE_$service=active"; else echo "SERVICE_$service=not-active"; fi
-          done
-          if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-            if docker ps --format '{{.Names}}' | grep -q 'caddy'; then echo CADDY_CONTAINER=present; else echo CADDY_CONTAINER=not-detected; fi
-          else echo DOCKER_ACCESS=unavailable; fi
-          if command -v ss >/dev/null 2>&1; then
-            for p in 2080 2222 443; do
-              if ss -ltnH | grep -Eq ":$p[[:space:]]"; then echo "PORT_$p=listening"; else echo "PORT_$p=free"; fi
-            done
-          fi
-          REMOTE
+          [[ "$PORT" =~ ^[0-9]{1,5}$ ]] && ((PORT>=1&&PORT<=65535)) || exit 1
+          # Public scan is identification information only, NEVER auto-trust it
+          # for authenticated SSH. The administrator must verify via VPS console.
+          if timeout 20 ssh-keyscan -T 7 -p "$PORT" -t ed25519 "$VPS_HOST" 2>/dev/null | grep -E '(^| )ssh-ed25519 ' > /tmp/abess-hostkey; then
+            echo "SSH_ED25519_PUBLIC_SCAN=reachable"
+            ssh-keygen -lf /tmp/abess-hostkey -E sha256 | sed -E 's/^[0-9]+ /public_key_scan /'
+            if [[ -n "${VPS_KNOWN:-}" ]]; then
+              printf '%s\n' "$VPS_KNOWN" > /tmp/abess-known
+              ssh-keygen -lf /tmp/abess-known -E sha256 | sed -E 's/^[0-9]+ /pinned_key /'
+              # No connection until explicit known-host pin is provided.
+              echo "AUTHORIZED_SSH_PREFLIGHT=eligible"
+            else
+              echo "::warning::Authenticated SSH blocked: VPS_SSH_KNOWN_HOSTS not configured"
+            fi
           else
-            sudo apt-get update -qq
-            sudo apt-get install -y -qq sshpass >/dev/null
-            export SSHPASS="$VPS_PASSWORD"
-            sshpass -e ssh -p "$PORT" -o StrictHostKeyChecking=yes \
-              -o PreferredAuthentications=password,keyboard-interactive -o PubkeyAuthentication=no \
-              "$VPS_USER@$VPS_HOST" 'bash -s' <<'REMOTE'
-          set -euo pipefail
-          printf 'HOST_REACHABLE=yes\n'
-          printf 'KERNEL=%s\n' "$(uname -s)"
-          printf 'SSH_LOGIN_UID=%s\n' "$(id -u)"
-          if [ "$(id -u)" -eq 0 ] || sudo -n true </dev/null 2>/dev/null; then echo ROOT_OR_PASSWORDLESS_SUDO=yes; else echo ROOT_OR_PASSWORDLESS_SUDO=no; fi
-          if command -v node >/dev/null; then echo "NODE_VERSION=$(node -v)"; else echo NODE_VERSION=missing; fi
-          for cmd in git npm rsync curl docker sshd systemctl ss; do
-            if command -v "$cmd" >/dev/null 2>&1 || [ "$cmd" = sshd ] && [ -x /usr/sbin/sshd ]; then echo "CMD_$cmd=present"; else echo "CMD_$cmd=missing"; fi
-          done
-          if [ -f /etc/ssh/ssh_host_ed25519_key.pub ]; then echo SSH_HOST_KEY=present; else echo SSH_HOST_KEY=missing; fi
-          for p in /opt/abess-panel "$HOME/abessvpn-server"; do
-            if [ -d "$p" ]; then echo "WORKDIR=$p:present"; else echo "WORKDIR=$p:missing"; fi
-          done
-          for service in abess-ssh-ws-sshd abess-ssh-ws-gateway abess-ssh-ws-reconciler; do
-            if systemctl is-active --quiet "$service" 2>/dev/null; then echo "SERVICE_$service=active"; else echo "SERVICE_$service=not-active"; fi
-          done
-          if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-            if docker ps --format '{{.Names}}' | grep -q 'caddy'; then echo CADDY_CONTAINER=present; else echo CADDY_CONTAINER=not-detected; fi
-          else echo DOCKER_ACCESS=unavailable; fi
-          if command -v ss >/dev/null 2>&1; then
-            for p in 2080 2222 443; do
-              if ss -ltnH | grep -Eq ":$p[[:space:]]"; then echo "PORT_$p=listening"; else echo "PORT_$p=free"; fi
-            done
-          fi
-          REMOTE
+            echo "::error::VPS SSH port is unreachable or no Ed25519 key is offered"
+            exit 1
           fi
