@@ -173,9 +173,30 @@ export function registerSsh(app:Express,d:{
   app.patch('/api/v1/admin/ssh/accounts/:id',d.authenticate,(req,res)=>{
     const state=d.read(),a=state.accounts.find(a=>a.id===req.params.id),actor=(req as any).user;
     if(!a)return res.sendStatus(404);if(!allowed(actor,a))return res.sendStatus(403);
-    if(typeof req.body?.enabled!=='boolean')return res.sendStatus(400);
-    if(req.body.enabled&&(Date.parse(a.expiresAt)<=Date.now()||a.usedBytes>=a.quotaBytes||!d.ownerActive(a.resellerId)))return res.status(409).json({error:'Renouvelez le compte avant réactivation.'});
-    a.enabled=req.body.enabled;d.write(state);d.audit({action:a.enabled?'SSH_ENABLED':'SSH_DISABLED',actor:actor.id,role:actor.role,details:a.id});res.json(safeSshAccount(a));
+    const hasEnabled=typeof req.body?.enabled==='boolean';
+    const hasLabel=req.body?.label!==undefined;
+    const hasConnections=req.body?.maxConnections!==undefined;
+    if(!hasEnabled&&!hasLabel&&!hasConnections)return res.sendStatus(400);
+    if(hasLabel){
+      const label=String(req.body.label||'').trim();
+      if(!label||label.length>80)return res.status(400).json({error:'Nom client invalide.'});
+      a.label=label;
+    }
+    if(hasConnections){
+      const maxConnections=Number(req.body.maxConnections);
+      if(!Number.isInteger(maxConnections)||maxConnections<1||maxConnections>10)
+        return res.status(400).json({error:'La limite de sessions doit être comprise entre 1 et 10.'});
+      a.maxConnections=maxConnections;
+    }
+    if(hasEnabled){
+      if(req.body.enabled&&(Date.parse(a.expiresAt)<=Date.now()||a.usedBytes>=a.quotaBytes||!d.ownerActive(a.resellerId)))
+        return res.status(409).json({error:'Renouvelez le compte avant réactivation.'});
+      a.enabled=req.body.enabled;
+    }
+    d.write(state);
+    d.audit({action:'SSH_UPDATED',actor:actor.id,role:actor.role,
+      details:JSON.stringify({id:a.id,enabled:a.enabled,label:a.label,maxConnections:a.maxConnections})});
+    res.json(safeSshAccount(a));
   });
   app.delete('/api/v1/admin/ssh/accounts/:id',d.authenticate,admin,(req,res)=>{
     const state=d.read(),index=state.accounts.findIndex(a=>a.id===req.params.id);if(index<0)return res.sendStatus(404);
