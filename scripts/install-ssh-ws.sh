@@ -71,6 +71,9 @@ if [[ ! -e /etc/abess-ssh-ws/allowed-users.conf ]]; then
   printf 'AllowUsers _abess_no_active_user_\n' > /etc/abess-ssh-ws/allowed-users.conf
 fi
 chmod 0600 /etc/abess-ssh-ws/allowed-users.conf
+# OpenSSH needs /run/sshd for privilege separation. Do not let our systemd
+# unit own/remove the shared admin SSHD runtime directory on service stop.
+install -d -m 0755 /run/sshd
 /usr/sbin/sshd -t -f /etc/abess-ssh-ws/sshd_config
 cat > /etc/systemd/system/abess-ssh-ws-sshd.service <<'UNIT'
 [Unit]
@@ -81,7 +84,8 @@ Type=simple
 ExecStart=/usr/sbin/sshd -D -e -f /etc/abess-ssh-ws/sshd_config
 Restart=on-failure
 RestartSec=2
-RuntimeDirectory=sshd
+RuntimeDirectory=abess-sshd
+ExecStartPre=/usr/bin/install -d -m 0755 /run/sshd
 [Install]
 WantedBy=multi-user.target
 UNIT
