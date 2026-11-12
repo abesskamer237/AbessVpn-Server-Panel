@@ -1630,7 +1630,7 @@ async function startServer() {
   // The Android app previously called these routes, but they did not exist.
   // This endpoint only records client-reported usage; it is not authoritative
   // quota enforcement. The VLESS data plane must account server-side bytes.
-  app.post('/api/v1/client/telemetry', (req, res) => {
+  app.post('/api/v1/client/telemetry', publicApiRateLimiter, (req, res) => {
     const rawToken = req.body?.token == null ? '' : String(req.body.token).trim();
     if (!rawToken) {
       res.status(400).json({ ok: false, error: 'Token manquant' });
@@ -2874,72 +2874,13 @@ async function startServer() {
     }
   });
 
-  // 1-Click System Backup Export (Super Admin only)
-  app.get('/api/v1/admin/backup', authenticate, (req, res) => {
-    const user: AppUser = (req as any).user;
-    if (user.role !== 'SUPER_ADMIN') {
-      res.status(403).json({ error: 'Accès réservé au Super Administrateur.' });
-      return;
-    }
-
-    const { secretPassphrase: _secretPassphrase, ...safeMasterConfig } = loadMasterConfig();
-    const backupData = {
-      timestamp: new Date().toISOString(),
-      version: '2.5.0-commercial',
-      masterConfig: safeMasterConfig,
-      protocolConfigs: loadProtocolConfigs(),
-      users: loadUsers().map(u => ({ ...u, passwordHash: u.passwordHash })),
-      tokens: loadTokens().map(backupClientToken),
-      transactions: loadTransactions()
-    };
-
-    const dateStr = new Date().toISOString().slice(0, 10);
-    res.setHeader('Content-Type', 'application/json');
-    res.setHeader('Content-Disposition', `attachment; filename="abessvpn-backup-${dateStr}.json"`);
-    res.send(JSON.stringify(backupData, null, 2));
+  // Legacy plaintext backups are retired. Use encrypted /api/v1/admin/system/backup
+  // and /api/v1/admin/system/restore with the documented authenticated encryption format.
+  app.get('/api/v1/admin/backup', authenticate, (_req, res) => {
+    res.status(410).json({ error: 'Export JSON non chiffré retiré. Utilisez la sauvegarde système chiffrée.' });
   });
-
-  // System Backup Restore (Super Admin only)
-  app.post('/api/v1/admin/backup/restore', authenticate, (req, res) => {
-    const user: AppUser = (req as any).user;
-    if (user.role !== 'SUPER_ADMIN') {
-      res.status(403).json({ error: 'Accès réservé au Super Administrateur.' });
-      return;
-    }
-
-    const payload = req.body;
-    if (!payload || !validRestoredUsers(payload.users) || !Array.isArray(payload.tokens)) {
-      res.status(400).json({ error: 'Fichier de sauvegarde invalide (structure users/tokens manquante).' });
-      return;
-    }
-
-    // Safety snapshot before restoring
-    const safetyBackupPath = path.resolve(backupsDir, `pre-restore-${Date.now()}.json`);
-    const { secretPassphrase: _secretPassphrase, ...safeMasterConfig } = loadMasterConfig();
-    const currentSnapshot = {
-      timestamp: new Date().toISOString(),
-      masterConfig: safeMasterConfig,
-      protocolConfigs: loadProtocolConfigs(),
-      users: loadUsers(),
-      tokens: loadTokens().map(backupClientToken),
-      transactions: loadTransactions()
-    };
-    writeJsonAtomically(safetyBackupPath, currentSnapshot);
-
-    // Apply restore
-    if (payload.masterConfig) saveMasterConfig(payload.masterConfig);
-    if (Array.isArray(payload.protocolConfigs)) saveProtocolConfigs(payload.protocolConfigs);
-    saveUsers(payload.users);
-    saveTokens(payload.tokens);
-    if (Array.isArray(payload.transactions)) writeJsonAtomically(transactionsFile, payload.transactions);
-
-    activeSessions.clear();
-    res.json({
-      success: true,
-      message: 'Sauvegarde restaurée avec succès. Un instantané de sécurité a été créé.',
-      usersCount: payload.users.length,
-      tokensCount: payload.tokens.length
-    });
+  app.post('/api/v1/admin/backup/restore', authenticate, (_req, res) => {
+    res.status(410).json({ error: 'Restauration JSON non chiffrée retirée. Utilisez la restauration système chiffrée.' });
   });
 
   async function performAutoBackup(): Promise<void> {
@@ -3830,31 +3771,43 @@ async function startServer() {
     }
   });
 
+  // The repository contains placeholder APKs. Never claim a stub is a signed release.
+  function isInstallableApk(filepath: string): boolean {
+    try {
+      if (fs.statSync(filepath).size < 100 * 1024) return false;
+      const fd = fs.openSync(filepath, 'r');
+      try {
+        const header = Buffer.alloc(4);
+        fs.readSync(fd, header, 0, 4, 0);
+        return header[0] === 0x50 && header[1] === 0x4b && (header[2] === 3 || header[2] === 5 || header[2] === 7);
+      } finally { fs.closeSync(fd); }
+    } catch { return false; }
+  }
   app.get(['/download/:filename', '/nexus/download/:filename'], (req, res) => {
     const requested = path.basename(req.params.filename);
     const filePath = path.resolve(staticDir, requested);
-    if (fs.existsSync(filePath)) {
-      res.download(filePath, requested);
-    } else {
-      res.status(404).send('Fichier introuvable.');
+    if (!fs.existsSync(filePath) || (requested.toLowerCase().endsWith('.apk') && !isInstallableApk(filePath))) {
+      res.status(404).send('Aucune version APK installable publiée à cette adresse.');
+      return;
     }
+    res.download(filePath, requested);
   });
 
   app.get(['/api/download/info', '/api/v1/download/info'], (_req, res) => {
     const version = loadAppVersionConfig();
     const apkPath = path.resolve(staticDir, 'AbessVpn.apk');
-    let sizeBytes = 0;
-    if (fs.existsSync(apkPath)) {
-      try { sizeBytes = fs.statSync(apkPath).size; } catch {}
-    }
+    const available = isInstallableApk(apkPath);
+    const sizeBytes = available ? fs.statSync(apkPath).size : 0;
+    res.setHeader('Cache-Control', 'no-store');
     res.json({
       ok: true,
+      available,
       filename: 'AbessVpn.apk',
       version: version.latestVersion,
       sizeBytes,
-      sizeFormatted: sizeBytes > 0 ? `${(sizeBytes / (1024 * 1024)).toFixed(1)} Mo` : '20 Mo',
-      downloadUrl: '/download/AbessVpn.apk',
-      checksum: 'sha256-verified-release',
+      sizeFormatted: available ? `${(sizeBytes / (1024 * 1024)).toFixed(1)} Mo` : null,
+      downloadUrl: available ? '/download/AbessVpn.apk' : null,
+      checksum: available ? crypto.createHash('sha256').update(fs.readFileSync(apkPath)).digest('hex') : null,
       publishedAt: version.publishedAt
     });
   });
@@ -3891,7 +3844,10 @@ async function startServer() {
       return;
     }
     const { name, quotaGb, durationDays, priceCfa, badge, description } = req.body;
-    if (!name || Number(quotaGb) < 0 || Number(durationDays) <= 0) {
+    if (typeof name !== 'string' || !name.trim() || name.trim().length > 80 ||
+        !Number.isFinite(Number(quotaGb)) || Number(quotaGb) <= 0 || Number(quotaGb) > 100000 ||
+        !Number.isInteger(Number(durationDays)) || Number(durationDays) < 1 || Number(durationDays) > 3650 ||
+        !Number.isSafeInteger(Number(priceCfa ?? 0)) || Number(priceCfa ?? 0) < 0) {
       res.status(400).json({ error: 'Nom, quota en Go et durée en jours requis.' });
       return;
     }
@@ -3929,10 +3885,20 @@ async function startServer() {
       return;
     }
     const { name, quotaGb, durationDays, priceCfa, badge, description } = req.body;
-    if (name) plan.name = String(name).trim();
-    if (quotaGb !== undefined) plan.quotaGb = Number(quotaGb);
-    if (durationDays !== undefined) plan.durationDays = Number(durationDays);
-    if (priceCfa !== undefined) plan.priceCfa = Number(priceCfa);
+    const nextName = name === undefined ? plan.name : name;
+    const nextQuota = quotaGb === undefined ? plan.quotaGb : Number(quotaGb);
+    const nextDays = durationDays === undefined ? plan.durationDays : Number(durationDays);
+    const nextPrice = priceCfa === undefined ? plan.priceCfa : Number(priceCfa);
+    if (typeof nextName !== 'string' || !nextName.trim() || nextName.trim().length > 80 ||
+        !Number.isFinite(nextQuota) || nextQuota <= 0 || nextQuota > 100000 ||
+        !Number.isInteger(nextDays) || nextDays < 1 || nextDays > 3650 ||
+        !Number.isSafeInteger(nextPrice) || nextPrice < 0) {
+      return res.status(400).json({ error: 'Nom, quota (0–100000 Go), durée (1–3650 jours) ou prix FCFA invalide.' });
+    }
+    plan.name = nextName.trim();
+    plan.quotaGb = nextQuota;
+    plan.durationDays = nextDays;
+    plan.priceCfa = nextPrice;
     if (badge !== undefined) plan.badge = String(badge).trim();
     if (description !== undefined) plan.description = String(description).trim();
     savePlans(plans);
