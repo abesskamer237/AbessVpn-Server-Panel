@@ -1,5 +1,5 @@
 import {useState,type FormEvent} from 'react';
-import {Activity,Database,HardDrive,Plus,Server,ShieldCheck,X} from 'lucide-react';
+import {Activity,Database,Download,HardDrive,Plus,Server,ShieldCheck,X} from 'lucide-react';
 import type {AuditEvent,ManagedNode,OpsHealth} from '../panelTypes';
 import {fmtDateTime} from '../panelTypes';
 
@@ -23,10 +23,19 @@ export function ServerCenter({nodes,ops,audit,busy,request,refresh}:Props){
     try{const x=await request('/api/v1/admin/nodes','POST',{name,host});setCreated(x);setName('');setHost('');await refresh()}
     catch(e){setError(e instanceof Error?e.message:'Création impossible')}
   }
+  async function backup(){
+    setError('');
+    try{
+      const data=await request('/api/v1/admin/operations/backup');
+      const url=URL.createObjectURL(new Blob([JSON.stringify(data)],{type:'application/json'}));
+      const a=document.createElement('a');a.href=url;a.download='abess-backup-'+new Date().toISOString().slice(0,10)+'.encrypted.json';a.click();URL.revokeObjectURL(url);
+    }catch(e){setError(e instanceof Error?e.message:'Sauvegarde impossible')}
+  }
   return <div className="stack">
     <div className="page-header"><div><h1>Serveurs</h1><p>Supervision temps réel des VPS et composants SSH-WSS.</p></div>
-      <div className="page-actions"><button className="btn btn-primary" onClick={()=>{setAdd(true);setCreated(null)}}><Plus size={15}/>Ajouter un VPS</button></div>
+      <div className="page-actions"><button className="btn" onClick={()=>void backup()}><Download size={14}/>Sauvegarde chiffrée</button><button className="btn btn-primary" onClick={()=>{setAdd(true);setCreated(null)}}><Plus size={15}/>Ajouter un VPS</button></div>
     </div>
+    {error&&<p className="notice" role="alert">{error}</p>}
     <div className="metric-grid">
       <div className="card metric-card"><div className="metric-label"><Server size={14}/>VPS gérés</div><div className="metric-value">{nodes.length}</div><div className="metric-foot">{nodes.filter(n=>n.agentOnline).length} agents connectés</div></div>
       <div className="card metric-card"><div className="metric-label"><Database size={14}/>Base de données</div><div className="metric-value" style={{fontSize:18}}>{ops?.storage||'—'}</div><div className="metric-foot">Stockage du panneau</div></div>
