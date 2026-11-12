@@ -19,7 +19,10 @@ Client SSH sur WebSocket (WSS) :443 /ssh-ws/<secret-client-unique>
 Caddy (HTTPS, certificat public valide)
        |
        v
-127.0.0.1:2080  -- WebSocket binaire, sans compression --> 127.0.0.1:2222
+Socket Unix /var/lib/abess-ssh-ws/socket/gateway.sock
+       |  WebSocket binaire, sans compression
+       v
+127.0.0.1:2222
        |                                               OpenSSH dédié
        |
         Le trafic SSH et le chiffrement de SSH restent dans SSH.
@@ -31,9 +34,10 @@ Agent root isolé sur VPS -- HTTPS sortant --> panneau /api/v1/nodes/ID/ssh-ws
         - accuse réception du résultat au panneau
 ```
 
-Le pont est volontairement non privilégié : il n'écoute que sur 127.0.0.1,
-n'accepte aucun hôte TCP fourni par l'appelant et se connecte uniquement au
-SSH local. Le service SSH dédié écoute sur 127.0.0.1:2222 et ne modifie pas le
+Le pont est volontairement non privilégié : il écoute sur un **socket Unix
+privé**, partagé avec le conteneur Caddy, sans port SSH-WS TCP exposé. Il
+n'accepte aucun hôte TCP fourni par l'appelant et se connecte uniquement à
+l'OpenSSH local. Le service SSH dédié écoute sur 127.0.0.1:2222 et ne modifie pas le
 `sshd` public déjà présent. Il refuse le shell/SFTP, les sessions utilisateur,
 le transfert d'agent et autorise seulement le forwarding TCP local (`ssh -D`).
 Les utilisateurs administrés ont un shell `nologin`.
@@ -71,23 +75,31 @@ un `sshd` dédié et trois unités systemd. Il n'édite pas le
 Il valide la configuration OpenSSH avant démarrage. Examiner le script avant
 exécution, prendre une sauvegarde et programmer une fenêtre de maintenance.
 
-### Exemple Caddy — fichier à intégrer MANUELLEMENT
+### Caddy Docker : pont SSH-WS privé
 
-```caddyfile
-ssh.example.test {
-  handle /ssh-ws/* {
-    reverse_proxy 127.0.0.1:2080 {
-      stream_close_delay 5m
-    }
-  }
-  respond 404
-}
+Le dépôt inclut la route `/ssh-ws/*` dans `Caddyfile` et le
+montage du socket Unix dans `docker-compose.yml`. Les clients utilisent
+le **même domaine TLS que le panneau** (`VPN_DOMAIN`), avec le chemin
+exact `/ssh-ws/<secret-client>`.
+
+L'installateur crée `/var/lib/abess-ssh-ws/socket/gateway.sock` avec
+les permissions `0660` dans un dossier `0750` appartenant au groupe
+`abess-gateway`.
+
+Après l'installation, renseigner le GID affiché dans le `.env`
+du déploiement Docker :
+
+```dotenv
+SSH_WS_GATEWAY_GID=<gid_affiché_par_le_script_install>
 ```
 
-Utiliser **le vrai domaine du VPS**, un certificat TLS vérifié et le chemin
-`/ssh-ws/<secret-client>` (et non le chemin générique). Ne pas ouvrir 2080 ou 2222 sur Internet. Si le panneau utilise
-déjà Caddy sur le même hôte, fusionner cette route dans sa configuration
-avec précaution, sans supprimer les routes du panneau.
+Vérifier puis relancer uniquement Caddy avec
+`docker compose up -d --no-deps caddy`. Il doit utiliser la version à jour
+du `Caddyfile`. Sauvegarder la configuration existante avant de la modifier ;
+ne pas effacer les autres sites ou routes Caddy.
+
+Si l'agent n'est pas installé, seule la route `/ssh-ws/*` sera
+indisponible ; l'API et le panneau restent accessibles.
 
 L'installation affiche l'empreinte SSH Ed25519 à vérifier **indépendamment**.
 Dans **Comptes SSH**, l'administrateur sélectionne ensuite le VPS, saisit
@@ -162,7 +174,7 @@ comptes ou mettre en place une migration de secrets sécurisée.
 - journal de consommation durcie sur disque avec synchronisation préalable des réservations
 - politique partagée en lecture seule par le processus non privilégié
 - service systemd relancé en cas de panne et séparé du panneau/API
-- TLS/WSS à configurer uniquement sur Caddy, côté domaine public
+- TLS/WSS sur le domaine du panneau via Caddy Docker et le socket Unix privé
 
 Le débit dépend du VPS, du réseau, du certificat TLS et du client SSH :
 ces optimisations **ne garantissent pas une vitesse Internet précise**.

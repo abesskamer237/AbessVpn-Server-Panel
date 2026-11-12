@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import net from 'node:net';
+import http from 'node:http';
 import path from 'node:path';
 import {mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
@@ -119,6 +120,32 @@ try {
   await closed;
   assert.equal(await rejected(key),404);
 
+  // Docker Caddy mounts this private Unix socket into its container.
+  // Verify that the server uses the correct permission bits, supports
+  // HTTP health checks and accepts real WebSocket upgrades through it.
+  const unixPath=path.join(dir,'gateway.sock');
+  const unixGateway=await startGateway({...gatewayOptions,socketPath:unixPath});
+  try{
+    assert.equal(fs.statSync(unixPath).mode&0o777,0o660);
+    const status=await new Promise((resolve,reject)=>{
+      http.get({socketPath:unixPath,path:'/healthz'},res=>{
+        let data='';res.on('data',chunk=>data+=chunk);
+        res.on('end',()=>resolve({status:res.statusCode,body:JSON.parse(data)}));
+      }).on('error',reject);
+    });
+    assert.equal(status.status,200);
+    assert.equal(status.body.policyReady,true);
+    const unixWs=new WebSocket('ws://localhost/ssh-ws/'+keyB,{
+      createConnection:()=>net.createConnection({path:unixPath}),perMessageDeflate:false
+    });
+    await once(unixWs,'open');
+    assert.equal(unixGateway.ledger.online(idB),1);
+    unixWs.terminate();
+    await once(unixWs,'close');
+  }finally{
+    await unixGateway.close();
+  }
+  assert.equal(fs.existsSync(unixPath),false,'graceful shutdown removes Unix socket');
   await gateway.close();
   const before=JSON.parse(fs.readFileSync(usageFile,'utf8')).balances[id];
   gateway=await startGateway(gatewayOptions);
