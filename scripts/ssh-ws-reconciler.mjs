@@ -71,12 +71,15 @@ export async function reconcile(manifest,previous={},host=hostOperations()) {
       if(!old && host.exists(a.username))throw Error('Existing unmanaged Linux user');
       const enabled=a.enabled && Date.parse(a.expiresAt)>Date.now();
       if(enabled) {
-        if(!host.exists(a.username))host.create(a.username);
+        const missing=!host.exists(a.username);
+        if(missing)host.create(a.username);
         // Record ownership immediately in case chpasswd or account activation fails.
         state[a.username]={id:a.id,passwordHash:old?.passwordHash||null,enabled:false,expiresAt:a.expiresAt};
         const hash=crypto.createHash('sha256').update(a.password).digest('hex');
-        if(old?.passwordHash!==hash)host.password(a.username,a.password);
-        if(!old?.enabled || old.passwordHash!==hash)host.enable(a.username);
+        // A manually deleted user must receive its password again even if it
+        // was already present in the previous local state snapshot.
+        if(missing || old?.passwordHash!==hash)host.password(a.username,a.password);
+        if(missing || !old?.enabled || old.passwordHash!==hash)host.enable(a.username);
         state[a.username]={id:a.id,passwordHash:hash,enabled:true,expiresAt:a.expiresAt};
       } else {
         if(!old || old.enabled)host.disable(a.username);
