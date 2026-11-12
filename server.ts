@@ -129,6 +129,7 @@ export interface AppUser {
   parentId?: string;
   parentName?: string;
   pricePerGbCfa?: number;
+  costPerGbCfa?: number;
   pricePerLicenceCfa?: number;
 }
 
@@ -2288,15 +2289,18 @@ async function startServer() {
   app.put('/api/v1/admin/resellers/:id/pricing', authenticate, (req,res)=>{
     const actor:AppUser=(req as any).user;
     if(actor.role!=='SUPER_ADMIN'&&actor.role!=='ADMIN')return res.sendStatus(403);
-    const perGb=Number(req.body?.pricePerGbCfa),perLicence=Number(req.body?.pricePerLicenceCfa);
-    if(!Number.isFinite(perGb)||perGb<0||perGb>10000000||!Number.isFinite(perLicence)||perLicence<0||perLicence>10000000)
+    const perGb=Number(req.body?.pricePerGbCfa),costPerGb=Number(req.body?.costPerGbCfa),perLicence=Number(req.body?.pricePerLicenceCfa);
+    if(!Number.isFinite(perGb)||perGb<0||perGb>10000000||
+       !Number.isFinite(costPerGb)||costPerGb<0||costPerGb>10000000||
+       !Number.isFinite(perLicence)||perLicence<0||perLicence>10000000)
       return res.status(400).json({error:'Tarifs invalides.'});
     const users=loadUsers(),reseller=users.find(u=>u.id===req.params.id&&u.role==='RESELLER');
     if(!reseller)return res.sendStatus(404);
     reseller.pricePerGbCfa=Math.round(perGb);
+    reseller.costPerGbCfa=Math.round(costPerGb);
     reseller.pricePerLicenceCfa=Math.round(perLicence);
     saveUsers(users);
-    logAudit({actor:actor.id,role:actor.role,action:'RESELLER_PRICING_UPDATED',details:JSON.stringify({id:reseller.id,perGb:reseller.pricePerGbCfa,perLicence:reseller.pricePerLicenceCfa})});
+    logAudit({actor:actor.id,role:actor.role,action:'RESELLER_PRICING_UPDATED',details:JSON.stringify({id:reseller.id,perGb:reseller.pricePerGbCfa,costPerGb:reseller.costPerGbCfa,perLicence:reseller.pricePerLicenceCfa})});
     const {passwordHash,...safe}=reseller;return res.json(safe);
   });
 
