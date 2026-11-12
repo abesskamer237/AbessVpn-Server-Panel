@@ -15,6 +15,7 @@ import QRCode from 'qrcode';
 import { Operations, registerOperations, encryptedBackup, uploadBackup, type VpnNode } from './modules/operations.js';
 import { registerCommerce } from './modules/commerce.js';
 import { registerSsh, type SshState } from './modules/ssh.js';
+import { singBoxConfig, mihomoConfig } from './modules/subscriptions.js';
 import { SecurityService, registerSecurityRoutes } from './modules/security.js';
 import { DocumentStore } from './modules/store.js';
 import { startTelegramBot } from './telegram-bot.js';
@@ -132,6 +133,8 @@ export interface AppUser {
 export interface ClientToken {
   id: string;
   token: string;
+  /** 256-bit bearer credential for portable subscriptions; absent only on legacy licences. */
+  subscriptionKey?: string;
   /** Per-licence VLESS identity; legacy records are migrated on load. */
   clientUuid?: string;
   trafficId?: string;
@@ -1285,15 +1288,17 @@ function protocolConfigForToken(token: ClientToken, configs = loadProtocolConfig
   }
   return configs[0] || null;
 }
-type SafeClientToken = Omit<ClientToken, 'configurationSnapshot' | 'sshConfig'> & {
+type SafeClientToken = Omit<ClientToken, 'configurationSnapshot' | 'sshConfig' | 'subscriptionKey'> & {
+  subscriptionUrl: string;
   sshConfig?: Omit<NonNullable<ClientToken['sshConfig']>, 'sshPassword'>;
 };
 
 function safeClientToken(token: ClientToken): SafeClientToken {
-  const { configurationSnapshot: _configurationSnapshot, sshConfig, ...safe } = token;
-  if (!sshConfig) return safe;
+  const { configurationSnapshot: _configurationSnapshot, sshConfig, subscriptionKey, ...safe } = token;
+  const subscriptionUrl = `/sub/${subscriptionKey || token.token}`;
+  if (!sshConfig) return { ...safe, subscriptionUrl };
   const { sshPassword: _sshPassword, ...safeSshConfig } = sshConfig;
-  return { ...safe, sshConfig: safeSshConfig };
+  return { ...safe, subscriptionUrl, sshConfig: safeSshConfig };
 }
 
 // Backups are Super Admin-only recovery artifacts: retain each token's immutable
@@ -2599,7 +2604,7 @@ async function startServer() {
 
     const tokens = loadTokens();
     const newToken: ClientToken = {
-      id: 'tok_' + crypto.randomUUID(), token: finalToken, clientUuid, trafficId,
+      id: 'tok_' + crypto.randomUUID(), token: finalToken, subscriptionKey: crypto.randomBytes(32).toString('base64url'), clientUuid, trafficId,
       resellerId: user.id, resellerName: user.name,
       plan: String(plan || `${requestedGb} GO CYBER VIP`).trim().slice(0, 80),
       bandwidthGb: requestedGb, bandwidthUsedGb: 0, expiresAt: calculatedExpiresAt, days: daysRemaining,
@@ -2662,6 +2667,20 @@ async function startServer() {
     saveUsers(users);saveTokens(tokens);
     logTransaction({resellerId:actor.id,resellerName:actor.name,type:'TOKEN_RENEW',amountGb:quota,balanceBefore:balance,balanceAfter:account.credits,note:`Renouvellement de la licence ${target.id} : ${days} jours.`});
     logAudit({actor:actor.id,role:actor.role,action:'TOKEN_RENEW',details:target.id});
+    res.json(safeClientToken(target));
+  });
+
+  // Explicitly rotate legacy/compromised subscription URLs without changing the commercial token or VLESS UUID.
+  app.post('/api/v1/admin/tokens/:id/rotate-subscription', authenticate, (req, res) => {
+    const actor = (req as any).user as AppUser;
+    const tokens = loadTokens();
+    const target = tokens.find(t => t.id === req.params.id);
+    if (!target) return res.sendStatus(404);
+    if (!canManageToken(actor, target.resellerId, loadUsers())) return res.sendStatus(403);
+    if (target.protocolType === 'ssh' || target.sshConfig) return res.sendStatus(409);
+    target.subscriptionKey = crypto.randomBytes(32).toString('base64url');
+    saveTokens(tokens);
+    logAudit({ actor: actor.id, role: actor.role, action: 'SUBSCRIPTION_ROTATED', details: target.id });
     res.json(safeClientToken(target));
   });
 
@@ -2766,6 +2785,7 @@ async function startServer() {
       const newToken: ClientToken = {
         id: 'tok_' + crypto.randomUUID(),
         token: finalToken,
+        subscriptionKey: crypto.randomBytes(32).toString('base64url'),
         clientUuid,
         resellerId: user.id,
         resellerName: user.name,
@@ -3641,6 +3661,7 @@ async function startServer() {
   // Dual-mode: Interactive HTML for browsers & Base64 for VPN clients
   // ==========================================
   app.get(['/sub/:token', '/nexus/sub/:token', '/api/v1/sub/:token'], publicApiRateLimiter, async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
     const rawToken = String(req.params.token || '').trim();
     if (!rawToken) {
       res.status(400).send('Jeton requis.');
@@ -3648,7 +3669,8 @@ async function startServer() {
     }
     const tokens = loadTokens();
     const cleanToken = rawToken.toUpperCase();
-    const matched = tokens.find(t => t.token.toUpperCase() === cleanToken);
+    // New subscriptions use high-entropy secrets; legacy tokens remain readable until rotated.
+    const matched = tokens.find(t => t.subscriptionKey ? t.subscriptionKey === rawToken : t.token.toUpperCase() === cleanToken);
     if (!matched) {
       res.status(404).send('Abonnement introuvable.');
       return;
@@ -3676,7 +3698,12 @@ async function startServer() {
       'darktunnel', 'httpcustom', 'matsuri', 'karing', 'flclash',
       'curl', 'wget', 'python', 'okhttp', 'go-http-client'
     ];
+    const format = String(req.query.format || 'base64').toLowerCase();
+    if (!['base64', 'raw', 'sing-box', 'mihomo'].includes(format)) {
+      return res.status(400).json({ error: 'Format demandé inconnu. Utilisez base64, raw, sing-box ou mihomo.' });
+    }
     const isBrowser =
+      format === 'base64' &&
       acceptHdr.includes('text/html') &&
       uaHdr.includes('mozilla') &&
       !vpnKeywords.some(k => uaHdr.includes(k)) &&
@@ -3685,6 +3712,36 @@ async function startServer() {
     const protocolConfigs = loadProtocolConfigs();
     const profile = protocolConfigForToken(matched, protocolConfigs);
     const variants = generateUserVlessVariants(matched, profile || undefined);
+
+    if (format === 'sing-box' || format === 'mihomo') {
+      if (!profile || !isXrayProtocol(profile.protocol)) {
+        return res.status(409).json({ error: 'Aucun profil VLESS exportable.' });
+      }
+      try {
+        const portable = {
+          name: `${profile.name} - ${matched.token}`,
+          host: profile.serverHost,
+          port: xrayPublicPort(profile.protocol, profile.transport, profile.serverPort),
+          uuid: matched.clientUuid || '',
+          transport: profile.transport,
+          sni: profile.sniHost || profile.serverHost,
+          httpHost: profile.host || profile.serverHost,
+          path: xrayProfilePath('vless', profile.transport as XrayTransport, profile.path)
+        };
+        if (format === 'sing-box') {
+          res.type('application/json; charset=utf-8');
+          return res.send(JSON.stringify(singBoxConfig(portable), null, 2));
+        }
+        res.type('text/yaml; charset=utf-8');
+        return res.send(mihomoConfig(portable));
+      } catch {
+        return res.status(422).json({ error: 'Transport incompatible avec cet exporteur. Utilisez le lien VLESS standard.' });
+      }
+    }
+    if (format === 'raw') {
+      res.type('text/plain; charset=utf-8');
+      return res.send(variants.map(v => v.uri).join('\\n'));
+    }
 
     if (isBrowser) {
       const subTemplatePath = path.resolve(templatesDir, 'sub.html');
@@ -3719,7 +3776,7 @@ async function startServer() {
             is_valid: matched.status === 'active' && new Date(matched.expiresAt).getTime() > Date.now() && matched.bandwidthUsedGb < matched.bandwidthGb
           },
           variants: browserVariants,
-          sub_path: `/sub/${matched.token}`,
+          sub_path: `/sub/${matched.subscriptionKey || matched.token}`,
           support_phone: matched.customerContact || '+237690123456'
         };
 
@@ -4025,7 +4082,7 @@ async function startServer() {
         expiresAt: token?.expiresAt,
         bandwidthGb: token?.bandwidthGb,
         downloadUrl: '/download/AbessVpn.apk',
-        subUrl: `/sub/${reqFound.assignedToken}`
+        subUrl: `/sub/${token?.subscriptionKey || reqFound.assignedToken}`
       });
       return;
     }
@@ -4112,6 +4169,7 @@ async function startServer() {
     const dummyToken: ClientToken = {
       id: 'tok_' + crypto.randomUUID(),
       token: tokenStr,
+      subscriptionKey: crypto.randomBytes(32).toString('base64url'),
       clientUuid: uuid,
       resellerId: user.id,
       resellerName: user.name,
@@ -4340,7 +4398,7 @@ async function startServer() {
     res.json({
       ok: true,
       token: token.token,
-      subscriptionUrl: `/sub/${token.token}`,
+      subscriptionUrl: `/sub/${token.subscriptionKey || token.token}`,
       variants,
       xrayClient
     });
