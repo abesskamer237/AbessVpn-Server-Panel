@@ -3,6 +3,13 @@
 }
 
 {$VPN_DOMAIN} {
-  encode zstd gzip
-  reverse_proxy api:3000
+  @managedSshWs path /ssh-ws/*
+  handle @managedSshWs {
+    # Bound Unix socket mounted from the VPS; no host TCP exposure.
+    reverse_proxy unix//var/run/abess-ssh-ws/gateway.sock
+  }
+  handle {
+    encode zstd gzip
+    reverse_proxy api:3000
+  }
 }
