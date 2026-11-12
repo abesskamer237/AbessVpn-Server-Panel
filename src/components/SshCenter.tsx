@@ -11,6 +11,7 @@ export function SshCenter({ token, isAdmin = true }: { token: string; isAdmin?: 
   const [state, setState] = useState<any>(null);
   const [managedNodeId,setManagedNodeId] = useState('');
   const [setupNodeId,setSetupNodeId] = useState('');
+  const [showSetup,setShowSetup] = useState(false);
   const [managedFingerprint,setManagedFingerprint] = useState('');
   const [managedSni,setManagedSni] = useState('');
   const [managedPort,setManagedPort] = useState(443);
@@ -65,6 +66,14 @@ export function SshCenter({ token, isAdmin = true }: { token: string; isAdmin?: 
     );
     return () => clearInterval(timer);
   }, []);
+  // Newly provisioned VPS agents should be immediately usable, without
+  // manually choosing the only available server after every refresh.
+  useEffect(() => {
+    const nodes=state?.managedNodes;
+    if(!Array.isArray(nodes)||!nodes.length)return;
+    setManagedNodeId(current=>nodes.some((n:any)=>n.id===current)?current:
+      (nodes.find((n:any)=>n.agentOnline)||nodes[0]).id);
+  }, [state?.managedNodes]);
   async function action(work: () => Promise<void>) {
     setBusy(true);
     setError("");
@@ -98,10 +107,11 @@ export function SshCenter({ token, isAdmin = true }: { token: string; isAdmin?: 
           </h2>
 
         </div>
-        <span className={state?.ready ? "text-emerald-400" : "text-amber-400"}>
-          {state?.ready
-            ? "● Suivi connecté"
-            : "● Sans suivi distant"}
+        <span className={state?.sshWsReady ? "text-emerald-400" : state?.managedNodes?.length ? "text-amber-400" : "text-slate-400"}>
+          {!state ? "● Vérification SSH-WS…" :
+            state.sshWsReady ? "● SSH-WS : agent connecté" :
+            state.managedNodes?.length ? "● SSH-WS : agent hors ligne" :
+            "● Aucun serveur SSH-WS configuré"}
         </span>
         <button
           onClick={() => void action(refresh)}
@@ -117,7 +127,23 @@ export function SshCenter({ token, isAdmin = true }: { token: string; isAdmin?: 
           {error}
         </p>
       )}
-      {isAdmin && <form
+      {isAdmin && <div className="space-y-3">
+        {Boolean(state?.managedNodes?.length) && <div className="rounded-xl border border-emerald-700/40 bg-emerald-950/10 p-4 space-y-2 text-sm">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <strong className="text-emerald-300">Serveur SSH-WS déjà activé sur le VPS</strong>
+            <button type="button" className="text-cyan-300 underline" onClick={()=>setShowSetup(v=>!v)}>
+              {showSetup?'Masquer la configuration avancée':'Configurer un autre VPS'}
+            </button>
+          </div>
+          {state.managedNodes.map((n:any)=><p key={n.id} className="text-slate-300">
+            {n.name} · {n.sni || n.host}:{n.port || 443}{n.path || '/ssh-ws'} ·
+            <span className={n.agentOnline?'text-emerald-400':'text-amber-400'}>
+              {n.agentOnline?' Agent connecté':' Agent hors ligne'}
+            </span>
+          </p>)}
+          <p className="text-slate-400 text-xs">Ce VPS est déjà autorisé : inutile de ressaisir son empreinte SSH.</p>
+        </div>}
+        {(showSetup || !state?.managedNodes?.length) && <form
         aria-label="Autoriser un VPS pour SSH-WS"
         className="rounded-2xl border border-cyan-700/40 p-4 flex flex-wrap gap-3 items-end"
         onSubmit={e=>{
@@ -162,6 +188,7 @@ export function SshCenter({ token, isAdmin = true }: { token: string; isAdmin?: 
           className="bg-cyan-600 text-white px-3 py-2 rounded disabled:opacity-40">Activer SSH-WS</button>
         <p className="w-full text-slate-400 text-xs">Cette étape n'installe rien sur le VPS. L'agent distant doit être installé et connecté avant la livraison d'un compte.</p>
       </form>}
+      </div>}
       <form
         aria-label="Créer un client SSH-WS administré"
         className="rounded-2xl border border-emerald-700/40 p-4 flex flex-wrap items-end gap-3"
@@ -197,15 +224,22 @@ export function SshCenter({ token, isAdmin = true }: { token: string; isAdmin?: 
             value={quotaGb} onChange={e=>setQuota(Number(e.target.value))}
             className="block bg-slate-950 p-2 w-24"/>
         </label>
-        <button type="submit" disabled={busy||!managedNodeId}
+        <label className="text-xs">Connexions WSS simultanées
+          <input aria-label="Connexions SSH-WS simultanées" type="number" min={1} max={10}
+            value={connections} onChange={e=>setConnections(Number(e.target.value))}
+            className="block bg-slate-950 p-2 w-24"/>
+        </label>
+        <button type="submit" disabled={busy||!managedNodeId||!state?.managedNodes?.some((n:any)=>n.id===managedNodeId&&n.agentOnline)}
           className="bg-emerald-600 text-white px-3 py-2 rounded disabled:opacity-40">
           Créer le compte SSH-WS
         </button>
         <p className="w-full text-slate-400 text-xs">
-          Les identifiants sont distribués uniquement après confirmation de l'agent du VPS.
-          Les quotas et limites de connexions exigent une mesure/contrainte serveur supplémentaire.
+          L'agent du VPS confirme l'activation avant la livraison des identifiants.
+          Le quota Go et le nombre de connexions WebSocket sont appliqués par la passerelle sur le VPS.
         </p>
       </form>
+      <details className="rounded-2xl border border-slate-700 p-4">
+        <summary className="cursor-pointer text-sm text-slate-300">Option avancée : importer un compte SSH fournisseur existant (TCP ou autre protocole)</summary>
       <form
         aria-label={isAdmin ? "Importer un compte SSH fournisseur" : "Ajouter un compte SSH fournisseur existant"}
         className="rounded-2xl border border-slate-700 p-5 grid sm:grid-cols-2 lg:grid-cols-6 gap-4"
@@ -312,6 +346,7 @@ export function SshCenter({ token, isAdmin = true }: { token: string; isAdmin?: 
           Importer le compte
         </button>
       </form>
+      </details>
       {renewId && <RenewLicence id={renewId} token={token} endpoint={`/api/v1/admin/ssh/accounts/${renewId}/renew`} onClose={()=>setRenewId(null)} onSuccess={()=>void refresh()} />}
       <div className="rounded-2xl border border-slate-700 p-5 space-y-4">
         <input
