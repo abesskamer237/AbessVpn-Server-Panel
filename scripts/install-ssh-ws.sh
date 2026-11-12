@@ -59,9 +59,17 @@ AllowAgentForwarding no
 PermitUserEnvironment no
 MaxSessions 0
 MaxStartups 20:30:120
+UseDNS no
 LogLevel VERBOSE
+Include /etc/abess-ssh-ws/allowed-users.conf
 SSHD
 chmod 0600 /etc/abess-ssh-ws/sshd_config
+# Explicit no-user policy until the reconciler binds each username to a
+# unique, gateway-controlled 127.120.x.y loopback source IP.
+if [[ ! -e /etc/abess-ssh-ws/allowed-users.conf ]]; then
+  printf 'AllowUsers _abess_no_active_user_\n' > /etc/abess-ssh-ws/allowed-users.conf
+fi
+chmod 0600 /etc/abess-ssh-ws/allowed-users.conf
 /usr/sbin/sshd -t -f /etc/abess-ssh-ws/sshd_config
 cat > /etc/systemd/system/abess-ssh-ws-sshd.service <<'UNIT'
 [Unit]
@@ -114,6 +122,7 @@ CONTROL_API_BASE_URL=$CONTROL_API_BASE_URL
 VPN_NODE_ID=$VPN_NODE_ID
 VPN_NODE_KEY_FILE=/etc/abess-ssh-ws/node-key
 SSH_WS_STATE_FILE=/var/lib/abess-ssh-ws/state.json
+SSH_WS_ALLOW_USERS_FILE=/etc/abess-ssh-ws/allowed-users.conf
 SSH_WS_POLICY_FILE=/var/lib/abess-ssh-ws/policy/gateway-policy.json
 SSH_WS_USAGE_REPORT_FILE=/var/lib/abess-ssh-ws/gateway/usage-live.json
 SSH_WS_GATEWAY_GID=$(id -g abess-gateway)
