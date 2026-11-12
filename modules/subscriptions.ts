@@ -27,7 +27,7 @@ export function singBoxConfig(p: PortableVless): Record<string, unknown> {
   const transport = p.transport === 'ws'
     ? {type: 'ws', path: p.path, headers: {Host: p.httpHost}}
     : p.transport === 'grpc'
-      ? {type: 'grpc', service_name: p.path.replace(/^\\/+/, '')}
+      ? {type: 'grpc', service_name: p.path.replace(/^\/+/, '')}
       : undefined;
   return {
     log: {level: 'warn'},
@@ -61,7 +61,7 @@ export function mihomoConfig(p: PortableVless): string {
     proxy.push('    network: ws', '    ws-opts:', '      path: ' + q(p.path),
       '      headers:', '        Host: ' + q(p.httpHost));
   } else if (p.transport === 'grpc') {
-    proxy.push('    network: grpc', '    grpc-opts:', '      grpc-service-name: ' + q(p.path.replace(/^\\/+/, '')));
+    proxy.push('    network: grpc', '    grpc-opts:', '      grpc-service-name: ' + q(p.path.replace(/^\/+/, '')));
   } else {
     proxy.push('    network: tcp');
   }
@@ -71,5 +71,5 @@ export function mihomoConfig(p: PortableVless): string {
     'proxy-groups:', '  - name: "ABESS VPN"', '    type: select',
     '    proxies:', '      - ' + name,
     'rules:', '  - "MATCH,ABESS VPN"', ''
-  ].join('\\n');
+  ].join('\n');
 }
