@@ -41,7 +41,7 @@ jobs:
 
 
       - name: Security regression tests
-        run: node scripts/test-security.mjs
+        run: node --import tsx scripts/test-security.mjs
 
       - name: Verify MFA, backup encryption and manual transfer approval
         run: node --import tsx scripts/test-platform.mjs
