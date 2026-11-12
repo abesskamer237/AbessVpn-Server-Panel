@@ -212,7 +212,7 @@ try{
   const managedDelivered=await call(`admin/ssh/accounts/${managedId}/config`,{transport:'wss'},importerSession);
   assert.equal(managedDelivered.status,200);
   assert.equal(managedDelivered.body.password,manifest.body.accounts[0].password);
-  assert.match(managedDelivered.body.path,/^\\/ssh-ws\\/[A-Za-z0-9_-]{43}$/);
+  assert.match(managedDelivered.body.path,/^\/ssh-ws\/[A-Za-z0-9_-]{43}$/);
   assert.equal(managedDelivered.body.usedGb,1048576/1024**3);
   assert.equal((await call('admin/ssh',undefined,importerSession)).body.accounts
     .find(a=>a.id===managedId).connection.path,undefined,
