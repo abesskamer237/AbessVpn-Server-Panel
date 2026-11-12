@@ -7,6 +7,7 @@
  * the operator's trusted Caddy WSS proxy, never in this loopback process.
  */
 import fs from 'node:fs';
+import path from 'node:path';
 import http from 'node:http';
 import net from 'node:net';
 import {Transform} from 'node:stream';
@@ -37,6 +38,10 @@ function meter(ledger,id,kill){
 }
 export async function startGateway(options={}){
   const port=validPort(options.port??process.env.SSH_WS_LISTEN_PORT??2080,true);
+  const socketPath=options.socketPath??process.env.SSH_WS_LISTEN_SOCKET??null;
+  if(socketPath!==null && (typeof socketPath!=='string' ||
+      !path.isAbsolute(socketPath) || !socketPath.endsWith('.sock') ||
+      socketPath.length>180))throw Error('Invalid gateway Unix socket path');
   const sshPort=validPort(options.sshPort??process.env.SSH_WS_SSH_PORT??2222);
   const basePath=options.path??process.env.SSH_WS_PATH??'/ssh-ws';
   const maxConnections=Number(options.maxConnections??process.env.SSH_WS_MAX_CONNECTIONS??512);
@@ -157,28 +162,43 @@ export async function startGateway(options={}){
   },policyPollMs);
   heartbeat.unref();maintenance.unref();
   try{
+    if(socketPath){
+      const dir=path.dirname(socketPath);
+      const st=fs.statSync(dir);
+      if(!st.isDirectory())throw Error('Gateway socket parent must be an existing directory');
+      // Remove a stale socket only if it belongs to this exact UID.
+      try{
+        const existing=fs.lstatSync(socketPath);
+        if(!existing.isSocket() || existing.uid!==process.getuid?.())
+          throw Error('Refusing to replace unmanaged path');
+        fs.unlinkSync(socketPath);
+      }catch(e){if(e.code!=='ENOENT')throw e;}
+    }
     await new Promise((resolve,reject)=>{
       server.once('error',reject);
-      server.listen(port,'127.0.0.1',resolve);
+      if(socketPath)server.listen(socketPath,resolve);
+      else server.listen(port,'127.0.0.1',resolve);
     });
+    if(socketPath)fs.chmodSync(socketPath,0o660);
   }catch(error){
     clearInterval(heartbeat);clearInterval(maintenance);
     throw error;
   }
   return {
-    port:server.address().port,server,wss,ledger,refreshPolicy,
+    port:socketPath?null:server.address().port,socketPath,server,wss,ledger,refreshPolicy,
     async close(){
       clearInterval(heartbeat);clearInterval(maintenance);
       for(const ws of wss.clients)ws.terminate();
       await new Promise(resolve=>wss.close(resolve));
       await new Promise(resolve=>server.close(resolve));
+      if(socketPath){try{fs.unlinkSync(socketPath);}catch(e){if(e.code!=='ENOENT')throw e;}}
       ledger.close();
     }
   };
 }
 async function main(){
   const gateway=await startGateway();
-  process.stdout.write('[SSH-WS] quota enforced on loopback port '+gateway.port+'\n');
+  process.stdout.write('[SSH-WS] quota enforced on '+(gateway.socketPath||'loopback port '+gateway.port)+'\n');
   const stop=async()=>{await gateway.close();process.exitCode=0;};
   process.once('SIGTERM',stop);
   process.once('SIGINT',stop);
