@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   validate:
-    if: github.event.head_commit.message == 'ops: perform one-time full VPS and SSH-WS installation'
+    if: contains(github.event.head_commit.message, 'one-time full VPS and SSH-WS installation')
     services:
       postgres:
         image: postgres:16-bookworm
@@ -91,7 +91,7 @@ jobs:
 
   deploy:
     name: Deploy backend, HTTPS, independent SSH-WS and Caddy socket bridge
-    if: github.ref == 'refs/heads/deploy/sshws-first-install-20261112' && github.event.head_commit.message == 'ops: perform one-time full VPS and SSH-WS installation'
+    if: github.ref == 'refs/heads/deploy/sshws-first-install-20261112' && contains(github.event.head_commit.message, 'one-time full VPS and SSH-WS installation')
     needs: validate
     runs-on: ubuntu-latest
     steps:
