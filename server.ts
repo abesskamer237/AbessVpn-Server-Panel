@@ -1960,6 +1960,7 @@ async function startServer() {
     writeJsonAtomically(sshFile, snapshot.ssh || { accounts: [] });
     if(Array.isArray(snapshot.nodes))writeJsonAtomically(nodesFile,snapshot.nodes);
     writeJsonAtomically(securityFile,{mfa:snapshot.security?.mfa||{},sessions:{}});
+    activeSessions.clear();
     if(Array.isArray(snapshot.auditEvents))storage.importAudit(snapshot.auditEvents);
   };
   registerOperations(app,{authenticate,limiter:publicApiRateLimiter,ops:operations,snapshot:fullSnapshot,restore:restoreSnapshot,readNodes:()=>hasDocument(nodesFile)?readDocument(nodesFile):[],saveNodes:v=>{writeJsonAtomically(nodesFile,v);},audit:logAudit,
