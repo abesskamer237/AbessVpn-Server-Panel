@@ -187,7 +187,10 @@ test('sells a TCP payload account and lets its reseller renew it', async ({page,
   await page.getByLabel('Mot de passe',{exact:true}).fill(resellerPassword);
   await page.getByRole('button',{name:'Se connecter',exact:true}).click();
   await page.getByRole('navigation').getByRole('button',{name:'Comptes SSH',exact:true}).click();
-  await expect(page.getByRole('button',{name:'Importer le compte',exact:true})).toHaveCount(0);
+  // Resellers may import existing supplier accounts without seeing managed VPS controls.
+  await expect(page.getByRole('button',{name:'Importer le compte',exact:true})).toHaveCount(1);
+  await expect(page.getByLabel('Serveur SSH')).toHaveCount(0);
+  await expect(page.getByLabel('Revendeur SSH')).toHaveCount(0);
   await expect(page.locator('td strong').filter({hasText:'browser_user'})).toHaveCount(0);
   await page.getByRole('button',{name:'Configurer',exact:true}).click();
   await page.getByRole('button',{name:'Afficher les paramètres et identifiants',exact:true}).click();
