@@ -15,7 +15,7 @@ source .env
 set +a
 [[ "${VPN_DOMAIN:-}" =~ ^[a-zA-Z0-9.-]+$ ]] || { echo "Invalid VPN domain" >&2; exit 1; }
 [[ "${SSH_WS_HOST:-}" =~ ^[a-zA-Z0-9.-]+$ ]] || { echo "Invalid VPS IP/name" >&2; exit 1; }
-command -v docker >/dev/null && docker compose ps --status running --format '{{.Service}}' | grep -q '^api$' || {
+command -v docker >/dev/null && docker compose exec -T api node --version >/dev/null || {
   echo "ABESS API container must be running before SSH-WS bootstrap" >&2
   exit 1
 }
