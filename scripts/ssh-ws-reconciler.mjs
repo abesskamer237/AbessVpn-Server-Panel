@@ -213,12 +213,24 @@ async function readUsage(env,store,policyTime) {
   }
   return usage;
 }
+let previousCpuSample=null;
 async function hostTelemetry() {
-  let diskTotalBytes=0,diskFreeBytes=0;
+  let diskTotalBytes=0,diskFreeBytes=0,cpuPercent=0;
   try {
     const stat=await fs.statfs('/');
     diskTotalBytes=Number(stat.blocks)*Number(stat.bsize);
     diskFreeBytes=Number(stat.bavail)*Number(stat.bsize);
+  } catch {}
+  try {
+    const first=(await fs.readFile('/proc/stat','utf8')).split('\n')[0].trim().split(/\s+/).slice(1).map(Number);
+    if(first.length>=8&&first.every(Number.isFinite)){
+      const idle=(first[3]||0)+(first[4]||0),total=first.reduce((a,b)=>a+b,0);
+      if(previousCpuSample){
+        const dt=total-previousCpuSample.total,di=idle-previousCpuSample.idle;
+        if(dt>0)cpuPercent=Math.max(0,Math.min(100,Number((((dt-di)/dt)*100).toFixed(1))));
+      }
+      previousCpuSample={total,idle};
+    }
   } catch {}
   const active=name=>{
     try {
@@ -229,6 +241,7 @@ async function hostTelemetry() {
   return {
     observedAt:new Date().toISOString(),
     uptimeSeconds:Math.max(0,Math.floor(os.uptime())),
+    cpuPercent,
     load1:Number(os.loadavg()[0].toFixed(2)),
     totalMemoryBytes:os.totalmem(),
     freeMemoryBytes:os.freemem(),
