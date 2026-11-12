@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import net from 'node:net';
+import { unseal } from '../modules/security.js';
 
 const base = 'http://127.0.0.1:3187';
 const dataDir = process.env.DATA_DIR;
@@ -298,19 +299,22 @@ await assertCorruptStoreFailsClosed(
   {},
 );
 
-const adminBackup = await fetch(`${base}/api/v1/admin/backup`, {
+const plaintextBackup = await fetch(`${base}/api/v1/admin/backup`, {
   headers: { Authorization: `Bearer ${login.token}` },
 });
-assert.equal(adminBackup.status, 200);
-const adminBackupJson = await adminBackup.json();
+assert.equal(plaintextBackup.status, 410);
+const plaintextSystemBackup = await fetch(`${base}/api/v1/admin/system/backup`, {
+  headers: { Authorization: `Bearer ${login.token}` },
+});
+assert.equal(plaintextSystemBackup.status, 410);
+const encryptedAdminBackup = await fetch(`${base}/api/v1/admin/operations/backup`, {
+  headers: { Authorization: `Bearer ${login.token}` },
+});
+assert.equal(encryptedAdminBackup.status, 200);
+const backupEnvelope = await encryptedAdminBackup.json();
+assert.equal(backupEnvelope.format, 'abess-backup-v1');
+const adminBackupJson = unseal(backupEnvelope.sealed, process.env.MASTER_SECRET);
 assert.ok(!('secretPassphrase' in adminBackupJson.masterConfig), 'MASTER_SECRET must never be exported in backups');
-
-const systemBackup = await fetch(`${base}/api/v1/admin/system/backup`, {
-  headers: { Authorization: `Bearer ${login.token}` },
-});
-assert.equal(systemBackup.status, 200);
-const systemBackupJson = await systemBackup.json();
-assert.ok(!('secretPassphrase' in systemBackupJson.config), 'system backup must redact MASTER_SECRET');
 
 // The API's Caddy/domain variable must not silently become the VPN endpoint or TLS SNI.
 // Simulate a config.json written by the retired implementation.
@@ -448,7 +452,7 @@ const crossTenantVariants = await fetch(`${base}/api/v1/admin/tokens/${licenceA.
 });
 assert.equal(crossTenantVariants.status, 403, 'resellers must not inspect another reseller token variants');
 
-const subscriptionPortal = await fetch(`${base}/sub/${licenceA.token}`, {
+const subscriptionPortal = await fetch(`${base}${licenceA.subscriptionUrl}`, {
   headers: {
     Accept: 'text/html',
     'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36',
@@ -740,7 +744,17 @@ assert.ok(String(websocketResponse).includes('HTTP/1.1 503 Service Unavailable')
 
 // Public subscription URLs accept only the bearer token, not internal IDs or UUIDs.
 const subscriptionByToken = await fetch(`${base}/sub/${licenceA.token}?raw=1`);
-assert.equal(subscriptionByToken.status, 200);
+assert.equal(subscriptionByToken.status, 404, 'commercial tokens must not act as new subscription credentials');
+const subscriptionBySecret = await fetch(`${base}${licenceA.subscriptionUrl}?format=raw`);
+assert.equal(subscriptionBySecret.status, 200);
+assert.ok((await subscriptionBySecret.text()).startsWith('vless://'));
+const subscriptionSingBox = await fetch(`${base}${licenceA.subscriptionUrl}?format=sing-box`);
+assert.equal(subscriptionSingBox.status, 200);
+const singBoxJson = await subscriptionSingBox.json();
+assert.equal(singBoxJson.outbounds[0].uuid, licenceA.clientUuid);
+const subscriptionMihomo = await fetch(`${base}${licenceA.subscriptionUrl}?format=mihomo`);
+assert.equal(subscriptionMihomo.status, 200);
+assert.ok((await subscriptionMihomo.text()).includes('type: vless'));
 const subscriptionById = await fetch(`${base}/sub/${licenceA.id}?raw=1`);
 assert.equal(subscriptionById.status, 404, 'internal token IDs must not act as subscription credentials');
 const subscriptionByUuid = await fetch(`${base}/sub/${licenceA.clientUuid}?raw=1`);
@@ -769,7 +783,10 @@ await assertCorruptStoreFailsClosed(
   '/api/v1/admin/requests',
   { Authorization: `Bearer ${login.token}` },
 );
-const membershipStatus = await fetch(`${base}/api/v1/membership/status?request_id=${encodeURIComponent(membershipCreated.request.id)}`);
+const membershipStatusUrl = `${base}/api/v1/membership/status?request_id=${encodeURIComponent(membershipCreated.request.id)}`;
+assert.equal((await fetch(membershipStatusUrl)).status, 400, 'membership lookup requires claim proof');
+assert.ok(membershipCreated.claimSecret);
+const membershipStatus = await fetch(membershipStatusUrl, {headers:{'X-Claim-Secret':membershipCreated.claimSecret}});
 assert.equal(membershipStatus.status, 200);
 const membershipStatusJson = await membershipStatus.json();
 assert.equal(membershipStatusJson.status, 'pending');
@@ -842,9 +859,9 @@ storedTokens.push({
   },
 });
 fs.writeFileSync(tokenFile, JSON.stringify(storedTokens, null, 2));
-const redactedBackup = await fetch(`${base}/api/v1/admin/backup`, { headers: adminHeaders });
+const redactedBackup = await fetch(`${base}/api/v1/admin/operations/backup`, { headers: adminHeaders });
 assert.equal(redactedBackup.status, 200);
-const redactedBackupJson = await redactedBackup.json();
+const redactedBackupJson = unseal((await redactedBackup.json()).sealed, process.env.MASTER_SECRET);
 const redactedLegacyToken = redactedBackupJson.tokens.find(token => token.id === 'ci-legacy-ssh-token');
 assert.ok(redactedLegacyToken);
 assert.ok(!('sshPassword' in redactedLegacyToken.sshConfig), 'legacy SSH passwords must not appear in API backups');
