@@ -1515,7 +1515,7 @@ async function startServer() {
   await storage.initialize();
   await storage.transaction(() => {
     loadUsers();
-    refreshTrafficTotals(loadTokens());
+    if(process.env.SSH_WSS_ONLY!=='true')refreshTrafficTotals(loadTokens());
   });
 
   const app = express();
@@ -4498,6 +4498,8 @@ async function startServer() {
     });
   }
 
+  // Do not read/reconcile defunct VLESS traffic every five seconds in WSS-only production.
+  if(process.env.SSH_WSS_ONLY!=='true') {
   const xrayReconcileTimer = setInterval(() => {
     void storage.transaction(() => {
     const tokens = loadTokens();
@@ -4516,6 +4518,7 @@ async function startServer() {
     }).catch(() => console.error('[DATABASE] Reconciliation postponed.'));
   }, 5000);
   xrayReconcileTimer.unref();
+  }
 
   // Daily automated backup & rolling 7-day retention
   await storage.transaction(performAutoBackup);
