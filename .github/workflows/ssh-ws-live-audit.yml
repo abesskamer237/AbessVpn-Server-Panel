@@ -115,3 +115,5 @@ jobs:
           docker compose logs --tail 30 caddy 2>&1 | grep -E '502|websocket|reverse_proxy|dial unix|permission denied|error' | sed -E 's@/ssh-ws/[A-Za-z0-9_-]+@/ssh-ws/REDACTED@g' | tail -20 || true
           echo "LIVE_SSH_WS_DIAGNOSTIC_DUMP=COMPLETE"
           REMOTE
+
+# Recheck after verified SSH-WS installation 2026-11-12
