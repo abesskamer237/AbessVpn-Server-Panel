@@ -1534,6 +1534,35 @@ async function startServer() {
   app.use(express.json({ limit: '2mb' }));
   app.use(storage.middleware());
 
+  // Single-protocol production switch. Keep historical financial and account
+  // records intact for audit/reconciliation; retire legacy VLESS profiles,
+  // portable subscriptions, trial tokens and mobile VPN issuance completely.
+  // Enabled by SSH_WSS_ONLY=true on the actual VPS, not in legacy CI fixtures.
+  if(process.env.SSH_WSS_ONLY==='true') {
+    const retired=(req:express.Request,res:express.Response,next:express.NextFunction)=>{
+      const p=req.path;
+      const retiredPath=
+        p.startsWith('/api/v1/admin/tokens') ||
+        p.startsWith('/api/v1/admin/protocol-configs') ||
+        p.startsWith('/api/v1/client/') ||
+        p.startsWith('/api/v1/ssh/config/') ||
+        p.startsWith('/ssh/config/') ||
+        p==='/api/v1/ssh/payloads' ||
+        p.startsWith('/api/v1/sub/') ||
+        p.startsWith('/sub/') ||
+        p.startsWith('/nexus/sub/') ||
+        p.startsWith('/api/v1/token/') ||
+        p.startsWith('/api/token/') ||
+        p==='/api/v1/auth/token' ||
+        /^(\/api\/v1\/nodes\/[^/]+\/config)$/.test(p);
+      if(retiredPath)return res.status(410).set('Cache-Control','no-store').json({
+        error:'Protocole supprimé. ABESS utilise uniquement SSH sur WebSocket TLS (WSS).'
+      });
+      next();
+    };
+    app.use(retired);
+  }
+
   // Same-origin panel access plus explicit local development or configured origins.
   const allowedOrigins = new Set<string>([
     `https://${vpnDomain}`,
