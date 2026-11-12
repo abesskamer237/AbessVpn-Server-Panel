@@ -12,7 +12,7 @@ const pct=(used:number,total:number)=>total>0?Math.max(0,Math.min(100,Math.round
 const humanBytes=(n:number)=>new Intl.NumberFormat('fr-FR',{maximumFractionDigits:1}).format(n/1024**3)+' Go';
 const uptime=(sec:number)=>{
   const d=Math.floor(sec/86400),h=Math.floor((sec%86400)/3600);
-  return d?\`\${d} j \${h} h\`:\`\${h} h\`;
+  return d?(d+' j '+h+' h'):(h+' h');
 };
 
 export function ServerCenter({nodes,ops,audit,busy,request,refresh}:Props){
@@ -39,9 +39,9 @@ export function ServerCenter({nodes,ops,audit,busy,request,refresh}:Props){
         return <section className="card card-pad" key={n.id}>
           <div className="section-head"><div><h2>{n.name}</h2><p>{n.sni||n.host}:{n.port||443}{n.path||'/ssh-ws'}</p></div><span className={'badge '+(n.agentOnline?'badge-success':'badge-danger')}>{n.agentOnline?'En ligne':'Hors ligne'}</span></div>
           <div className="server-metrics">
-            <div className="server-metric"><label>CPU</label><strong>{t?\`\${t.cpuPercent.toFixed(1)} %\`:'—'}</strong></div>
-            <div className="server-metric"><label>RAM</label><strong>{t?\`\${mem} %\`:'—'}</strong></div>
-            <div className="server-metric"><label>Disque</label><strong>{t?\`\${disk} %\`:'—'}</strong></div>
+            <div className="server-metric"><label>CPU</label><strong>{t?(t.cpuPercent.toFixed(1)+' %'):'—'}</strong></div>
+            <div className="server-metric"><label>RAM</label><strong>{t?(mem+' %'):'—'}</strong></div>
+            <div className="server-metric"><label>Disque</label><strong>{t?(disk+' %'):'—'}</strong></div>
             <div className="server-metric"><label>Uptime</label><strong>{t?uptime(t.uptimeSeconds):'—'}</strong></div>
           </div>
           {t&&<div style={{marginTop:12}}>
