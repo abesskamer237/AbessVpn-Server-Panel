@@ -128,6 +128,8 @@ export interface AppUser {
   lastLoginAt: string | null;
   parentId?: string;
   parentName?: string;
+  pricePerGbCfa?: number;
+  pricePerLicenceCfa?: number;
 }
 
 export interface ClientToken {
@@ -2117,6 +2119,40 @@ async function startServer() {
     const descendantIds = new Set(getSubResellerIdsRecursive(user.id, allUsers));
     return descendantIds.has(targetResellerId);
   }
+
+  // ==========================================
+  // TEAM / OPERATOR MANAGEMENT
+  // ==========================================
+  app.get('/api/v1/admin/operators', authenticate, (req, res) => {
+    if (!requireSuperAdmin(req,res)) return;
+    res.json(loadUsers().filter(u=>u.role==='ADMIN').map(({passwordHash,...u})=>u));
+  });
+  app.post('/api/v1/admin/operators', authenticate, (req, res) => {
+    if (!requireSuperAdmin(req,res)) return;
+    const name=String(req.body?.name||'').trim();
+    const email=String(req.body?.email||'').trim().toLowerCase();
+    const password=String(req.body?.password||'');
+    if(!name||name.length>80||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||password.length<16)
+      return res.status(400).json({error:'Nom, email valide et mot de passe de 16 caractères minimum requis.'});
+    const users=loadUsers();
+    if(users.some(u=>u.email.toLowerCase()===email))return res.status(409).json({error:'Cet email existe déjà.'});
+    const operator:AppUser={id:'usr_admin_'+crypto.randomUUID(),email,passwordHash:hashPassword(password),name,
+      role:'ADMIN',credits:0,totalTokensCreated:0,totalBandwidthAllocatedGb:0,status:'active',
+      createdAt:new Date().toISOString(),lastLoginAt:null};
+    users.push(operator);saveUsers(users);
+    logAudit({actor:(req as any).user.id,role:'SUPER_ADMIN',action:'ADMIN_CREATED',details:operator.id});
+    const {passwordHash,...safe}=operator;return res.status(201).json(safe);
+  });
+  app.put('/api/v1/admin/operators/:id/status', authenticate, (req,res)=>{
+    if(!requireSuperAdmin(req,res))return;
+    const status=req.body?.status;
+    if(status!=='active'&&status!=='suspended')return res.status(400).json({error:'Statut invalide.'});
+    const users=loadUsers(),target=users.find(u=>u.id===req.params.id&&u.role==='ADMIN');
+    if(!target)return res.sendStatus(404);
+    target.status=status;saveUsers(users);
+    logAudit({actor:(req as any).user.id,role:'SUPER_ADMIN',action:'ADMIN_STATUS',details:JSON.stringify({id:target.id,status})});
+    const {passwordHash,...safe}=target;return res.json(safe);
+  });
 
   // ==========================================
   // 2. RESELLER & SUB-RESELLER MANAGEMENT
