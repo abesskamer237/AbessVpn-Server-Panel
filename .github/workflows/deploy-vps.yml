@@ -1,5 +1,5 @@
 name: Deploy ABESS VPN to VPS
-# Production rollout marker: professional panel V2 + host telemetry
+# Production rollout marker: reseller network V3 + recursive branch controls
 
 on:
   workflow_dispatch:
