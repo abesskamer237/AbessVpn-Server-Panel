@@ -143,6 +143,10 @@ export interface ClientToken {
   plan: string;
   bandwidthGb: number;
   bandwidthUsedGb: number;
+  /** Real directional Xray counters. Old records without full history omit the breakdown. */
+  trafficUpBytes?: number;
+  trafficDownBytes?: number;
+  trafficBreakdownComplete?: boolean;
   expiresAt: string;
   days: number;
   deviceLimit: number;
@@ -1984,7 +1988,10 @@ async function startServer() {
           const old = next[canonical] || 0;
           // A reset requires a new generation; out-of-order counters never add traffic.
           if (value < old) throw new Error('Counter decreased within one generation');
-          delta += value - old;
+          const newBytes = value - old;
+          delta += newBytes;
+          if (direction === 'uplink') token.trafficUpBytes = (token.trafficUpBytes || 0) + newBytes;
+          else token.trafficDownBytes = (token.trafficDownBytes || 0) + newBytes;
           next[canonical] = value;
         }
         if (delta > 0) {
@@ -2607,7 +2614,7 @@ async function startServer() {
       id: 'tok_' + crypto.randomUUID(), token: finalToken, subscriptionKey: crypto.randomBytes(32).toString('base64url'), clientUuid, trafficId,
       resellerId: user.id, resellerName: user.name,
       plan: String(plan || `${requestedGb} GO CYBER VIP`).trim().slice(0, 80),
-      bandwidthGb: requestedGb, bandwidthUsedGb: 0, expiresAt: calculatedExpiresAt, days: daysRemaining,
+      bandwidthGb: requestedGb, bandwidthUsedGb: 0, trafficUpBytes: 0, trafficDownBytes: 0, trafficBreakdownComplete: true, expiresAt: calculatedExpiresAt, days: daysRemaining,
       deviceLimit: clientLimit, deviceIds: [], allowedDeviceId: allowedDeviceId || undefined,
       customerNote, customerContact,
       connectionCount: 0, lastSeenAt: null, lastSeenIp: null,
@@ -2792,6 +2799,7 @@ async function startServer() {
         plan,
         bandwidthGb: requestedGb,
         bandwidthUsedGb: 0,
+        trafficUpBytes: 0, trafficDownBytes: 0, trafficBreakdownComplete: true,
         expiresAt: calculatedExpiresAt,
         days: daysRemaining,
         deviceLimit: clientLimit,
@@ -3740,7 +3748,7 @@ async function startServer() {
     }
     if (format === 'raw') {
       res.type('text/plain; charset=utf-8');
-      return res.send(variants.map(v => v.uri).join('\\n'));
+      return res.send(variants.map(v => v.uri).join('\n'));
     }
 
     if (isBrowser) {
@@ -3769,8 +3777,8 @@ async function startServer() {
             name: userName,
             plan: matched.plan,
             quota_bytes: Math.round(matched.bandwidthGb * 1024 * 1024 * 1024),
-            used_bytes_up: Math.round(matched.bandwidthUsedGb * 0.25 * 1024 * 1024 * 1024),
-            used_bytes_down: Math.round(matched.bandwidthUsedGb * 0.75 * 1024 * 1024 * 1024),
+            used_bytes_up: matched.trafficBreakdownComplete ? matched.trafficUpBytes ?? 0 : null,
+            used_bytes_down: matched.trafficBreakdownComplete ? matched.trafficDownBytes ?? 0 : null,
             expires_at: matched.expiresAt,
             status: matched.status,
             is_valid: matched.status === 'active' && new Date(matched.expiresAt).getTime() > Date.now() && matched.bandwidthUsedGb < matched.bandwidthGb
@@ -3798,12 +3806,14 @@ async function startServer() {
     const b64Sub = Buffer.from(rawUris, 'utf8').toString('base64');
 
     const totalQuotaBytes = Math.round(matched.bandwidthGb * 1024 * 1024 * 1024);
-    const usedUpBytes = Math.round(matched.bandwidthUsedGb * 0.25 * 1024 * 1024 * 1024);
-    const usedDownBytes = Math.round(matched.bandwidthUsedGb * 0.75 * 1024 * 1024 * 1024);
+    const usedUpBytes = matched.trafficUpBytes ?? 0;
+    const usedDownBytes = matched.trafficDownBytes ?? 0;
     const expTs = Math.floor(new Date(matched.expiresAt).getTime() / 1000) || 0;
     const titleB64 = Buffer.from(`AbessVpn - ${matched.token}`).toString('base64');
 
-    res.setHeader('Subscription-Userinfo', `upload=${usedUpBytes}; download=${usedDownBytes}; total=${totalQuotaBytes}; expire=${expTs}`);
+    if (matched.trafficBreakdownComplete === true) {
+      res.setHeader('Subscription-Userinfo', `upload=${usedUpBytes}; download=${usedDownBytes}; total=${totalQuotaBytes}; expire=${expTs}`);
+    }
     res.setHeader('Profile-Update-Interval', '12');
     res.setHeader('Profile-Title', `base64:${titleB64}`);
     res.setHeader('Content-Disposition', `inline; filename="${matched.token}.txt"`);
@@ -4176,6 +4186,7 @@ async function startServer() {
       plan: selectedPlan.name,
       bandwidthGb,
       bandwidthUsedGb: 0,
+      trafficUpBytes: 0, trafficDownBytes: 0, trafficBreakdownComplete: true,
       expiresAt,
       days,
       deviceLimit: 1,
