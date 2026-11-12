@@ -4,6 +4,7 @@
  * Node 22+, Debian/Ubuntu host; group "abessvpn" must be provisioned first.
  */
 import {spawnSync} from 'node:child_process';
+import os from 'node:os';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -212,6 +213,34 @@ async function readUsage(env,store,policyTime) {
   }
   return usage;
 }
+async function hostTelemetry() {
+  let diskTotalBytes=0,diskFreeBytes=0;
+  try {
+    const stat=await fs.statfs('/');
+    diskTotalBytes=Number(stat.blocks)*Number(stat.bsize);
+    diskFreeBytes=Number(stat.bavail)*Number(stat.bsize);
+  } catch {}
+  const active=name=>{
+    try {
+      const r=spawnSync('/usr/bin/systemctl',['is-active','--quiet',name],{timeout:3000,stdio:'ignore'});
+      return r.status===0;
+    } catch {return false;}
+  };
+  return {
+    observedAt:new Date().toISOString(),
+    uptimeSeconds:Math.max(0,Math.floor(os.uptime())),
+    load1:Number(os.loadavg()[0].toFixed(2)),
+    totalMemoryBytes:os.totalmem(),
+    freeMemoryBytes:os.freemem(),
+    diskTotalBytes,
+    diskFreeBytes,
+    services:{
+      sshd:active('abess-ssh-ws-sshd.service'),
+      gateway:active('abess-ssh-ws-gateway.service'),
+      reconciler:active('abess-ssh-ws-reconciler.service')
+    }
+  };
+}
 async function awaitUsage(env,store,policyTime) {
   for(let i=0;i<25;i++){
     const usage=await readUsage(env,store,policyTime);
@@ -248,9 +277,10 @@ export async function syncOnce(env=process.env,request=fetch,host=hostOperations
     return {id:x.id,state:settings.enabled && entry.usedBytes>=settings.quotaBytes
       ?'blocked':x.state,usedBytes:entry.usedBytes,online:entry.online};
   });
+  const telemetry=await hostTelemetry();
   const ack=await request(new URL('status',endpoint),{
     method:'POST',headers:{...headers,'Content-Type':'application/json'},
-    body:JSON.stringify({reports}),redirect:'error',signal:AbortSignal.timeout(8000)
+    body:JSON.stringify({reports,telemetry}),redirect:'error',signal:AbortSignal.timeout(8000)
   });
   if(!ack.ok)throw Error('Acknowledgement rejected');
   store.lastSuccessfulAt=Date.now();
