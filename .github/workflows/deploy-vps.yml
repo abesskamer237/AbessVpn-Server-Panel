@@ -167,43 +167,50 @@ jobs:
         shell: bash
         env:
           VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_SSH_KNOWN_HOSTS: ${{ secrets.VPS_SSH_KNOWN_HOSTS }}
           VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD || secrets.VPS_PASSWORD }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_PORT: ${{ vars.VPS_PORT }}
         run: |
           set -euo pipefail
           install -d -m 700 "$HOME/.ssh" "$HOME/.local/bin"
-          if [[ -n "${VPS_SSH_PASSWORD:-}" ]]; then
+          if [[ -n "${VPS_SSH_KEY:-}" ]]; then
+            printf '%s\n' "$VPS_SSH_KEY" > "$HOME/.ssh/id_ed25519"
+            chmod 600 "$HOME/.ssh/id_ed25519"
+          elif [[ -n "${VPS_SSH_PASSWORD:-}" ]]; then
             if ! command -v sshpass >/dev/null 2>&1; then
               sudo apt-get update
               sudo apt-get install -y sshpass
             fi
-          elif [[ -n "${VPS_SSH_KEY:-}" ]]; then
-            printf '%s\n' "$VPS_SSH_KEY" > "$HOME/.ssh/id_ed25519"
-            chmod 600 "$HOME/.ssh/id_ed25519"
+          else
+            echo "Provide VPS_SSH_KEY (recommended) or VPS_SSH_PASSWORD." >&2
+            exit 1
           fi
-          # Discover the host key once, then require the same key for every
-          # SSH/SCP/rsync connection during this deployment.
-          ssh-keyscan -T 10 -p "${VPS_PORT:-22}" "$VPS_HOST" > "$HOME/.ssh/known_hosts"
-          test -s "$HOME/.ssh/known_hosts" || { echo "Unable to retrieve the VPS SSH host key; check IP and SSH port." >&2; exit 1; }
+          # Host key must be verified independently and pinned in a repository secret.
+          if [[ -z "${VPS_SSH_KNOWN_HOSTS:-}" ]]; then
+            echo "Missing pinned VPS_SSH_KNOWN_HOSTS secret; refusing deployment." >&2
+            exit 1
+          fi
+          printf '%s\n' "$VPS_SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          test -s "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/known_hosts"
           cat > "$HOME/.local/bin/abess-ssh" <<'SH'
           #!/usr/bin/env bash
           set -euo pipefail
-          if [[ -n "${VPS_SSH_PASSWORD:-}" ]]; then
-            export SSHPASS="$VPS_SSH_PASSWORD"
-            exec sshpass -e ssh -o PreferredAuthentications=password,keyboard-interactive -o PubkeyAuthentication=no "$@"
+          if [[ -n "${VPS_SSH_KEY:-}" ]]; then
+            exec ssh -o StrictHostKeyChecking=yes -i "$HOME/.ssh/id_ed25519" -o BatchMode=yes -o IdentitiesOnly=yes "$@"
           fi
-          exec ssh -i "$HOME/.ssh/id_ed25519" -o BatchMode=yes -o IdentitiesOnly=yes "$@"
+          export SSHPASS="$VPS_SSH_PASSWORD"
+          exec sshpass -e ssh -o StrictHostKeyChecking=yes -o PreferredAuthentications=password,keyboard-interactive -o PubkeyAuthentication=no "$@"
           SH
           cat > "$HOME/.local/bin/abess-scp" <<'SH'
           #!/usr/bin/env bash
           set -euo pipefail
-          if [[ -n "${VPS_SSH_PASSWORD:-}" ]]; then
-            export SSHPASS="$VPS_SSH_PASSWORD"
-            exec sshpass -e scp -o PreferredAuthentications=password,keyboard-interactive -o PubkeyAuthentication=no "$@"
+          if [[ -n "${VPS_SSH_KEY:-}" ]]; then
+            exec scp -o StrictHostKeyChecking=yes -i "$HOME/.ssh/id_ed25519" -o BatchMode=yes -o IdentitiesOnly=yes "$@"
           fi
-          exec scp -i "$HOME/.ssh/id_ed25519" -o BatchMode=yes -o IdentitiesOnly=yes "$@"
+          export SSHPASS="$VPS_SSH_PASSWORD"
+          exec sshpass -e scp -o StrictHostKeyChecking=yes -o PreferredAuthentications=password,keyboard-interactive -o PubkeyAuthentication=no "$@"
           SH
           chmod 700 "$HOME/.local/bin/abess-ssh" "$HOME/.local/bin/abess-scp"
       - name: Install missing VPS deployment prerequisites
