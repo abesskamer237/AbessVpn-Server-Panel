@@ -156,7 +156,8 @@ export class QuotaLedger {
     const accounts=Object.entries(this.balances).map(([id,v])=>({
       id,usedBytes:v.usedBytes,online:v.sessions
     }));
-    syncAtomic(this.reportFile,{format:'abess-ssh-ws-usage-v1',observedAt:new Date().toISOString(),accounts});
+    syncAtomic(this.reportFile,{format:'abess-ssh-ws-usage-v1',observedAt:new Date().toISOString(),
+      policyObservedAt:this.policy?new Date(this.policy.generatedAt).toISOString():null,accounts});
   }
   close(){this._persist();this.report();}
   online(id){return this.balances[id]?.sessions||0;}
