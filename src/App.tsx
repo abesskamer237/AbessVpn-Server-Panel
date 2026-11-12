@@ -153,7 +153,7 @@ export default function App(){
 
     <div className="main-area">
       <header className="topbar">
-        <div style={{display:'flex',alignItems:'center',gap:10}}><button className="icon-button mobile-menu" onClick={()=>setMobileOpen(true)}><Menu size={17}/></button><div><div className="topbar-title">{titles[tab]}</div><div className="topbar-subtitle">{subtitles[tab]}</div></div></div>
+        <div style={{display:'flex',alignItems:'center',gap:10}}><button className="icon-button mobile-menu" aria-label="Ouvrir le menu" onClick={()=>setMobileOpen(true)}><Menu size={17}/></button><div><div className="topbar-title">{titles[tab]}</div><div className="topbar-subtitle">{subtitles[tab]}</div></div></div>
         <div className="top-actions">
           <button className="icon-button" title="Actualiser" onClick={()=>void refresh()} disabled={loading}><RefreshCw size={16} className={loading?'animate-spin':''}/></button>
           <div className="notification-trigger"><button className="icon-button" aria-label="Notifications" onClick={()=>setNotificationsOpen(v=>!v)}><Bell size={16}/>{notifications.length>0&&<span className="notification-count">{notifications.length}</span>}</button>
