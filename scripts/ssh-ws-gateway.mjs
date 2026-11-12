@@ -107,7 +107,12 @@ export async function startGateway(options={}){
     const id=ws.accountId;
     ws.isAlive=true;
     ws.on('pong',()=>{ws.isAlive=true;});
-    const upstream=net.createConnection({host:'127.0.0.1',port:sshPort});
+    // OpenSSH sees a unique loopback *source* IP for every managed licence.
+    // Its AllowUsers username@sourceIp ACL prevents using licence A's WSS token
+    // to authenticate with account B's SSH password and evade B's quota.
+    const sourceIp=ledger.sourceIp(id);
+    if(!sourceIp){ws.terminate();return;}
+    const upstream=net.createConnection({host:'127.0.0.1',port:sshPort,localAddress:sourceIp});
     upstream.setNoDelay(true);
     upstream.setKeepAlive(true,30000);
     upstream.setTimeout(10000,()=>upstream.destroy(new Error('Local SSH timeout')));
