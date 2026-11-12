@@ -212,7 +212,7 @@ export function registerSsh(app:Express,d:{
     state.accounts.splice(index,1);d.write(state);d.audit({action:'SSH_DELETED',actor:(req as any).user.id,role:(req as any).user.role,details:String(req.params.id)});res.sendStatus(204);
   });
   app.post('/api/v1/admin/ssh/accounts/:id/config',d.authenticate,(req,res)=>{
-    const a=d.read().accounts.find(a=>a.id===req.params.id),actor=(req as any).user;
+    const state=d.read(),a=state.accounts.find(a=>a.id===req.params.id),actor=(req as any).user;
     if(process.env.SSH_WSS_ONLY==='true' && a && (!a.managed || a.connection?.transport!=='wss'))
       return res.status(410).json({error:'Seuls les comptes SSH-WSS administrés sont autorisés.'});
     if(!a)return res.sendStatus(404);if(!allowed(actor,a))return res.sendStatus(403);
@@ -223,7 +223,7 @@ export function registerSsh(app:Express,d:{
       return res.status(503).json({error:'La licence SSH-WS doit être régénérée avec un secret WebSocket personnel.'});
     const clientPath=a.managed ? `${connection.path}/${unseal(a.wsAccessKey!,d.key)}` : connection.path;
     a.history=[...(a.history||[]),{at:new Date().toISOString(),type:'CONFIG_EXPORTED',note:'Configuration client affichée/exportée.'}].slice(-100);
-    d.write(d.read());
+    d.write(state);
     d.audit({action:'SSH_CREDENTIALS_EXPORTED',actor:actor.id,role:actor.role,details:a.id});
     res.set('Cache-Control','no-store').json({format:'abess-ssh-v1',protocol:'ssh',...connection,path:clientPath,username:a.username,password:unseal(a.password,d.key),
       payload:a.payload?unseal(a.payload,d.key):a.connection.wire==='http-upgrade'?sshPayload(a.connection.tls?(a.connection.sni||a.connection.host):a.connection.host,a.connection.port,a.connection.path):null,
