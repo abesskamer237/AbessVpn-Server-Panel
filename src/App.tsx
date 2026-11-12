@@ -167,7 +167,7 @@ export default function App(){
 
       <main className="main-content">
         {notice&&<p className="notice" role="alert" style={{marginBottom:14}}>{notice}</p>}
-        {tab==='dashboard'&&<Dashboard inventory={inventory} transactions={transactions} audit={audit} ops={ops} onNavigate={go}/>}
+        {tab==='dashboard'&&<Dashboard inventory={inventory} transactions={transactions} resellers={resellers} audit={audit} ops={ops} onNavigate={go}/>}
         {tab==='clients'&&<SshCenter inventory={inventory} resellers={resellers} role={user.role} audit={audit} request={request} refresh={refresh} createSignal={createSignal}/>}
         {tab==='resellers'&&<ResellerCenter resellers={resellers} accounts={(inventory?.accounts||[]).filter(a=>a.managed)} busy={busy} request={request} refresh={refresh}/>}
         {tab==='transactions'&&<TransactionsCenter transactions={transactions}/>}
