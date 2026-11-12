@@ -1,0 +1,56 @@
+name: Install actual ABESS SSH-WS host components with SCP verification
+on:
+  push:
+    branches: [deploy/sshws-first-install-20261112]
+permissions:
+  contents: read
+jobs:
+  install:
+    if: contains(github.event.head_commit.message, 'install SSH-WS host components')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+      - name: Pin original VPS identity, copy installer, run it directly on root VPS
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD || secrets.VPS_PASSWORD }}
+          VPS_PORT: ${{ vars.VPS_PORT }}
+          VPS_KNOWN: ${{ secrets.VPS_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          PORT="${VPS_PORT:-22}"
+          install -d -m 0700 "$HOME/.ssh"
+          if [[ -n "${VPS_KNOWN:-}" ]]; then
+            printf '%s\n' "$VPS_KNOWN" > "$HOME/.ssh/known_hosts"
+          else
+            for attempt in 1 2 3; do
+              ssh-keyscan -T 12 -p "$PORT" -t ed25519 "$VPS_HOST" 2>/dev/null > "$HOME/.ssh/known_hosts" || true
+              [[ -s "$HOME/.ssh/known_hosts" ]] && break
+              sleep 2
+            done
+          fi
+          [[ -s "$HOME/.ssh/known_hosts" ]] || { echo "::error::No Ed25519 host key"; exit 1; }
+          ssh-keygen -lf "$HOME/.ssh/known_hosts" -E sha256 | grep -Fq 'SHA256:LgoMnkXsbf7RYOw5LRm0ErLVQ6n0JDJBJIAltFxOChc' || { echo "::error::SSH host key changed"; exit 1; }
+          chmod 0600 "$HOME/.ssh/known_hosts"
+          if ! command -v sshpass >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq sshpass >/dev/null
+          fi
+          export SSHPASS="$VPS_PASSWORD"
+          dest="$VPS_USER@$VPS_HOST"
+          echo "COPY_INSTALLER=begin"
+          sshpass -e scp -P "$PORT" -o StrictHostKeyChecking=yes -o PubkeyAuthentication=no \
+            scripts/ssh-ws-postdeploy.sh "$dest:/tmp/abess-ssh-ws-postdeploy.sh"
+          echo "COPY_INSTALLER=ok"
+          sha="$(sha256sum scripts/ssh-ws-postdeploy.sh | awk '{print $1}')"
+          echo "REMOTE_INSTALLER_SHA256=$sha"
+          echo "REMOTE_INSTALL=starting"
+          sshpass -e ssh -p "$PORT" -o StrictHostKeyChecking=yes -o PubkeyAuthentication=no \
+            -o PreferredAuthentications=password,keyboard-interactive "$dest" \
+            "cd /root/abessvpn-server && printf '%s  %s\\n' '$sha' '/tmp/abess-ssh-ws-postdeploy.sh' | sha256sum -c - && bash /tmp/abess-ssh-ws-postdeploy.sh && rm -f /tmp/abess-ssh-ws-postdeploy.sh"
+          echo "REMOTE_INSTALL=completed"
