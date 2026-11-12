@@ -62,7 +62,7 @@ export function registerSsh(app:Express,d:{
       nodes:isAdmin?d.nodes().filter(n=>n.enabled).map(n=>({id:n.id,name:n.name,host:n.host})):[],
       managedNodes:d.nodes().filter(n=>n.enabled&&n.sshWsManaged).map(n=>({
         id:n.id,name:n.name,host:n.host,port:n.sshWsPort,path:n.sshWsPath,
-        sni:n.sshWsSni||n.host,agentOnline:managedOnline(n)
+        sni:n.sshWsSni||n.host,agentOnline:managedOnline(n),hostTelemetry:n.sshWsHost||null
       })),
       resellers:isAdmin?d.users().filter(u=>u.status==='active').map(u=>({id:u.id,name:u.name})):[],
       accounts:d.read().accounts.filter(a=>allowed(actor,a)).map(a=>({...safeSshAccount(a),
