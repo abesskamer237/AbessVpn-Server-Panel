@@ -35,7 +35,7 @@ export type Reseller={
   id:string;name:string;email:string;credits:number;status:'active'|'suspended'|string;
   createdAt?:string;lastLoginAt?:string|null;parentId?:string;parentName?:string;
   totalTokensCreated?:number;totalBandwidthAllocatedGb?:number;subResellersCount?:number;
-  pricePerGbCfa?:number;pricePerLicenceCfa?:number;
+  pricePerGbCfa?:number;costPerGbCfa?:number;pricePerLicenceCfa?:number;
 };
 
 export type Operator={
