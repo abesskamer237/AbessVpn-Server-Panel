@@ -18,6 +18,8 @@ const uptime=(sec:number)=>{
 export function ServerCenter({nodes,ops,audit,busy,request,refresh}:Props){
   const [add,setAdd]=useState(false),[name,setName]=useState(''),[host,setHost]=useState('');
   const [created,setCreated]=useState<{id:string,key:string}|null>(null),[error,setError]=useState('');
+  const [configure,setConfigure]=useState<(ManagedNode&{sshWsManaged?:boolean})|null>(null);
+  const [fingerprint,setFingerprint]=useState(''),[sni,setSni]=useState(''),[port,setPort]=useState(443),[wsPath,setWsPath]=useState('/ssh-ws');
   async function create(e:FormEvent){
     e.preventDefault();setError('');
     try{const x=await request('/api/v1/admin/nodes','POST',{name,host});setCreated(x);setName('');setHost('');await refresh()}
@@ -30,6 +32,13 @@ export function ServerCenter({nodes,ops,audit,busy,request,refresh}:Props){
       const url=URL.createObjectURL(new Blob([JSON.stringify(data)],{type:'application/json'}));
       const a=document.createElement('a');a.href=url;a.download='abess-backup-'+new Date().toISOString().slice(0,10)+'.encrypted.json';a.click();URL.revokeObjectURL(url);
     }catch(e){setError(e instanceof Error?e.message:'Sauvegarde impossible')}
+  }
+  async function activateNode(e:FormEvent){
+    e.preventDefault();if(!configure)return;setError('');
+    try{
+      await request('/api/v1/admin/nodes/'+configure.id+'/ssh-ws','PUT',{enabled:true,fingerprint,sni:sni||configure.host,port,path:wsPath});
+      setConfigure(null);setFingerprint('');setSni('');setPort(443);setWsPath('/ssh-ws');await refresh();
+    }catch(e){setError(e instanceof Error?e.message:'Activation SSH-WSS impossible')}
   }
   return <div className="stack">
     <div className="page-header"><div><h1>Serveurs</h1><p>Supervision temps réel des VPS et composants SSH-WSS.</p></div>
@@ -46,7 +55,7 @@ export function ServerCenter({nodes,ops,audit,busy,request,refresh}:Props){
     <div className="server-grid">
       {nodes.map(n=>{const t=n.hostTelemetry;const mem=t?pct(t.totalMemoryBytes-t.freeMemoryBytes,t.totalMemoryBytes):0;const disk=t?pct(t.diskTotalBytes-t.diskFreeBytes,t.diskTotalBytes):0;
         return <section className="card card-pad" key={n.id}>
-          <div className="section-head"><div><h2>{n.name}</h2><p>{n.sni||n.host}:{n.port||443}{n.path||'/ssh-ws'}</p></div><span className={'badge '+(n.agentOnline?'badge-success':'badge-danger')}>{n.agentOnline?'En ligne':'Hors ligne'}</span></div>
+          <div className="section-head"><div><h2>{n.name}</h2><p>{n.sni||n.host}:{n.port||443}{n.path||'/ssh-ws'}</p></div><span className={'badge '+(!n.sshWsManaged?'badge-warning':n.agentOnline?'badge-success':'badge-danger')}>{!n.sshWsManaged?'À configurer':n.agentOnline?'En ligne':'Hors ligne'}</span></div>
           <div className="server-metrics">
             <div className="server-metric"><label>CPU</label><strong>{t?(t.cpuPercent.toFixed(1)+' %'):'—'}</strong></div>
             <div className="server-metric"><label>RAM</label><strong>{t?(mem+' %'):'—'}</strong></div>
@@ -59,7 +68,8 @@ export function ServerCenter({nodes,ops,audit,busy,request,refresh}:Props){
             <div className="service-line"><span>Agent ABESS</span><span className={'badge '+(t.services.reconciler?'badge-success':'badge-danger')}>{t.services.reconciler?'Actif':'Arrêté'}</span></div>
             <div className="service-line"><span>Dernière télémétrie</span><span>{fmtDateTime(t.observedAt)}</span></div>
           </div>}
-          {!t&&<div className="empty-state"><Activity size={22}/><strong>Télémétrie en attente</strong><span>Elle apparaîtra après la prochaine synchronisation de l’agent mis à jour.</span></div>}
+          {!n.sshWsManaged&&<div className="empty-state" style={{padding:22}}><Activity size={22}/><strong>SSH-WSS non activé</strong><span>Installe l’agent sur le VPS puis renseigne son empreinte Ed25519.</span><button className="btn btn-primary" style={{marginTop:10}} onClick={()=>{setConfigure(n);setSni(n.sni||n.host)}}>Activer SSH-WSS</button></div>}
+          {n.sshWsManaged&&!t&&<div className="empty-state"><Activity size={22}/><strong>Télémétrie en attente</strong><span>Elle apparaîtra après la prochaine synchronisation de l’agent mis à jour.</span></div>}
         </section>})}
     </div>
     {!nodes.length&&<div className="card empty-state"><Server size={26}/><strong>Aucun VPS enregistré</strong><span>Ajoute un nœud puis installe l’agent SSH-WSS.</span></div>}
@@ -75,6 +85,16 @@ export function ServerCenter({nodes,ops,audit,busy,request,refresh}:Props){
         <div className="alert-list">{audit.filter(a=>/NODE|BACKUP|RESTORE|ADMIN|SSH/.test(a.action)).slice(0,7).map(a=><div className="alert-row" key={a.id}><span className="alert-dot" style={{background:'var(--info)'}}/><div><p>{a.action.replaceAll('_',' ')}</p><span>{fmtDateTime(a.timestamp)} · {String(a.details||'').slice(0,100)}</span></div></div>)}</div>
       </section>
     </div>
+
+    {configure&&<div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)setConfigure(null)}}><form className="modal" onSubmit={e=>void activateNode(e)}>
+      <div className="modal-head"><div><strong>Activer SSH-WSS · {configure.name}</strong><div className="card-subtitle">Associe l’identité SSH du VPS au domaine WSS.</div></div><button type="button" className="icon-button" onClick={()=>setConfigure(null)}><X size={16}/></button></div>
+      <div className="modal-body form-grid">
+        <label className="field-block" style={{gridColumn:'1/-1'}}><span className="field-label">Empreinte Ed25519 SHA-256</span><input className="field" required placeholder="SHA256:…" value={fingerprint} onChange={e=>setFingerprint(e.target.value)}/></label>
+        <label className="field-block"><span className="field-label">SNI / domaine HTTPS</span><input className="field" required value={sni} onChange={e=>setSni(e.target.value)}/></label>
+        <label className="field-block"><span className="field-label">Port WSS</span><input className="field" type="number" min="1" max="65535" value={port} onChange={e=>setPort(Number(e.target.value))}/></label>
+        <label className="field-block"><span className="field-label">Chemin WebSocket</span><input className="field" value={wsPath} onChange={e=>setWsPath(e.target.value)}/></label>
+      </div><div className="modal-foot"><button type="button" className="btn" onClick={()=>setConfigure(null)}>Annuler</button><button className="btn btn-primary" disabled={busy}>Activer le nœud</button></div>
+    </form></div>}
 
     {add&&<div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)setAdd(false)}}><div className="modal">
       <div className="modal-head"><div><strong>Assistant d’ajout VPS</strong><div className="card-subtitle">Enregistre le nœud et génère sa clé agent une seule fois.</div></div><button className="icon-button" onClick={()=>setAdd(false)}><X size={16}/></button></div>
