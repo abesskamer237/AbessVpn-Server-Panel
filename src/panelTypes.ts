@@ -6,7 +6,7 @@ export type User={
 };
 
 export type HostTelemetry={
-  observedAt:string;uptimeSeconds:number;load1:number;
+  observedAt:string;uptimeSeconds:number;cpuPercent:number;load1:number;
   totalMemoryBytes:number;freeMemoryBytes:number;
   diskTotalBytes:number;diskFreeBytes:number;
   services:{sshd:boolean;gateway:boolean;reconciler:boolean};
