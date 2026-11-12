@@ -85,7 +85,7 @@ export class QuotaLedger {
     }
     if(!fs.existsSync(this.accountDir))return;
     for(const name of fs.readdirSync(this.accountDir)) {
-      if(!/^ssh_[0-9a-f-]{36}\\.json$/.test(name))throw Error('Unexpected quota data');
+      if(!/^ssh_[0-9a-f-]{36}\.json$/.test(name))throw Error('Unexpected quota data');
       const record=JSON.parse(fs.readFileSync(path.join(this.accountDir,name),'utf8'));
       if(record?.format!=='abess-ssh-ws-account-v1' ||
          record.id+'.json'!==name || !integer(record.usedBytes,0))
