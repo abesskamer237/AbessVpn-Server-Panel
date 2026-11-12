@@ -970,12 +970,14 @@ export default function App() {
   // Download Backup
   const handleDownloadBackup = () => {
     const link = document.createElement('a');
-    link.href = '/api/v1/admin/backup';
-    link.setAttribute('download', `abessvpn-backup-${new Date().toISOString().slice(0, 10)}.json`);
+    link.setAttribute('download', `abessvpn-backup-${new Date().toISOString().slice(0, 10)}.encrypted.json`);
     fetch('/api/v1/admin/operations/backup', {
       headers: { 'Authorization': `Bearer ${authToken}` }
     })
-      .then(res => res.blob())
+      .then(res => {
+        if (!res.ok) throw new Error('Sauvegarde chiffrée indisponible');
+        return res.blob();
+      })
       .then(blob => {
         const u = URL.createObjectURL(blob);
         link.href = u;
