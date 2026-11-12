@@ -111,7 +111,8 @@ export function SshCenter({ token, isAdmin = true }: { token: string; isAdmin?: 
           {error}
         </p>
       )}
-      {isAdmin && <form
+      <form
+        aria-label={isAdmin ? "Importer un compte SSH fournisseur" : "Ajouter un compte SSH fournisseur existant"}
         className="rounded-2xl border border-slate-700 p-5 grid sm:grid-cols-2 lg:grid-cols-6 gap-4"
         onSubmit={(e) => {
           e.preventDefault();
@@ -134,19 +135,19 @@ export function SshCenter({ token, isAdmin = true }: { token: string; isAdmin?: 
           });
         }}
       >
-        <label className="text-sm">
+        {isAdmin && <label className="text-sm">
           Serveur
           <select aria-label="Serveur SSH" value={nodeId} onChange={e => {setNodeId(e.target.value);setHost(state?.nodes.find((n:any)=>n.id===e.target.value)?.host||'');}} className="w-full bg-slate-950 p-2">
             <option value="">—</option>
             {state?.nodes?.map((n: any) => <option key={n.id} value={n.id}>{n.name}</option>)}
           </select>
-        </label>
+        </label>}
         <label className="text-sm">Hôte<input aria-label="Hôte SSH" value={host} onChange={e=>{setHost(e.target.value);setNodeId('');}} className="w-full bg-slate-950 p-2" /></label>
-        <label className="text-sm">Revendeur
+        {isAdmin && <label className="text-sm">Revendeur
           <select aria-label="Revendeur SSH" value={resellerId} onChange={e=>setResellerId(e.target.value)} className="w-full bg-slate-950 p-2">
             <option value="">—</option>{state?.resellers?.map((r:any)=><option key={r.id} value={r.id}>{r.name}</option>)}
           </select>
-        </label>
+        </label>}
         <label className="text-sm">Mode
           <select aria-label="Mode SSH" value={mode} onChange={e=>setMode(e.target.value)} className="w-full bg-slate-950 p-2">
             {['tcp','ws','ws-alt','ws-framed','wss-raw','wss-raw-alt','wss','wss-alt'].map(m=><option key={m} value={m}>{m.toUpperCase()}</option>)}
@@ -215,7 +216,7 @@ export function SshCenter({ token, isAdmin = true }: { token: string; isAdmin?: 
         >
           Importer le compte
         </button>
-      </form>}
+      </form>
       {renewId && <RenewLicence id={renewId} token={token} endpoint={`/api/v1/admin/ssh/accounts/${renewId}/renew`} onClose={()=>setRenewId(null)} onSuccess={()=>void refresh()} />}
       <div className="rounded-2xl border border-slate-700 p-5 space-y-4">
         <input
