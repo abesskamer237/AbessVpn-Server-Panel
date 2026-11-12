@@ -1,13 +1,14 @@
 import {useEffect,useState,type FormEvent} from 'react';
-import {Terminal,Shield,Server,Users,LogOut,RefreshCw,Sun,Moon} from 'lucide-react';
+import {Terminal,Shield,Server,Users,LogOut,RefreshCw,Sun,Moon,History,Download} from 'lucide-react';
 import {SshCenter} from './components/SshCenter';
 import {SecurityCenter} from './components/SecurityCenter';
 
 type User={id:string,name:string,email:string,role:'SUPER_ADMIN'|'RESELLER',credits:number};
-type Tab='ssh'|'resellers'|'security'|'operations';
+type Tab='ssh'|'resellers'|'ledger'|'security'|'operations';
 type Reseller={id:string,name:string,email:string,credits:number,status:string};
+type Transaction={id:string,resellerName:string,type:string,amountGb:number,balanceBefore:number,balanceAfter:number,note:string,timestamp:string};
 type Node={id:string,name:string,host:string,enabled:boolean,sshWsManaged?:boolean,sshWsAgentSeenAt?:string};
-const headings:Record<Tab,string>={ssh:'Comptes SSH-WSS',resellers:'Revendeurs et crédits',security:'Sécurité',operations:'État des serveurs'};
+const headings:Record<Tab,string>={ssh:'Comptes SSH-WSS',resellers:'Revendeurs et crédits',ledger:'Registre des crédits',security:'Sécurité',operations:'État des serveurs'};
 const validRecent=(value?:string)=>Boolean(value&&Number.isFinite(Date.parse(value))&&Math.abs(Date.now()-Date.parse(value))<60000);
 
 export default function App(){
@@ -22,6 +23,7 @@ export default function App(){
   const [tab,setTab]=useState<Tab>('ssh');
   const [dark,setDark]=useState(()=>localStorage.getItem('abess_panel_theme')==='dark');
   const [resellers,setResellers]=useState<Reseller[]>([]);
+  const [ledger,setLedger]=useState<Transaction[]>([]);
   const [nodes,setNodes]=useState<Node[]>([]);
   const [ops,setOps]=useState<any>(null);
   const [loading,setLoading]=useState(false);
@@ -66,17 +68,18 @@ export default function App(){
   }
   async function logout(){
     try{await req('/api/v1/auth/logout','POST',{})}catch{}
-    setUser(null);setTab('ssh');setResellers([]);setNodes([]);setOps(null);
+    setUser(null);setTab('ssh');setResellers([]);setLedger([]);setNodes([]);setOps(null);
   }
   async function refresh(){
     if(!user)return;
     setLoading(true);setNotice('');
     try {
-      const requests=[req('/api/v1/admin/resellers'),...(user.role==='SUPER_ADMIN'?
+      const requests=[req('/api/v1/admin/resellers'),req('/api/v1/admin/transactions'),...(user.role==='SUPER_ADMIN'?
         [req('/api/v1/admin/nodes'),req('/api/v1/admin/operations')]:[])];
       const result=await Promise.all(requests);
       setResellers(result[0]);
-      if(user.role==='SUPER_ADMIN'){setNodes(result[1]);setOps(result[2]);}
+      setLedger(result[1]);
+      if(user.role==='SUPER_ADMIN'){setNodes(result[2]);setOps(result[3]);}
       const me=await req('/api/v1/auth/me');setUser(me);
     }catch(e){setNotice((e as Error).message);}
     finally{setLoading(false)}
@@ -117,6 +120,7 @@ export default function App(){
   const tabs:{id:Tab,label:string,icon:typeof Terminal}[]=[
     {id:'ssh',label:'SSH-WSS',icon:Terminal},
     {id:'resellers',label:'Revendeurs & crédits',icon:Users},
+    {id:'ledger',label:'Registre',icon:History},
     {id:'security',label:'Sécurité',icon:Shield},
     ...(user.role==='SUPER_ADMIN'?[{id:'operations' as Tab,label:'Serveurs',icon:Server}]:[])
   ];
@@ -171,12 +175,29 @@ export default function App(){
           </tbody></table>
         </div>
       </div>}
+      {tab==='ledger'&&<section className="rounded-xl border border-slate-700 p-5 overflow-x-auto">
+        <h2 className="font-semibold mb-3">Historique commercial des crédits SSH-WSS</h2>
+        <p className="text-xs text-slate-400 mb-4">Ce registre historique est conservé pour l'audit des mouvements de crédits, même s'ils proviennent de l'ancienne version.</p>
+        <table className="w-full text-sm text-left"><thead className="text-slate-400"><tr><th className="p-2">Date</th><th className="p-2">Revendeur</th><th className="p-2">Action</th><th className="p-2">Go</th><th className="p-2">Solde après</th></tr></thead>
+        <tbody>{ledger.map(x=><tr key={x.id} className="border-t border-slate-800"><td className="p-2">{new Date(x.timestamp).toLocaleString('fr-FR')}</td>
+          <td className="p-2">{x.resellerName}</td><td className="p-2">{x.type}<p className="text-xs text-slate-400">{x.note}</p></td>
+          <td className="p-2">{x.amountGb}</td><td className="p-2">{x.balanceAfter}</td></tr>)}</tbody></table>
+      </section>}
       {tab==='operations'&&user.role==='SUPER_ADMIN'&&<div className="space-y-5">
         <div className="rounded-xl border border-slate-700 p-5"><h2 className="font-bold mb-3">Agents SSH-WSS</h2>
           {nodes.filter(n=>n.sshWsManaged).map(n=><div key={n.id} className="border-t border-slate-800 py-3 flex flex-wrap justify-between gap-2">
             <span>{n.name}<span className="block text-xs text-slate-400">{n.host}</span></span>
             <span className={validRecent(n.sshWsAgentSeenAt)?'text-emerald-400':'text-amber-400'}>{validRecent(n.sshWsAgentSeenAt)?'Agent connecté':'Agent non connecté'}</span>
           </div>)}
+        </div>
+        <div className="rounded-xl border border-slate-700 p-5 space-y-2"><h2 className="font-bold">Sauvegarde des données</h2>
+          <p className="text-sm text-slate-400">Sauvegarde chiffrée avant tout nettoyage des anciennes données.</p>
+          <button className="flex items-center gap-2 text-emerald-300 border border-emerald-700 rounded-lg px-3 py-2"
+            onClick={()=>void mutate(async()=>{
+              const dump=await req('/api/v1/admin/operations/backup');
+              const url=URL.createObjectURL(new Blob([JSON.stringify(dump)],{type:'application/json'}));
+              const a=document.createElement('a');a.href=url;a.download='abess-archive-chiffree.json';a.click();URL.revokeObjectURL(url);
+            })}><Download size={16}/>Télécharger une sauvegarde chiffrée</button>
         </div>
         <div className="rounded-xl border border-slate-700 p-5"><h2 className="font-bold mb-3">Santé de l’API</h2>
           <p>Base : {ops?.storage||'—'} · Disque disponible : {ops?.freeBytes? (ops.freeBytes/1024**3).toFixed(1)+' Go':'—'}</p>
