@@ -41,4 +41,4 @@ jobs:
           fingerprint="$(sha256sum scripts/ssh-ws-live-smoke.mjs | awk '{print $1}')"
           sshpass -e ssh -p "$PORT" -o StrictHostKeyChecking=yes -o PubkeyAuthentication=no \
             -o PreferredAuthentications=password,keyboard-interactive "$dest" \
-            "set -euo pipefail; printf '%s  %s\\n' '$fingerprint' /tmp/abess-ssh-ws-live-smoke.mjs | sha256sum -c - >/dev/null; cd /root/abessvpn-server; cid=\$(docker compose ps -q api); test -n \"\$cid\"; docker cp /tmp/abess-ssh-ws-live-smoke.mjs \"\$cid:/tmp/abess-ssh-ws-live-smoke.mjs\"; trap 'docker compose exec -T api rm -f /tmp/abess-ssh-ws-live-smoke.mjs >/dev/null 2>&1 || true; rm -f /tmp/abess-ssh-ws-live-smoke.mjs' EXIT; docker compose exec -T api node /tmp/abess-ssh-ws-live-smoke.mjs"
+            "set -euo pipefail; printf '%s  %s\\n' '$fingerprint' /tmp/abess-ssh-ws-live-smoke.mjs | sha256sum -c - >/dev/null; cd /root/abessvpn-server; cid=\$(docker compose ps -q api); test -n \"\$cid\"; trap 'rm -f /tmp/abess-ssh-ws-live-smoke.mjs' EXIT; docker exec -i \"\$cid\" node --input-type=module - < /tmp/abess-ssh-ws-live-smoke.mjs"
