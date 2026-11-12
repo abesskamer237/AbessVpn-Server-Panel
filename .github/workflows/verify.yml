@@ -46,6 +46,15 @@ jobs:
       - name: Verify portable VPN subscription formats
         run: node --import tsx scripts/test-exports.mjs
 
+      - name: Validate and test SSH-WS gateway and reconciler
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/install-ssh-ws.sh
+          node --check scripts/ssh-ws-gateway.mjs
+          node --check scripts/ssh-ws-reconciler.mjs
+          node scripts/test-ssh-ws.mjs
+
       - name: Verify MFA, backup encryption and manual transfer approval
         run: node --import tsx scripts/test-platform.mjs
 
