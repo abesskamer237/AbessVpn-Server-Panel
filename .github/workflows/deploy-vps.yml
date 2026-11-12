@@ -446,8 +446,12 @@ jobs:
           VPS_PORT: ${{ vars.VPS_PORT }}
         run: |
           set -euo pipefail
-          "$HOME/.local/bin/abess-ssh" -p "${VPS_PORT:-22}" -o StrictHostKeyChecking=yes             "${VPS_USER}@${VPS_HOST}" 'cd "$HOME/abessvpn-server" && bash scripts/ssh-ws-postdeploy.sh'
-          "$HOME/.local/bin/abess-ssh" -p "${VPS_PORT:-22}" -o StrictHostKeyChecking=yes             "${VPS_USER}@${VPS_HOST}" 'for s in abess-ssh-ws-sshd abess-ssh-ws-gateway abess-ssh-ws-reconciler; do systemctl is-active --quiet "$s" || exit 1; done'
+          # shellcheck disable=SC2016
+          "$HOME/.local/bin/abess-ssh" -p "${VPS_PORT:-22}" -o StrictHostKeyChecking=yes \
+            "${VPS_USER}@${VPS_HOST}" 'cd "$HOME/abessvpn-server" && bash scripts/ssh-ws-postdeploy.sh'
+          # shellcheck disable=SC2016
+          "$HOME/.local/bin/abess-ssh" -p "${VPS_PORT:-22}" -o StrictHostKeyChecking=yes \
+            "${VPS_USER}@${VPS_HOST}" 'for s in abess-ssh-ws-sshd abess-ssh-ws-gateway abess-ssh-ws-reconciler; do systemctl is-active --quiet "$s" || exit 1; done'
           echo 'Managed SSH-WSS host services refreshed and healthy.'
 
       - name: Remove temporary deployment material
