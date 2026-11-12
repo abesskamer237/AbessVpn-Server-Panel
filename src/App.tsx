@@ -109,6 +109,7 @@ interface Reseller {
 interface ClientToken {
   id: string;
   token: string;
+  subscriptionUrl?: string;
   configurationId?: string;
   configurationName?: string;
   resellerId: string;
@@ -1115,7 +1116,7 @@ export default function App() {
       if (res.ok) {
         const data = await res.json();
         setVariantsList(data.variants || []);
-        setVariantsSubUrl(data.subscriptionUrl || `/sub/${token.token}`);
+        setVariantsSubUrl(data.subscriptionUrl || token.subscriptionUrl || `/sub/${token.token}`);
         setVariantsClientJson(data.xrayClient);
       }
     } catch (err) {
@@ -1204,7 +1205,7 @@ export default function App() {
       if (res.ok) {
         refreshData();
         addLog(`[ADHESION APPROVE] Demande de ${name} validée ! Token: ${data.token?.token}`);
-        alert(`Demande approuvée avec succès !\n\nClient : ${name}\nCode Token généré : ${data.token?.token}\nLien d'abonnement : /sub/${data.token?.token}`);
+        alert(`Demande approuvée avec succès !\n\nClient : ${name}\nCode Token généré : ${data.token?.token}\nLien d'abonnement : ${data.token?.subscriptionUrl || 'non disponible'}`);
       } else {
         alert(data.error || 'Erreur lors de la validation.');
       }
@@ -4105,7 +4106,7 @@ export default function App() {
                   <span>{copiedKey === 'sub_portal_link' ? 'Copié' : 'Copier'}</span>
                 </button>
                 <a
-                  href={variantsSubUrl || `/sub/${variantsModalToken.token}`}
+                  href={variantsSubUrl || variantsModalToken.subscriptionUrl || `/sub/${variantsModalToken.token}`}
                   target="_blank"
                   rel="noreferrer"
                   className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 rounded-lg text-xs flex items-center gap-1"
@@ -4114,6 +4115,47 @@ export default function App() {
                   <span>Ouvrir</span>
                 </a>
               </div>
+            </div>
+
+            {/* Explicit exports avoid relying on user-agent sniffing in third-party clients. */}
+            <div className="p-3 bg-[#03060e] border border-indigo-950 rounded-xl space-y-2">
+              <p className="text-slate-400 text-[10px] uppercase font-bold">Exporter vers une autre application VPN</p>
+              <div className="flex flex-wrap gap-2">
+                {[
+                  {format: 'raw', label: 'Lien VLESS (.txt)'},
+                  {format: 'base64', label: 'Abonnement Base64'},
+                  {format: 'sing-box', label: 'sing-box (.json)'},
+                  {format: 'mihomo', label: 'Mihomo / Clash (.yaml)'}
+                ].map(option => (
+                  <a
+                    key={option.format}
+                    href={`${variantsSubUrl || variantsModalToken.subscriptionUrl || `/sub/${variantsModalToken.token}`}?format=${option.format}`}
+                    target="_blank" rel="noreferrer"
+                    className="px-3 py-2 bg-slate-900 hover:bg-slate-800 rounded-lg border border-slate-700 text-indigo-300"
+                  >
+                    {option.label}
+                  </a>
+                ))}
+              </div>
+              <p className="text-slate-500 text-[10px]">La compatibilité dépend du transport réellement configuré sur le serveur.</p>
+              <button
+                type="button"
+                onClick={async () => {
+                  if (!confirm('Révoquer le lien d’abonnement actuel ? Les clients devront importer le nouveau lien.')) return;
+                  const response = await fetch(`/api/v1/admin/tokens/${variantsModalToken.id}/rotate-subscription`, {
+                    method: 'POST', headers: {'Authorization': `Bearer ${authToken}`}
+                  });
+                  if (!response.ok) { alert('Rotation impossible.'); return; }
+                  const rotated = await response.json();
+                  setVariantsModalToken(rotated);
+                  setVariantsSubUrl(rotated.subscriptionUrl);
+                  void refreshData();
+                  alert('Nouveau lien généré. L’ancien lien est révoqué.');
+                }}
+                className="text-amber-300 hover:text-amber-200 text-[11px] underline"
+              >
+                Révoquer et renouveler le lien d'abonnement
+              </button>
             </div>
 
             {/* Variants List */}
