@@ -1,15 +1,15 @@
 import {Activity,AlertTriangle,ArrowRight,CalendarClock,Radio,Server,Users,Wifi} from 'lucide-react';
-import type {AuditEvent,ManagedNode,OpsHealth,SshInventory,Transaction} from '../panelTypes';
+import type {AuditEvent,OpsHealth,Reseller,SshInventory,Transaction} from '../panelTypes';
 import {accountStatus,bytesToGb,fmtDateTime,percent} from '../panelTypes';
 
 type Props={
-  inventory:SshInventory|null;transactions:Transaction[];audit:AuditEvent[];
+  inventory:SshInventory|null;transactions:Transaction[];resellers:Reseller[];audit:AuditEvent[];
   ops:OpsHealth|null;onNavigate:(tab:string)=>void;
 };
 
 const compact=(n:number)=>new Intl.NumberFormat('fr-FR',{notation:'compact',maximumFractionDigits:1}).format(n);
 
-export function Dashboard({inventory,transactions,audit,ops,onNavigate}:Props){
+export function Dashboard({inventory,transactions,resellers,audit,ops,onNavigate}:Props){
   const accounts=(inventory?.accounts||[]).filter(a=>a.managed);
   const active=accounts.filter(a=>accountStatus(a).key==='active').length;
   const expiring=accounts.filter(a=>accountStatus(a).key==='expiring').length;
@@ -48,6 +48,18 @@ export function Dashboard({inventory,transactions,audit,ops,onNavigate}:Props){
   });
   const maxDay=Math.max(1,...days.map(d=>d.value));
   const recent=[...accounts].sort((a,b)=>Date.parse(b.createdAt)-Date.parse(a.createdAt)).slice(0,6);
+  const resellerById=new Map(resellers.map(r=>[r.id,r]));
+  let estimatedRevenue=0,estimatedCost=0;
+  for(const a of accounts){
+    const r=a.resellerId?resellerById.get(a.resellerId):undefined;
+    if(!r)continue;
+    const q=bytesToGb(a.quotaBytes);
+    estimatedRevenue+=q*Number(r.pricePerGbCfa||0)+Number(r.pricePerLicenceCfa||0);
+    estimatedCost+=q*Number(r.costPerGbCfa||0);
+  }
+  const estimatedMargin=estimatedRevenue-estimatedCost;
+  const money=(n:number)=>new Intl.NumberFormat('fr-FR',{style:'currency',currency:'XAF',maximumFractionDigits:0}).format(n||0);
+  const credits=resellers.reduce((n,r)=>n+Number(r.credits||0),0);
   const recentActivity=audit.length?audit.slice(0,7):transactions.slice(0,7).map(t=>({id:t.id,timestamp:t.timestamp,action:t.type,details:t.note} as AuditEvent));
 
   return <div className="stack">
@@ -79,6 +91,25 @@ export function Dashboard({inventory,transactions,audit,ops,onNavigate}:Props){
           {!alerts.length&&<div className="empty-state"><Radio size={22}/><strong>Aucune alerte importante</strong><span>Les licences et agents sont dans un état normal.</span></div>}
           {alerts.slice(0,6).map((a,i)=><div className="alert-row" key={i}><span className="alert-dot" style={{background:a.tone==='danger'?'var(--danger)':a.tone==='warning'?'var(--warning)':'var(--info)'}}/><div><p>{a.title}</p><span>{a.detail}</span></div></div>)}
         </div>
+      </section>
+    </div>
+
+    <div className="grid-equal">
+      <section className="card card-pad">
+        <div className="section-head"><div><h2>Performance commerciale</h2><p>Estimations basées sur les tarifs configurés par revendeur.</p></div><button className="btn btn-sm btn-ghost" onClick={()=>onNavigate('resellers')}>Tarifs <ArrowRight size={13}/></button></div>
+        <div className="detail-grid">
+          <div className="detail-item"><label>Chiffre d’affaires estimé</label><strong>{money(estimatedRevenue)}</strong></div>
+          <div className="detail-item"><label>Marge estimée</label><strong>{money(estimatedMargin)}</strong></div>
+          <div className="detail-item"><label>Crédits en circulation</label><strong>{credits.toFixed(2)} Go</strong></div>
+          <div className="detail-item"><label>Revendeurs actifs</label><strong>{resellers.filter(r=>r.status==='active').length}</strong></div>
+        </div>
+      </section>
+      <section className="card card-pad">
+        <div className="section-head"><div><h2>État réseau</h2><p>Disponibilité des nœuds et capacité allouée.</p></div><button className="btn btn-sm btn-ghost" onClick={()=>onNavigate('servers')}>Serveurs <ArrowRight size={13}/></button></div>
+        <div className="service-line"><span>Agents connectés</span><strong>{onlineNodes} / {nodes.length}</strong></div>
+        <div className="service-line"><span>Sessions actives</span><strong>{sessions}</strong></div>
+        <div className="service-line"><span>Quota total alloué</span><strong>{compact(bytesToGb(quota))} Go</strong></div>
+        <div className="service-line"><span>Quota consommé</span><strong>{percent(used,quota)} %</strong></div>
       </section>
     </div>
 
