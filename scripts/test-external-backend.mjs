@@ -174,6 +174,44 @@ try{
   assert.equal(importedConfig.status,200);
   assert.ok(!JSON.stringify(imported.body).includes(config.password),'imports never return supplier secrets in list metadata');
 
+  // Opt-in managed VPS: resellers may request accounts, but only an authenticated
+  // node can receive credentials and acknowledge real provisioning.
+  const managedNode=await call('admin/nodes',{name:'SSH-WS managed test VPS',host:'sshws.example.test'},admin);
+  assert.equal(managedNode.status,201);
+  assert.equal((await call('admin/ssh/managed',{nodeId:managedNode.body.id,days:7,quotaGb:1,maxConnections:1},importerSession)).status,409);
+  const management=await call(`admin/nodes/${managedNode.body.id}/ssh-ws`,{
+    enabled:true,fingerprint:'SHA256:'+'B'.repeat(43),
+    sni:'sshws.example.test',port:443,path:'/ssh-ws'
+  },admin,'PUT');
+  assert.equal(management.status,200);
+  const created=await call('admin/ssh/managed',{nodeId:managedNode.body.id,label:'Managed customer',days:7,quotaGb:0.5,maxConnections:1,resellerId:peer.body.id},importerSession);
+  assert.equal(created.status,202);
+  assert.equal(created.body.managed,true);
+  assert.equal(created.body.provisionState,'pending');
+  assert.equal(created.body.resellerId,importer.body.id,'cannot charge arbitrary reseller');
+  assert.ok(!JSON.stringify(created.body).includes('password'));
+  const managedId=created.body.id;
+  assert.equal((await call(`admin/ssh/accounts/${managedId}/config`,{transport:'wss'},importerSession)).status,503,'never export a managed account before node confirmation');
+  assert.equal((await call(`nodes/${managedNode.body.id}/ssh-ws/desired`,undefined,'invalid')).status,401);
+  assert.equal((await call(`nodes/${managedNode.body.id}/ssh-ws/desired`,undefined,node.body.key)).status,401);
+  const manifest=await call(`nodes/${managedNode.body.id}/ssh-ws/desired`,undefined,managedNode.body.key);
+  assert.equal(manifest.status,200);
+  assert.equal(manifest.body.format,'abess-managed-ssh-ws-v1');
+  assert.equal(manifest.body.accounts.length,1);
+  assert.equal(manifest.body.accounts[0].enabled,true);
+  assert.match(manifest.body.accounts[0].username,/^abv_[0-9a-f]{12}$/);
+  assert.ok(manifest.body.accounts[0].password.length>=32);
+  assert.equal((await call(`nodes/${managedNode.body.id}/ssh-ws/status`,{reports:[{id:managedId,state:'active'}]},managedNode.body.key)).status,200);
+  const managedDelivered=await call(`admin/ssh/accounts/${managedId}/config`,{transport:'wss'},importerSession);
+  assert.equal(managedDelivered.status,200);
+  assert.equal(managedDelivered.body.password,manifest.body.accounts[0].password);
+  assert.equal(managedDelivered.body.path,'/ssh-ws');
+  assert.equal((await call(`admin/ssh/accounts/${managedId}`,{enabled:false},importerSession,'PATCH')).status,200);
+  const suspendedManifest=await call(`nodes/${managedNode.body.id}/ssh-ws/desired`,undefined,managedNode.body.key);
+  assert.equal(suspendedManifest.body.accounts[0].enabled,false);
+  assert.equal(suspendedManifest.body.accounts[0].password,undefined);
+  assert.equal((await call(`nodes/${managedNode.body.id}/ssh-ws/status`,{reports:[{id:managedId,state:'blocked'}]},managedNode.body.key)).status,200);
+  assert.equal((await call(`admin/ssh/accounts/${managedId}/config`,{transport:'wss'},importerSession)).status,503);
   console.log(`External backend passed (${database?'PostgreSQL':'JSON'}): manual endpoints/UUID, client exports, node isolation, real counters, duplicate/reset/replay validation, SSH import/export, persistence, reporting-only agent, no provisioned services.`);
 }finally{
   await stop();await rm(dir,{recursive:true,force:true});
