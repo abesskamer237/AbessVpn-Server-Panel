@@ -44,11 +44,12 @@ export async function startGateway(options={}){
   const usageFile=options.usageFile??process.env.SSH_WS_USAGE_FILE??'/var/lib/abess-ssh-ws/gateway/usage.json';
   const reportFile=options.reportFile??process.env.SSH_WS_USAGE_REPORT_FILE??'/var/lib/abess-ssh-ws/gateway/usage-live.json';
   const policyPollMs=Number(options.policyPollMs??2000);
+  const reservationBytes=Number(options.reservationBytes??process.env.SSH_WS_RESERVATION_BYTES??262144);
   if(!/^\/[A-Za-z0-9/_-]{1,80}$/.test(basePath) ||
      !Number.isInteger(maxConnections)||maxConnections<1||maxConnections>5000 ||
      !Number.isInteger(policyPollMs)||policyPollMs<100||policyPollMs>30000)
     throw Error('Invalid SSH-WS configuration');
-  const ledger=new QuotaLedger({usageFile,reportFile});
+  const ledger=new QuotaLedger({usageFile,reportFile,reservationBytes});
   const wss=new WebSocketServer({
     noServer:true,perMessageDeflate:false,maxPayload:65536,
     clientTracking:true,skipUTF8Validation:false
