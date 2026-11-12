@@ -99,6 +99,7 @@ test('security, payment and operations pages use protected APIs',async({page})=>
 test('SSH generator shows actual availability and protects credential export', async ({page}) => {
   await login(page);
   await page.getByRole('navigation').getByRole('button', {name:'Comptes SSH',exact:true}).click();
+  await page.getByText('Option avancée : importer un compte SSH fournisseur existant (TCP ou autre protocole)').click();
   await expect(page.getByRole('heading', {name:'Comptes et tunnels SSH'})).toBeVisible();
   await expect(page.getByText('● Aucun serveur SSH-WS configuré', {exact:true})).toBeVisible();
   await expect(page.getByRole('button', {name:'Importer le compte',exact:true})).toBeDisabled();
