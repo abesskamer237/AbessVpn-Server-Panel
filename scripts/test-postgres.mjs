@@ -165,17 +165,24 @@ try {
   // Multi-level reseller tree: each reseller can create a direct child and
   // ancestors can observe their whole descendant branch without managing
   // a grandchild's balance directly.
+  const rootPassword=randomBytes(24).toString("hex");
+  const root=await apiCall("admin/resellers",{
+    email:"network-root@example.test",password:rootPassword,name:"Network Root",initialCredits:20
+  },session.token);
+  assert.equal(root.status,201);
+  const rootLogin=await apiCall("auth/login",{email:"network-root@example.test",password:rootPassword},session.token);
+  assert.equal(rootLogin.status,200);
+  const rootToken=rootLogin.body.token;
+
   const level2Password = randomBytes(24).toString("hex");
   const level2 = await apiCall("admin/resellers", {
-    email:"level2@example.test", password:level2Password, name:"Level 2", initialCredits:0
-  }, resellerToken);
+    email:"level2@example.test", password:level2Password, name:"Level 2", initialCredits:8
+  }, rootToken);
   assert.equal(level2.status,201);
   const level2Login = await apiCall("auth/login",{email:"level2@example.test",password:level2Password},session.token);
   assert.equal(level2Login.status,200);
   const level2Token=level2Login.body.token;
 
-  // Credit the direct child, then let it allocate part of that balance to its own child.
-  assert.equal((await apiCall(`admin/resellers/${level2.body.id}/credit`,{amount:8},resellerToken,{},"PUT")).status,200);
   const level3Password=randomBytes(24).toString("hex");
   const level3=await apiCall("admin/resellers",{
     email:"level3@example.test",password:level3Password,name:"Level 3",initialCredits:3
@@ -189,7 +196,7 @@ try {
   },level3Token);
   assert.equal(level4.status,201,"a reseller descendant can create another reseller");
 
-  const branch=await apiCall("admin/resellers",undefined,resellerToken);
+  const branch=await apiCall("admin/resellers",undefined,rootToken);
   assert.equal(branch.status,200);
   assert.ok(branch.body.some(x=>x.id===level2.body.id&&x.hierarchyDepth===1));
   assert.ok(branch.body.some(x=>x.id===level3.body.id&&x.hierarchyDepth===2));
@@ -197,7 +204,7 @@ try {
   assert.ok(branch.body.find(x=>x.id===level2.body.id).descendantCount>=2);
 
   assert.equal(
-    (await apiCall(`admin/resellers/${level3.body.id}/credit`,{amount:1},resellerToken,{},"PUT")).status,
+    (await apiCall(`admin/resellers/${level3.body.id}/credit`,{amount:1},rootToken,{},"PUT")).status,
     403,
     "an ancestor sees descendants but cannot bypass the direct-parent credit boundary",
   );
@@ -206,7 +213,7 @@ try {
     200,
     "the direct parent can transfer credits to its child",
   );
-  const branchTransactions=await apiCall("admin/transactions",undefined,resellerToken);
+  const branchTransactions=await apiCall("admin/transactions",undefined,rootToken);
   assert.ok(branchTransactions.body.some(x=>x.resellerId===level3.body.id),"ancestor sees descendant branch transactions");
 
   const plans = await apiCall("plans", undefined, resellerToken);
