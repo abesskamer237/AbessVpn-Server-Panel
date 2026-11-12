@@ -2905,10 +2905,12 @@ async function startServer() {
 
   // Legacy plaintext backups are retired. Use encrypted /api/v1/admin/system/backup
   // and /api/v1/admin/system/restore with the documented authenticated encryption format.
-  app.get('/api/v1/admin/backup', authenticate, (_req, res) => {
+  app.get('/api/v1/admin/backup', authenticate, (req, res) => {
+    if (!requireSuperAdmin(req, res)) return;
     res.status(410).json({ error: 'Export JSON non chiffré retiré. Utilisez /api/v1/admin/operations/backup.' });
   });
-  app.post('/api/v1/admin/backup/restore', authenticate, (_req, res) => {
+  app.post('/api/v1/admin/backup/restore', authenticate, (req, res) => {
+    if (!requireSuperAdmin(req, res)) return;
     res.status(410).json({ error: 'Restauration JSON non chiffrée retirée. Utilisez /api/v1/admin/operations/restore.' });
   });
 
@@ -4343,10 +4345,12 @@ async function startServer() {
 
   // Historical plaintext system endpoints are disabled, including restore.
   // Use /api/v1/admin/operations/backup and /api/v1/admin/operations/restore.
-  app.get(['/api/system/backup', '/api/v1/admin/system/backup'], authenticate, (_req, res) => {
+  app.get(['/api/system/backup', '/api/v1/admin/system/backup'], authenticate, (req, res) => {
+    if (!requireSuperAdmin(req, res)) return;
     res.status(410).json({ error: 'Sauvegardes JSON non chiffrées désactivées.' });
   });
-  app.post(['/api/system/restore', '/api/v1/admin/system/restore'], authenticate, (_req, res) => {
+  app.post(['/api/system/restore', '/api/v1/admin/system/restore'], authenticate, (req, res) => {
+    if (!requireSuperAdmin(req, res)) return;
     res.status(410).json({ error: 'Restauration JSON non chiffrée désactivée.' });
   });
 
