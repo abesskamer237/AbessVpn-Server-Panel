@@ -12,7 +12,7 @@ import {pathToFileURL} from 'node:url';
 import {setTimeout as delay} from 'node:timers/promises';
 import {validSourceIp} from './ssh-ws-quota.mjs';
 
-const usernamePattern=/^abv_[a-f0-9]{12}$/;
+const usernamePattern=/^abv_[a-z0-9][a-z0-9_-]{2,27}$/;
 const accountIdPattern=/^ssh_[a-f0-9-]{36}$/;
 export function validateDesired(manifest) {
   if (manifest?.format!=='abess-managed-ssh-ws-v1' ||
@@ -27,7 +27,7 @@ export function validateDesired(manifest) {
        !Number.isSafeInteger(a.baselineUsedBytes) || a.baselineUsedBytes<0 ||
        !Number.isInteger(a.maxConnections) || a.maxConnections<1 || a.maxConnections>10 ||
        (a.enabled && (!/^[a-f0-9]{64}$/.test(a.tokenHash) ||
-         typeof a.password!=='string' || !/^[A-Za-z0-9_-]{32,96}$/.test(a.password))))
+         typeof a.password!=='string' || !/^[A-Za-z0-9@#$%&*+=._-]{8,96}$/.test(a.password))))
        throw Error('Invalid SSH-WS account');
     usernames.add(a.username);ids.add(a.id);
   }
@@ -160,7 +160,7 @@ export function allowedUsersConfig(policy) {
     '# No wildcard: a WSS token must never authenticate as another SSH user.'];
   const active=policy.accounts.filter(a=>a.enabled);
   for(const a of active){
-    if(!/^abv_[a-f0-9]{12}$/.test(a.username)||!validSourceIp(a.sourceIp))
+    if(!usernamePattern.test(a.username)||!validSourceIp(a.sourceIp))
       throw Error('Invalid SSH identity binding');
     lines.push('AllowUsers '+a.username+'@'+a.sourceIp);
   }
