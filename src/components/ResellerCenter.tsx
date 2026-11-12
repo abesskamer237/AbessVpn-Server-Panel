@@ -1,6 +1,6 @@
 import {useMemo,useState,type FormEvent} from 'react';
 import {BadgeDollarSign,ChevronRight,Network,Plus,Search,Store,Users,X} from 'lucide-react';
-import type {Reseller,Role,SshAccount,User} from '../panelTypes';
+import type {Reseller,SshAccount,User} from '../panelTypes';
 import {bytesToGb,csvDownload} from '../panelTypes';
 
 type Props={
