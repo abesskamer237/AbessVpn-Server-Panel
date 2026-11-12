@@ -42,7 +42,7 @@ export function registerSsh(app:Express,d:{
   ownerActive:(ownerId?:string)=>boolean;
   charge:(payerId:string, quotaGb:number, id:string, renewal:boolean)=>boolean;
 }) {
-  const admin:RequestHandler=(req,res,next)=>{if((req as any).user.role!=='SUPER_ADMIN')return res.sendStatus(403);next();};
+  const admin:RequestHandler=(req,res,next)=>{if(!['SUPER_ADMIN','ADMIN'].includes((req as any).user.role))return res.sendStatus(403);next();};
   // Generic VPN heartbeats and the managed SSH-WS reconciler report via
   // different endpoints. Do not present one as the other in the panel.
   const ready=(id?:string)=>d.nodes().some(n=>n.id===id&&n.enabled&&n.ready&&Date.now()-Date.parse(n.observedAt||'')>=-5000&&Date.now()-Date.parse(n.observedAt||'')<=60000);
@@ -52,17 +52,17 @@ export function registerSsh(app:Express,d:{
     Date.now()-Date.parse(n.sshWsAgentSeenAt)<60000);
   const monitored=(a:SshAccount)=>a.managed?
     d.nodes().some(n=>n.id===a.nodeId&&managedOnline(n)):ready(a.nodeId);
-  const allowed=(actor:any,a:SshAccount)=>actor.role==='SUPER_ADMIN'||Boolean(a.resellerId&&d.canManage(actor,a.resellerId));
+  const allowed=(actor:any,a:SshAccount)=>['SUPER_ADMIN','ADMIN'].includes(actor.role)||Boolean(a.resellerId&&d.canManage(actor,a.resellerId));
   const active=(a:SshAccount)=>a.enabled&&Number.isFinite(Date.parse(a.expiresAt))&&Date.parse(a.expiresAt)>Date.now()&&a.usedBytes<a.quotaBytes&&d.ownerActive(a.resellerId)&&
     (!a.managed || (a.provisionState==='active'&&monitored(a)));
   app.get('/api/v1/admin/ssh',d.authenticate,(req,res)=>{
-    const actor=(req as any).user, isAdmin=actor.role==='SUPER_ADMIN';
+    const actor=(req as any).user, isAdmin=['SUPER_ADMIN','ADMIN'].includes(actor.role);
     res.json({enabled:true,ready:d.nodes().some(n=>ready(n.id)),
       sshWsReady:d.nodes().some(managedOnline),
       nodes:isAdmin?d.nodes().filter(n=>n.enabled).map(n=>({id:n.id,name:n.name,host:n.host})):[],
       managedNodes:d.nodes().filter(n=>n.enabled&&n.sshWsManaged).map(n=>({
         id:n.id,name:n.name,host:n.host,port:n.sshWsPort,path:n.sshWsPath,
-        sni:n.sshWsSni||n.host,agentOnline:managedOnline(n)
+        sni:n.sshWsSni||n.host,agentOnline:managedOnline(n),hostTelemetry:n.sshWsHost||null
       })),
       resellers:isAdmin?d.users().filter(u=>u.status==='active').map(u=>({id:u.id,name:u.name})):[],
       accounts:d.read().accounts.filter(a=>allowed(actor,a)).map(a=>({...safeSshAccount(a),
@@ -92,7 +92,7 @@ export function registerSsh(app:Express,d:{
     const username=String(config.username||'').trim(),label=String(req.body?.label||username).trim();
     const days=Number(req.body?.days),quotaGb=Number(req.body?.quotaGb),maxConnections=Number(req.body?.maxConnections);
     // A reseller cannot charge another account or assign a supplier record to a sibling.
-    const ownerId=actor.role==='SUPER_ADMIN'?String(req.body?.resellerId||actor.id):actor.id;
+    const ownerId=['SUPER_ADMIN','ADMIN'].includes(actor.role)?String(req.body?.resellerId||actor.id):actor.id;
     const owner=d.users().find(u=>u.id===ownerId&&u.status==='active');
     if(!owner||!d.ownerActive(ownerId)||!/^[a-z][a-z0-9_-]{2,31}$/.test(username)||label.length>80||
       !Number.isInteger(days)||days<1||days>366||!Number.isFinite(quotaGb)||quotaGb<0.01||quotaGb>100000||
@@ -118,7 +118,7 @@ export function registerSsh(app:Express,d:{
     const nodeId=String(req.body?.nodeId||'');
     const node=d.nodes().find(n=>n.id===nodeId&&n.enabled&&n.sshWsManaged&&n.sshWsFingerprint);
     if(!node)return res.status(409).json({error:'Activez SSH-WS sur un VPS via le Super Administrateur.'});
-    const ownerId=actor.role==='SUPER_ADMIN'?String(req.body?.resellerId||actor.id):actor.id;
+    const ownerId=['SUPER_ADMIN','ADMIN'].includes(actor.role)?String(req.body?.resellerId||actor.id):actor.id;
     const owner=d.users().find(u=>u.id===ownerId&&u.status==='active');
     const days=Number(req.body?.days),quotaGb=Number(req.body?.quotaGb),maxConnections=Number(req.body?.maxConnections);
     const label=String(req.body?.label||'Client SSH-WS').trim();
@@ -165,7 +165,7 @@ export function registerSsh(app:Express,d:{
     if(!a.enabled||!d.ownerActive(a.resellerId))return res.status(409).json({error:'Compte suspendu.'});
     const quota=a.quotaBytes+Math.round(gb*1024**3);
     if(!Number.isSafeInteger(quota)||quota>1000000*1024**3)return res.status(400).json({error:'Quota total trop élevé.'});
-    if(!d.charge(actor.role==='SUPER_ADMIN'?(a.resellerId||actor.id):actor.id,gb,a.id,true))return res.status(409).json({error:'Solde insuffisant ou compte indisponible.'});
+    if(!d.charge(['SUPER_ADMIN','ADMIN'].includes(actor.role)?(a.resellerId||actor.id):actor.id,gb,a.id,true))return res.status(409).json({error:'Solde insuffisant ou compte indisponible.'});
     a.quotaBytes=quota;a.expiresAt=new Date(Math.max(Date.now(),Date.parse(a.expiresAt)||0)+days*86400000).toISOString();
     a.renewalIds=[...(a.renewalIds||[]),id];a.renewalRequests={...a.renewalRequests,[id]:{gb,days}};d.write(state);d.audit({action:'SSH_RENEWED',actor:actor.id,role:actor.role,details:JSON.stringify({id:a.id,additionalGb:gb,days})});
     res.json(safeSshAccount(a));
@@ -173,9 +173,30 @@ export function registerSsh(app:Express,d:{
   app.patch('/api/v1/admin/ssh/accounts/:id',d.authenticate,(req,res)=>{
     const state=d.read(),a=state.accounts.find(a=>a.id===req.params.id),actor=(req as any).user;
     if(!a)return res.sendStatus(404);if(!allowed(actor,a))return res.sendStatus(403);
-    if(typeof req.body?.enabled!=='boolean')return res.sendStatus(400);
-    if(req.body.enabled&&(Date.parse(a.expiresAt)<=Date.now()||a.usedBytes>=a.quotaBytes||!d.ownerActive(a.resellerId)))return res.status(409).json({error:'Renouvelez le compte avant réactivation.'});
-    a.enabled=req.body.enabled;d.write(state);d.audit({action:a.enabled?'SSH_ENABLED':'SSH_DISABLED',actor:actor.id,role:actor.role,details:a.id});res.json(safeSshAccount(a));
+    const hasEnabled=typeof req.body?.enabled==='boolean';
+    const hasLabel=req.body?.label!==undefined;
+    const hasConnections=req.body?.maxConnections!==undefined;
+    if(!hasEnabled&&!hasLabel&&!hasConnections)return res.sendStatus(400);
+    if(hasLabel){
+      const label=String(req.body.label||'').trim();
+      if(!label||label.length>80)return res.status(400).json({error:'Nom client invalide.'});
+      a.label=label;
+    }
+    if(hasConnections){
+      const maxConnections=Number(req.body.maxConnections);
+      if(!Number.isInteger(maxConnections)||maxConnections<1||maxConnections>10)
+        return res.status(400).json({error:'La limite de sessions doit être comprise entre 1 et 10.'});
+      a.maxConnections=maxConnections;
+    }
+    if(hasEnabled){
+      if(req.body.enabled&&(Date.parse(a.expiresAt)<=Date.now()||a.usedBytes>=a.quotaBytes||!d.ownerActive(a.resellerId)))
+        return res.status(409).json({error:'Renouvelez le compte avant réactivation.'});
+      a.enabled=req.body.enabled;
+    }
+    d.write(state);
+    d.audit({action:'SSH_UPDATED',actor:actor.id,role:actor.role,
+      details:JSON.stringify({id:a.id,enabled:a.enabled,label:a.label,maxConnections:a.maxConnections})});
+    res.json(safeSshAccount(a));
   });
   app.delete('/api/v1/admin/ssh/accounts/:id',d.authenticate,admin,(req,res)=>{
     const state=d.read(),index=state.accounts.findIndex(a=>a.id===req.params.id);if(index<0)return res.sendStatus(404);

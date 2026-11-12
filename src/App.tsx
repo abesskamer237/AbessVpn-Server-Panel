@@ -1,209 +1,180 @@
-import {useEffect,useState,type FormEvent} from 'react';
-import {Terminal,Shield,Server,Users,LogOut,RefreshCw,Sun,Moon,History,Download} from 'lucide-react';
-import {SshCenter} from './components/SshCenter';
+import {useEffect,useMemo,useState,type FormEvent} from 'react';
+import {Bell,ChartNoAxesCombined,CreditCard,History,LogOut,Menu,Moon,RefreshCw,Server,Shield,Sun,Terminal,UserCog,Users,X} from 'lucide-react';
+import {Dashboard} from './components/Dashboard';
+import {ResellerCenter} from './components/ResellerCenter';
 import {SecurityCenter} from './components/SecurityCenter';
+import {ServerCenter} from './components/ServerCenter';
+import {SshCenter} from './components/SshCenter';
+import {TeamCenter} from './components/TeamCenter';
+import {TransactionsCenter} from './components/TransactionsCenter';
+import type {AuditEvent,ManagedNode,Operator,OpsHealth,Reseller,Role,SshInventory,Transaction,User} from './panelTypes';
+import {accountStatus,fmtDate} from './panelTypes';
 
-type User={id:string,name:string,email:string,role:'SUPER_ADMIN'|'RESELLER',credits:number};
-type Tab='ssh'|'resellers'|'ledger'|'security'|'operations';
-type Reseller={id:string,name:string,email:string,credits:number,status:string};
-type Transaction={id:string,resellerName:string,type:string,amountGb:number,balanceBefore:number,balanceAfter:number,note:string,timestamp:string};
-type Node={id:string,name:string,host:string,enabled:boolean,sshWsManaged?:boolean,sshWsAgentSeenAt?:string};
-const headings:Record<Tab,string>={ssh:'Comptes SSH-WSS',resellers:'Revendeurs et crédits',ledger:'Registre des crédits',security:'Sécurité',operations:'État des serveurs'};
-const validRecent=(value?:string)=>Boolean(value&&Number.isFinite(Date.parse(value))&&Math.abs(Date.now()-Date.parse(value))<60000);
+type Tab='dashboard'|'clients'|'resellers'|'transactions'|'servers'|'security'|'team';
+type RawNode={
+  id:string;name:string;host:string;enabled:boolean;sshWsManaged?:boolean;sshWsAgentSeenAt?:string;
+  sshWsSni?:string;sshWsPort?:number;sshWsPath?:string;sshWsHost?:ManagedNode['hostTelemetry'];
+};
+const titles:Record<Tab,string>={
+  dashboard:'Dashboard',clients:'Clients',resellers:'Revendeurs',transactions:'Transactions',
+  servers:'Serveurs',security:'Sécurité',team:'Équipe'
+};
+const subtitles:Record<Tab,string>={
+  dashboard:'Vue d’ensemble de votre activité SSH-WSS',
+  clients:'Licences, quotas et connexions',
+  resellers:'Portefeuille et crédits commerciaux',
+  transactions:'Mouvements et historique',
+  servers:'Infrastructure et supervision VPS',
+  security:'Protection de votre compte',
+  team:'Administrateurs et permissions'
+};
 
 export default function App(){
-  const [user,setUser]=useState<User|null>(null);
-  const [checked,setChecked]=useState(false);
-  const [email,setEmail]=useState('');
-  const [password,setPassword]=useState('');
-  const [code,setCode]=useState('');
-  const [mfa,setMfa]=useState(false);
-  const [authError,setAuthError]=useState('');
-  const [busy,setBusy]=useState(false);
-  const [tab,setTab]=useState<Tab>('ssh');
-  const [dark,setDark]=useState(()=>localStorage.getItem('abess_panel_theme')==='dark');
-  const [resellers,setResellers]=useState<Reseller[]>([]);
-  const [ledger,setLedger]=useState<Transaction[]>([]);
-  const [nodes,setNodes]=useState<Node[]>([]);
-  const [ops,setOps]=useState<any>(null);
-  const [loading,setLoading]=useState(false);
-  const [notice,setNotice]=useState('');
-  const [newName,setNewName]=useState('');
-  const [newEmail,setNewEmail]=useState('');
-  const [newPass,setNewPass]=useState('');
-  const [newCredit,setNewCredit]=useState(0);
-  const [creditAmounts,setCreditAmounts]=useState<Record<string,string>>({});
-  const token='cookie-session'; // session secret stays in an HttpOnly cookie
-  const headers={Authorization:'Bearer '+token,'Content-Type':'application/json'};
+  const [user,setUser]=useState<User|null>(null),[checked,setChecked]=useState(false);
+  const [email,setEmail]=useState(''),[password,setPassword]=useState(''),[code,setCode]=useState('');
+  const [mfa,setMfa]=useState(false),[authError,setAuthError]=useState('');
+  const [tab,setTab]=useState<Tab>('dashboard'),[busy,setBusy]=useState(false),[loading,setLoading]=useState(false);
+  const [dark,setDark]=useState(()=>localStorage.getItem('abess_panel_theme')!=='light');
+  const [mobileOpen,setMobileOpen]=useState(false),[notificationsOpen,setNotificationsOpen]=useState(false);
+  const [notice,setNotice]=useState(''),[createSignal,setCreateSignal]=useState(0);
+  const [resellers,setResellers]=useState<Reseller[]>([]),[transactions,setTransactions]=useState<Transaction[]>([]);
+  const [inventory,setInventory]=useState<SshInventory|null>(null),[nodes,setNodes]=useState<RawNode[]>([]);
+  const [ops,setOps]=useState<OpsHealth|null>(null),[audit,setAudit]=useState<AuditEvent[]>([]),[operators,setOperators]=useState<Operator[]>([]);
+  const token='cookie-session';
+
+  async function request(url:string,method='GET',body?:unknown,extraHeaders?:Record<string,string>){
+    const response=await fetch(url,{method,credentials:'same-origin',headers:{'Content-Type':'application/json',...extraHeaders},body:body===undefined?undefined:JSON.stringify(body)});
+    const data=response.status===204?{}:await response.json().catch(()=>({}));
+    if(!response.ok)throw new Error(data.error||'Opération indisponible');
+    return data;
+  }
   useEffect(()=>{
-    localStorage.removeItem('abess_admin_token');
-    localStorage.removeItem('abess_admin_user');
-    fetch('/api/v1/auth/me').then(async res=>{
-      if(res.ok)setUser(await res.json());
-    }).catch(()=>{}).finally(()=>setChecked(true));
+    localStorage.removeItem('abess_admin_token');localStorage.removeItem('abess_admin_user');
+    fetch('/api/v1/auth/me',{credentials:'same-origin'}).then(async r=>{if(r.ok){const u=await r.json();setUser(u)}}).finally(()=>setChecked(true));
   },[]);
   useEffect(()=>{
     localStorage.setItem('abess_panel_theme',dark?'dark':'light');
     document.documentElement.classList.toggle('theme-light',!dark);
-    document.body.classList.toggle('theme-light',!dark);
   },[dark]);
-  async function req(url:string,method='GET',body?:unknown){
-    const res=await fetch(url,{method,credentials:'same-origin',headers,body:body===undefined?undefined:JSON.stringify(body)});
-    const data=await res.json().catch(()=>({}));
-    if(!res.ok)throw Error(data.error||'Opération indisponible');
-    return data;
-  }
+
   async function login(e:FormEvent){
     e.preventDefault();setBusy(true);setAuthError('');
     try{
-      const data=await req('/api/v1/auth/login','POST',{email,password,code:code.trim()});
-      if(data.success&&data.user){
-        setUser(data.user);setTab('ssh');setPassword('');setCode('');setMfa(false);
-      }else{if(data.mfaRequired)setMfa(true);setAuthError(data.error||'Accès refusé');}
-    }catch(e){
-      const text=e instanceof Error?e.message:'Connexion indisponible';
-      if(/double authentification|mfa|code/i.test(text))setMfa(true);
-      setAuthError(text);
-    }finally{setBusy(false)}
+      const data=await request('/api/v1/auth/login','POST',{email,password,code:code.trim()});
+      if(data.success&&data.user){setUser(data.user);setTab('dashboard');setPassword('');setCode('');setMfa(false)}
+      else{if(data.mfaRequired)setMfa(true);setAuthError(data.error||'Accès refusé')}
+    }catch(e){const m=e instanceof Error?e.message:'Connexion indisponible';if(/authentification|mfa|code/i.test(m))setMfa(true);setAuthError(m)}
+    finally{setBusy(false)}
   }
   async function logout(){
-    try{await req('/api/v1/auth/logout','POST',{})}catch{}
-    setUser(null);setTab('ssh');setResellers([]);setLedger([]);setNodes([]);setOps(null);
+    try{await request('/api/v1/auth/logout','POST',{})}catch{}
+    setUser(null);setTab('dashboard');setInventory(null);setResellers([]);setTransactions([]);setNodes([]);setOps(null);setAudit([]);setOperators([]);
   }
   async function refresh(){
     if(!user)return;
     setLoading(true);setNotice('');
-    try {
-      const requests=[req('/api/v1/admin/resellers'),req('/api/v1/admin/transactions'),...(user.role==='SUPER_ADMIN'?
-        [req('/api/v1/admin/nodes'),req('/api/v1/admin/operations')]:[])];
-      const result=await Promise.all(requests);
-      setResellers(result[0]);
-      setLedger(result[1]);
-      if(user.role==='SUPER_ADMIN'){setNodes(result[2]);setOps(result[3]);}
-      const me=await req('/api/v1/auth/me');setUser(me);
-    }catch(e){setNotice((e as Error).message);}
+    try{
+      const [r,t,ssh,me]=await Promise.all([
+        request('/api/v1/admin/resellers'),request('/api/v1/admin/transactions'),request('/api/v1/admin/ssh'),request('/api/v1/auth/me')
+      ]);
+      setResellers(r);setTransactions(t);setInventory(ssh);setUser(me);
+      if(me.role==='SUPER_ADMIN'){
+        const [rawNodes,health,logs,team]=await Promise.all([
+          request('/api/v1/admin/nodes'),request('/api/v1/admin/operations'),request('/api/v1/admin/audit-logs'),request('/api/v1/admin/operators')
+        ]);
+        setNodes(rawNodes);setOps(health);setAudit([...logs].sort((a:any,b:any)=>Date.parse(b.timestamp)-Date.parse(a.timestamp)));setOperators(team);
+      }else{setNodes([]);setOps(null);setAudit([]);setOperators([])}
+    }catch(e){setNotice(e instanceof Error?e.message:'Actualisation impossible')}
     finally{setLoading(false)}
   }
   useEffect(()=>{if(user)void refresh()},[user?.id]);
-  async function mutate(work:()=>Promise<unknown>){
-    setBusy(true);setNotice('');
-    try{await work();await refresh();}
-    catch(e){setNotice((e as Error).message)}
-    finally{setBusy(false)}
+
+  const notifications=useMemo(()=>{
+    const list:{tone:'danger'|'warning'|'info',title:string,detail:string,tab:Tab}[]=[];
+    for(const n of inventory?.managedNodes||[])if(!n.agentOnline)list.push({tone:'danger',title:n.name+' hors ligne',detail:'Agent SSH-WSS non connecté',tab:'servers'});
+    for(const a of inventory?.accounts||[]){
+      if(!a.managed)continue;const st=accountStatus(a);
+      if(st.key==='quota')list.push({tone:'danger',title:a.label+' · quota épuisé',detail:a.username,tab:'clients'});
+      if(st.key==='expiring')list.push({tone:'warning',title:a.label+' expire bientôt',detail:fmtDate(a.expiresAt),tab:'clients'});
+      if(st.key==='error')list.push({tone:'danger',title:'Erreur de création VPS',detail:a.label,tab:'clients'});
+    }
+    if(ops?.alerts?.includes('BACKUP_OVERDUE'))list.push({tone:'warning',title:'Sauvegarde en retard',detail:'Vérifie la stratégie de sauvegarde',tab:'servers'});
+    return list.slice(0,20);
+  },[inventory,ops]);
+
+  function go(next:string){
+    const target=next as Tab;
+    if(target==='servers'&&user?.role!=='SUPER_ADMIN'){setTab('dashboard');return}
+    if(target==='team'&&user?.role!=='SUPER_ADMIN'){setTab('dashboard');return}
+    setTab(target);setMobileOpen(false);setNotificationsOpen(false);
   }
-  if(!checked)return <div className="min-h-screen bg-slate-950 text-white grid place-items-center">Connexion sécurisée au panneau SSH-WSS…</div>;
-  if(!user)return <div className="min-h-screen bg-[#060b16] text-slate-100 grid place-items-center p-5">
-    <div className="w-full max-w-md bg-slate-900 border border-emerald-800/50 rounded-3xl p-7 space-y-5">
-      <div className="flex items-center gap-3 text-emerald-400"><Terminal size={27}/><strong>ABESS VPN · SSH-WSS</strong></div>
-      <h1 className="text-2xl font-bold">Connexion au panneau</h1>
-      <p className="text-sm text-slate-400">Un seul protocole client : SSH par WebSocket sécurisé (TLS).</p>
-      {authError&&<p role="alert" className="text-rose-300 bg-rose-950/30 rounded-xl p-3">{authError}</p>}
-      <form onSubmit={login} className="space-y-4">
-        <label className="block text-sm">Adresse email
-          <input type="email" required autoComplete="username" value={email} onChange={e=>setEmail(e.target.value)}
-            className="w-full bg-slate-950 rounded-xl border border-slate-700 p-3 mt-1"/>
-        </label>
-        <label className="block text-sm">Mot de passe
-          <input type="password" required autoComplete="current-password" value={password} onChange={e=>setPassword(e.target.value)}
-            className="w-full bg-slate-950 rounded-xl border border-slate-700 p-3 mt-1"/>
-        </label>
-        {mfa&&<label className="block text-sm">Code de double authentification
-          <input required autoComplete="one-time-code" value={code} onChange={e=>setCode(e.target.value)}
-            className="w-full bg-slate-950 rounded-xl border border-slate-700 p-3 mt-1"/>
-        </label>}
-        <button disabled={busy} className="bg-emerald-500 text-slate-950 font-bold rounded-xl px-4 py-3 w-full disabled:opacity-50">
-          {busy?'Connexion…':'Se connecter'}
-        </button>
-      </form>
-    </div>
-  </div>;
-  const tabs:{id:Tab,label:string,icon:typeof Terminal}[]=[
-    {id:'ssh',label:'SSH-WSS',icon:Terminal},
-    {id:'resellers',label:'Revendeurs & crédits',icon:Users},
-    {id:'ledger',label:'Registre',icon:History},
-    {id:'security',label:'Sécurité',icon:Shield},
-    ...(user.role==='SUPER_ADMIN'?[{id:'operations' as Tab,label:'Serveurs',icon:Server}]:[])
+
+  if(!checked)return <div className="login-shell"><div className="login-card">Chargement sécurisé…</div></div>;
+  if(!user)return <div className="login-shell"><div className="login-card">
+    <div className="login-brand"><div className="brand-mark"><Terminal size={20}/></div><div><div className="brand-title">ABESS VPN</div><div className="brand-subtitle">SSH-WSS CONTROL</div></div></div>
+    <h1>Bienvenue</h1><p>Connectez-vous au centre de gestion sécurisé.</p>
+    {authError&&<p className="notice" role="alert">{authError}</p>}
+    <form className="login-form" onSubmit={login}>
+      <label className="field-block"><span className="field-label">Adresse email</span><input className="field" type="email" autoComplete="username" required value={email} onChange={e=>setEmail(e.target.value)}/></label>
+      <label className="field-block"><span className="field-label">Mot de passe</span><input className="field" type="password" autoComplete="current-password" required value={password} onChange={e=>setPassword(e.target.value)}/></label>
+      {mfa&&<label className="field-block"><span className="field-label">Code de double authentification</span><input className="field" autoComplete="one-time-code" required value={code} onChange={e=>setCode(e.target.value)}/></label>}
+      <button className="btn btn-primary" style={{width:'100%',padding:12}} disabled={busy}>{busy?'Connexion…':'Se connecter'}</button>
+    </form>
+  </div></div>;
+
+  const roleLabel:Record<Role,string>={SUPER_ADMIN:'Super Admin',ADMIN:'Administrateur',RESELLER:'Revendeur'};
+  const nav=[
+    {id:'dashboard' as Tab,label:'Dashboard',icon:ChartNoAxesCombined},
+    {id:'clients' as Tab,label:'Clients',icon:Users,badge:(inventory?.accounts||[]).filter(a=>a.managed).length},
+    {id:'resellers' as Tab,label:'Revendeurs',icon:CreditCard},
+    {id:'transactions' as Tab,label:'Transactions',icon:History},
+    ...(user.role==='SUPER_ADMIN'?[{id:'servers' as Tab,label:'Serveurs',icon:Server,badge:(inventory?.managedNodes||[]).filter(n=>!n.agentOnline).length||undefined}]:[]),
+    {id:'security' as Tab,label:'Sécurité',icon:Shield},
+    ...(user.role==='SUPER_ADMIN'?[{id:'team' as Tab,label:'Équipe',icon:UserCog}]:[])
   ];
-  return <div className="min-h-screen bg-[#060b16] text-slate-100">
-    <header className="sticky top-0 z-20 bg-[#080e1d]/95 border-b border-slate-700/80 backdrop-blur-md">
-      <div className="max-w-6xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex gap-2 items-center"><Terminal className="text-emerald-400"/>
-          <strong>ABESS VPN</strong><span className="text-emerald-400 text-xs border border-emerald-700 rounded px-2 py-1">SSH-WSS uniquement</span>
-        </div>
-        <div className="flex items-center gap-3 text-sm">
-          <span className="text-slate-400">{user.name} · {Number(user.credits||0).toFixed(2)} Go</span>
-          <button aria-label="Basculer le thème" onClick={()=>setDark(v=>!v)}>{dark?<Sun size={17}/>:<Moon size={17}/>}</button>
-          <button onClick={()=>void logout()} className="flex items-center gap-1 border border-slate-700 rounded-lg px-3 py-2"><LogOut size={15}/>Déconnexion</button>
-        </div>
+  const serverNodes=(nodes.map(n=>({
+    id:n.id,name:n.name,host:n.host,sni:n.sshWsSni||n.host,port:n.sshWsPort||443,path:n.sshWsPath||'/ssh-ws',
+    agentOnline:Boolean(n.sshWsAgentSeenAt&&Date.now()-Date.parse(n.sshWsAgentSeenAt)<60000),hostTelemetry:n.sshWsHost||null,enabled:n.enabled,sshWsManaged:n.sshWsManaged,sshWsAgentSeenAt:n.sshWsAgentSeenAt
+  })) as any[]);
+
+  return <div className="panel-shell">
+    {mobileOpen&&<div className="drawer-backdrop" style={{zIndex:29}} onClick={()=>setMobileOpen(false)}/>}
+    <aside className={'sidebar '+(mobileOpen?'mobile-open':'')}>
+      <div className="brand-lockup"><div className="brand-mark"><Terminal size={20}/></div><div><div className="brand-title">ABESS VPN</div><div className="brand-subtitle">SSH-WSS ONLY</div></div></div>
+      <div className="nav-section-label">Gestion</div>
+      <nav className="side-nav">{nav.slice(0,4).map(item=><button key={item.id} className={'nav-button '+(tab===item.id?'active':'')} onClick={()=>go(item.id)}><item.icon size={16}/>{item.label}{item.badge!==undefined&&<span className="nav-badge">{item.badge}</span>}</button>)}</nav>
+      <div className="nav-section-label">Administration</div>
+      <nav className="side-nav">{nav.slice(4).map(item=><button key={item.id} className={'nav-button '+(tab===item.id?'active':'')} onClick={()=>go(item.id)}><item.icon size={16}/>{item.label}{item.badge!==undefined&&<span className="nav-badge">{item.badge}</span>}</button>)}</nav>
+      <div className="sidebar-footer">
+        <div className="user-mini"><div className="avatar">{user.name.slice(0,1).toUpperCase()}</div><div><strong>{user.name}</strong><span>{roleLabel[user.role]}{user.role==='RESELLER'?' · '+Number(user.credits||0).toFixed(2)+' Go':''}</span></div></div>
+        <div className="sidebar-actions"><button className="icon-button" aria-label="Changer le thème" onClick={()=>setDark(v=>!v)}>{dark?<Sun size={16}/>:<Moon size={16}/>}</button><button className="icon-button" aria-label="Se déconnecter" onClick={()=>void logout()}><LogOut size={16}/></button></div>
       </div>
-      <nav aria-label="Navigation principale" className="max-w-6xl mx-auto px-4 py-2 flex gap-2 overflow-x-auto">
-        {tabs.map(t=><button key={t.id} onClick={()=>setTab(t.id)} aria-current={tab===t.id?'page':undefined}
-          className={'rounded-lg px-3 py-2 text-sm font-semibold whitespace-nowrap flex items-center gap-2 '+(tab===t.id?'bg-emerald-950 text-emerald-300 border border-emerald-600':'text-slate-400 border border-transparent')}>
-          <t.icon size={16}/>{t.label}
-        </button>)}
-      </nav>
-    </header>
-    <main className="max-w-6xl mx-auto px-4 py-6 space-y-5">
-      <div className="flex items-center justify-between gap-3">
-        <div><h1 className="text-xl font-bold">{headings[tab]}</h1><p className="text-xs text-slate-400">VPS géré · TLS/WSS 443 · quotas et sessions serveur</p></div>
-        <button onClick={()=>void refresh()} disabled={loading} className="text-emerald-400 flex items-center gap-2 text-sm"><RefreshCw size={16}/>{loading?'Actualisation…':'Actualiser'}</button>
-      </div>
-      {notice&&<p role="alert" className="rounded-lg bg-rose-950/40 text-rose-200 p-3">{notice}</p>}
-      {tab==='ssh'&&<SshCenter token={token} isAdmin={user.role==='SUPER_ADMIN'}/>}
-      {tab==='security'&&<SecurityCenter token={token} onLogout={()=>void logout()}/>}
-      {tab==='resellers'&&<div className="space-y-5">
-        <form onSubmit={e=>{e.preventDefault();void mutate(async()=>{await req('/api/v1/admin/resellers','POST',{name:newName,email:newEmail,password:newPass,initialCredits:newCredit});setNewName('');setNewEmail('');setNewPass('');setNewCredit(0);});}}
-          className="rounded-xl p-5 border border-slate-700 space-y-3">
-          <h2 className="font-bold text-emerald-300">Créer un revendeur SSH-WSS</h2>
-          <div className="grid sm:grid-cols-2 gap-3">
-            <input required aria-label="Nom du revendeur" placeholder="Nom" value={newName} onChange={e=>setNewName(e.target.value)} className="bg-slate-950 p-3 rounded-lg"/>
-            <input required aria-label="Email du revendeur" type="email" placeholder="Email" value={newEmail} onChange={e=>setNewEmail(e.target.value)} className="bg-slate-950 p-3 rounded-lg"/>
-            <input required aria-label="Mot de passe du revendeur" type="password" minLength={12} placeholder="Mot de passe" value={newPass} onChange={e=>setNewPass(e.target.value)} className="bg-slate-950 p-3 rounded-lg"/>
-            <label className="text-xs text-slate-400">Crédits de départ (Go)
-              <input aria-label="Crédits de départ" type="number" min={0} step={0.01} value={newCredit} onChange={e=>setNewCredit(Number(e.target.value))} className="bg-slate-950 p-3 rounded-lg w-full"/>
-            </label>
+    </aside>
+
+    <div className="main-area">
+      <header className="topbar">
+        <div style={{display:'flex',alignItems:'center',gap:10}}><button className="icon-button mobile-menu" aria-label="Ouvrir le menu" onClick={()=>setMobileOpen(true)}><Menu size={17}/></button><div><div className="topbar-title">{titles[tab]}</div><div className="topbar-subtitle">{subtitles[tab]}</div></div></div>
+        <div className="top-actions">
+          <button className="icon-button" title="Actualiser" onClick={()=>void refresh()} disabled={loading}><RefreshCw size={16} className={loading?'animate-spin':''}/></button>
+          <div className="notification-trigger"><button className="icon-button" aria-label="Notifications" onClick={()=>setNotificationsOpen(v=>!v)}><Bell size={16}/>{notifications.length>0&&<span className="notification-count">{notifications.length}</span>}</button>
+            {notificationsOpen&&<div className="notification-popover"><div className="section-head"><div><h2>Notifications</h2><p>{notifications.length} élément(s) à surveiller</p></div></div>
+              <div className="alert-list">{notifications.length?notifications.map((n,i)=><button key={i} className="alert-row" style={{textAlign:'left',width:'100%',color:'inherit'}} onClick={()=>go(n.tab)}><span className="alert-dot" style={{background:n.tone==='danger'?'var(--danger)':n.tone==='warning'?'var(--warning)':'var(--info)'}}/><div><p>{n.title}</p><span>{n.detail}</span></div></button>):<div className="empty-state" style={{padding:18}}><Bell size={20}/><strong>Tout est calme</strong></div>}</div>
+            </div>}
           </div>
-          <button disabled={busy} className="bg-emerald-500 text-slate-950 font-bold px-4 py-2 rounded-lg">Créer le revendeur</button>
-        </form>
-        <div className="rounded-xl p-5 border border-slate-700 overflow-x-auto"><h2 className="font-bold mb-4">Revendeurs actifs et soldes</h2>
-          <table className="w-full text-sm"><thead><tr className="text-left text-slate-400"><th>Revendeur</th><th>Solde</th><th>État</th><th>Recharge en Go</th></tr></thead><tbody>
-            {resellers.map(x=><tr key={x.id} className="border-t border-slate-800"><td className="py-3">{x.name}<p className="text-xs text-slate-500">{x.email}</p></td><td>{x.credits} Go</td><td>{x.status}</td>
-              <td><div className="flex gap-2"><input type="number" min={0.01} step={0.01} value={creditAmounts[x.id]||''} onChange={e=>setCreditAmounts(v=>({...v,[x.id]:e.target.value}))}
-                aria-label={'Recharge de '+x.name} className="bg-slate-950 rounded-lg p-2 w-24"/>
-                <button type="button" disabled={busy||Number(creditAmounts[x.id])<=0} className="border border-emerald-700 rounded-lg px-3"
-                  onClick={()=>void mutate(async()=>{await req('/api/v1/admin/resellers/'+x.id+'/credit','PUT',{amount:Number(creditAmounts[x.id])});setCreditAmounts(v=>({...v,[x.id]:''}));})}>Créditer</button></div></td></tr>)}
-          </tbody></table>
+          <button className="btn btn-primary" onClick={()=>{go('clients');setCreateSignal(v=>v+1)}}><Users size={14}/>Nouveau client</button>
         </div>
-      </div>}
-      {tab==='ledger'&&<section className="rounded-xl border border-slate-700 p-5 overflow-x-auto">
-        <h2 className="font-semibold mb-3">Historique commercial des crédits SSH-WSS</h2>
-        <p className="text-xs text-slate-400 mb-4">Ce registre historique est conservé pour l'audit des mouvements de crédits, même s'ils proviennent de l'ancienne version.</p>
-        <table className="w-full text-sm text-left"><thead className="text-slate-400"><tr><th className="p-2">Date</th><th className="p-2">Revendeur</th><th className="p-2">Action</th><th className="p-2">Go</th><th className="p-2">Solde après</th></tr></thead>
-        <tbody>{ledger.map(x=><tr key={x.id} className="border-t border-slate-800"><td className="p-2">{new Date(x.timestamp).toLocaleString('fr-FR')}</td>
-          <td className="p-2">{x.resellerName}</td><td className="p-2">{x.type}<p className="text-xs text-slate-400">{x.note}</p></td>
-          <td className="p-2">{x.amountGb}</td><td className="p-2">{x.balanceAfter}</td></tr>)}</tbody></table>
-      </section>}
-      {tab==='operations'&&user.role==='SUPER_ADMIN'&&<div className="space-y-5">
-        <div className="rounded-xl border border-slate-700 p-5"><h2 className="font-bold mb-3">Agents SSH-WSS</h2>
-          {nodes.filter(n=>n.sshWsManaged).map(n=><div key={n.id} className="border-t border-slate-800 py-3 flex flex-wrap justify-between gap-2">
-            <span>{n.name}<span className="block text-xs text-slate-400">{n.host}</span></span>
-            <span className={validRecent(n.sshWsAgentSeenAt)?'text-emerald-400':'text-amber-400'}>{validRecent(n.sshWsAgentSeenAt)?'Agent connecté':'Agent non connecté'}</span>
-          </div>)}
-        </div>
-        <div className="rounded-xl border border-slate-700 p-5 space-y-2"><h2 className="font-bold">Sauvegarde des données</h2>
-          <p className="text-sm text-slate-400">Sauvegarde chiffrée avant tout nettoyage des anciennes données.</p>
-          <button className="flex items-center gap-2 text-emerald-300 border border-emerald-700 rounded-lg px-3 py-2"
-            onClick={()=>void mutate(async()=>{
-              const dump=await req('/api/v1/admin/operations/backup');
-              const url=URL.createObjectURL(new Blob([JSON.stringify(dump)],{type:'application/json'}));
-              const a=document.createElement('a');a.href=url;a.download='abess-archive-chiffree.json';a.click();URL.revokeObjectURL(url);
-            })}><Download size={16}/>Télécharger une sauvegarde chiffrée</button>
-        </div>
-        <div className="rounded-xl border border-slate-700 p-5"><h2 className="font-bold mb-3">Santé de l’API</h2>
-          <p>Base : {ops?.storage||'—'} · Disque disponible : {ops?.freeBytes? (ops.freeBytes/1024**3).toFixed(1)+' Go':'—'}</p>
-          <p className="text-sm text-slate-400 mt-2">Les alertes générales de l’ancien moteur Xray ne représentent pas le statut SSH-WSS.</p>
-        </div>
-      </div>}
-    </main>
+      </header>
+
+      <main className="main-content">
+        {notice&&<p className="notice" role="alert" style={{marginBottom:14}}>{notice}</p>}
+        {tab==='dashboard'&&<Dashboard inventory={inventory} transactions={transactions} resellers={resellers} audit={audit} ops={ops} onNavigate={go}/>}
+        {tab==='clients'&&<SshCenter inventory={inventory} resellers={resellers} role={user.role} audit={audit} request={request} refresh={refresh} createSignal={createSignal}/>}
+        {tab==='resellers'&&<ResellerCenter resellers={resellers} accounts={(inventory?.accounts||[]).filter(a=>a.managed)} busy={busy} request={request} refresh={refresh}/>}
+        {tab==='transactions'&&<TransactionsCenter transactions={transactions}/>}
+        {tab==='servers'&&user.role==='SUPER_ADMIN'&&<ServerCenter nodes={serverNodes} ops={ops} audit={audit} busy={busy} request={request} refresh={refresh}/>}
+        {tab==='security'&&<div className="stack"><div className="page-header"><div><h1>Sécurité</h1><p>MFA, mot de passe et sessions administratives.</p></div></div><SecurityCenter token={token} onLogout={()=>void logout()}/></div>}
+        {tab==='team'&&user.role==='SUPER_ADMIN'&&<TeamCenter operators={operators} busy={busy} request={request} refresh={refresh}/>}
+      </main>
+    </div>
   </div>;
 }

@@ -119,7 +119,7 @@ export interface AppUser {
   email: string;
   passwordHash: string; // Plain or sha256
   name: string;
-  role: 'SUPER_ADMIN' | 'RESELLER';
+  role: 'SUPER_ADMIN' | 'ADMIN' | 'RESELLER';
   credits: number; // Balance in credits / GB
   totalTokensCreated: number;
   totalBandwidthAllocatedGb: number;
@@ -128,6 +128,9 @@ export interface AppUser {
   lastLoginAt: string | null;
   parentId?: string;
   parentName?: string;
+  pricePerGbCfa?: number;
+  costPerGbCfa?: number;
+  pricePerLicenceCfa?: number;
 }
 
 export interface ClientToken {
@@ -729,7 +732,7 @@ function validRestoredUsers(value: unknown): value is AppUser[] {
         typeof user.email !== 'string' || !user.email.trim() ||
         typeof user.passwordHash !== 'string' || !user.passwordHash ||
         typeof user.name !== 'string' ||
-        !['SUPER_ADMIN', 'RESELLER'].includes(user.role) ||
+        !['SUPER_ADMIN', 'ADMIN', 'RESELLER'].includes(user.role) ||
         !['active', 'suspended'].includes(user.status) ||
         !Number.isFinite(user.credits) || user.credits < 0) return false;
     const email = user.email.trim().toLowerCase();
@@ -739,7 +742,7 @@ function validRestoredUsers(value: unknown): value is AppUser[] {
   }
   if (!value.some(user => user.role === 'SUPER_ADMIN' && user.status === 'active')) return false;
   for (const user of value) {
-    if (user.role === 'SUPER_ADMIN' && user.parentId) return false;
+    if (user.role !== 'RESELLER' && user.parentId) return false;
     const visited = new Set<string>([user.id]);
     let parentId = user.parentId;
     while (parentId) {
@@ -1813,7 +1816,7 @@ async function startServer() {
       parentId = parent.parentId;
     }
 
-    if (process.env.REQUIRE_ADMIN_MFA === 'true' && user.role === 'SUPER_ADMIN' && !security.enabled(user.id) && !req.path.startsWith('/api/v1/auth/')) {
+    if (process.env.REQUIRE_ADMIN_MFA === 'true' && (user.role === 'SUPER_ADMIN' || user.role === 'ADMIN') && !security.enabled(user.id) && !req.path.startsWith('/api/v1/auth/')) {
       res.status(403).json({error:'Activez la double authentification dans Sécurité.',mfaRequired:true});return;
     }
     (req as any).user = user;
@@ -2112,11 +2115,45 @@ async function startServer() {
   }
 
   function canManageToken(user: AppUser, targetResellerId: string, allUsers: AppUser[]): boolean {
-    if (user.role === 'SUPER_ADMIN') return true;
+    if (user.role === 'SUPER_ADMIN' || user.role === 'ADMIN') return true;
     if (targetResellerId === user.id) return true;
     const descendantIds = new Set(getSubResellerIdsRecursive(user.id, allUsers));
     return descendantIds.has(targetResellerId);
   }
+
+  // ==========================================
+  // TEAM / OPERATOR MANAGEMENT
+  // ==========================================
+  app.get('/api/v1/admin/operators', authenticate, (req, res) => {
+    if (!requireSuperAdmin(req,res)) return;
+    res.json(loadUsers().filter(u=>u.role==='ADMIN').map(({passwordHash,...u})=>u));
+  });
+  app.post('/api/v1/admin/operators', authenticate, (req, res) => {
+    if (!requireSuperAdmin(req,res)) return;
+    const name=String(req.body?.name||'').trim();
+    const email=String(req.body?.email||'').trim().toLowerCase();
+    const password=String(req.body?.password||'');
+    if(!name||name.length>80||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||password.length<16)
+      return res.status(400).json({error:'Nom, email valide et mot de passe de 16 caractères minimum requis.'});
+    const users=loadUsers();
+    if(users.some(u=>u.email.toLowerCase()===email))return res.status(409).json({error:'Cet email existe déjà.'});
+    const operator:AppUser={id:'usr_admin_'+crypto.randomUUID(),email,passwordHash:hashPassword(password),name,
+      role:'ADMIN',credits:0,totalTokensCreated:0,totalBandwidthAllocatedGb:0,status:'active',
+      createdAt:new Date().toISOString(),lastLoginAt:null};
+    users.push(operator);saveUsers(users);
+    logAudit({actor:(req as any).user.id,role:'SUPER_ADMIN',action:'ADMIN_CREATED',details:operator.id});
+    const {passwordHash,...safe}=operator;return res.status(201).json(safe);
+  });
+  app.put('/api/v1/admin/operators/:id/status', authenticate, (req,res)=>{
+    if(!requireSuperAdmin(req,res))return;
+    const status=req.body?.status;
+    if(status!=='active'&&status!=='suspended')return res.status(400).json({error:'Statut invalide.'});
+    const users=loadUsers(),target=users.find(u=>u.id===req.params.id&&u.role==='ADMIN');
+    if(!target)return res.sendStatus(404);
+    target.status=status;saveUsers(users);
+    logAudit({actor:(req as any).user.id,role:'SUPER_ADMIN',action:'ADMIN_STATUS',details:JSON.stringify({id:target.id,status})});
+    const {passwordHash,...safe}=target;return res.json(safe);
+  });
 
   // ==========================================
   // 2. RESELLER & SUB-RESELLER MANAGEMENT
@@ -2124,13 +2161,13 @@ async function startServer() {
   // ==========================================
   app.get('/api/v1/admin/resellers', authenticate, (req, res) => {
     const user: AppUser = (req as any).user;
-    if (user.role !== 'SUPER_ADMIN' && user.role !== 'RESELLER') {
+    if (user.role !== 'SUPER_ADMIN' && user.role !== 'ADMIN' && user.role !== 'RESELLER') {
       res.status(403).json({ error: 'Accès non autorisé.' });
       return;
     }
 
     const users = loadUsers();
-    if (user.role === 'SUPER_ADMIN') {
+    if (user.role === 'SUPER_ADMIN' || user.role === 'ADMIN') {
       const resellers = users
         .filter(u => u.role === 'RESELLER')
         .map(({ passwordHash, ...rest }) => ({
@@ -2152,7 +2189,7 @@ async function startServer() {
 
   app.post('/api/v1/admin/resellers', authenticate, (req, res) => {
     const user: AppUser = (req as any).user;
-    if (user.role !== 'SUPER_ADMIN' && user.role !== 'RESELLER') {
+    if (user.role !== 'SUPER_ADMIN' && user.role !== 'ADMIN' && user.role !== 'RESELLER') {
       res.status(403).json({ error: 'Accès non autorisé.' });
       return;
     }
@@ -2249,10 +2286,28 @@ async function startServer() {
     });
   });
 
+  app.put('/api/v1/admin/resellers/:id/pricing', authenticate, (req,res)=>{
+    const actor:AppUser=(req as any).user;
+    if(actor.role!=='SUPER_ADMIN'&&actor.role!=='ADMIN')return res.sendStatus(403);
+    const perGb=Number(req.body?.pricePerGbCfa),costPerGb=Number(req.body?.costPerGbCfa),perLicence=Number(req.body?.pricePerLicenceCfa);
+    if(!Number.isFinite(perGb)||perGb<0||perGb>10000000||
+       !Number.isFinite(costPerGb)||costPerGb<0||costPerGb>10000000||
+       !Number.isFinite(perLicence)||perLicence<0||perLicence>10000000)
+      return res.status(400).json({error:'Tarifs invalides.'});
+    const users=loadUsers(),reseller=users.find(u=>u.id===req.params.id&&u.role==='RESELLER');
+    if(!reseller)return res.sendStatus(404);
+    reseller.pricePerGbCfa=Math.round(perGb);
+    reseller.costPerGbCfa=Math.round(costPerGb);
+    reseller.pricePerLicenceCfa=Math.round(perLicence);
+    saveUsers(users);
+    logAudit({actor:actor.id,role:actor.role,action:'RESELLER_PRICING_UPDATED',details:JSON.stringify({id:reseller.id,perGb:reseller.pricePerGbCfa,costPerGb:reseller.costPerGbCfa,perLicence:reseller.pricePerLicenceCfa})});
+    const {passwordHash,...safe}=reseller;return res.json(safe);
+  });
+
   // Credit / Recharge Reseller
   app.put('/api/v1/admin/resellers/:id/credit', authenticate, (req, res) => {
     const user: AppUser = (req as any).user;
-    if (user.role !== 'SUPER_ADMIN' && user.role !== 'RESELLER') {
+    if (user.role !== 'SUPER_ADMIN' && user.role !== 'ADMIN' && user.role !== 'RESELLER') {
       res.status(403).json({ error: 'Accès non autorisé.' });
       return;
     }
@@ -2400,7 +2455,7 @@ async function startServer() {
   // Toggle Reseller Status (Active / Suspended)
   app.put('/api/v1/admin/resellers/:id/status', authenticate, (req, res) => {
     const user: AppUser = (req as any).user;
-    if (user.role !== 'SUPER_ADMIN' && user.role !== 'RESELLER') {
+    if (user.role !== 'SUPER_ADMIN' && user.role !== 'ADMIN' && user.role !== 'RESELLER') {
       res.status(403).json({ error: 'Accès non autorisé.' });
       return;
     }
@@ -2432,7 +2487,7 @@ async function startServer() {
   // returned to the direct parent; every associated licence and session is revoked.
   app.delete('/api/v1/admin/resellers/:id', authenticate, (req, res) => {
     const user: AppUser = (req as any).user;
-    if (user.role !== 'SUPER_ADMIN' && user.role !== 'RESELLER') {
+    if (user.role !== 'SUPER_ADMIN' && user.role !== 'ADMIN' && user.role !== 'RESELLER') {
       res.status(403).json({ error: 'Accès non autorisé.' });
       return;
     }
@@ -2966,7 +3021,7 @@ async function startServer() {
   app.get('/api/v1/admin/transactions', authenticate, (req, res) => {
     const user: AppUser = (req as any).user;
     const all = loadTransactions();
-    if (user.role === 'SUPER_ADMIN') {
+    if (user.role === 'SUPER_ADMIN' || user.role === 'ADMIN') {
       res.json(all);
     } else {
       res.json(all.filter(t => t.resellerId === user.id));
@@ -3258,7 +3313,7 @@ async function startServer() {
     const users = loadUsers();
     const tokens = loadTokens();
 
-    if (user.role === 'SUPER_ADMIN') {
+    if (user.role === 'SUPER_ADMIN' || user.role === 'ADMIN') {
       const resellers = users.filter(u => u.role === 'RESELLER');
       const totalCreditsInCirculation = resellers.reduce((sum, r) => sum + r.credits, 0);
       const totalBandwidthAllocated = tokens.reduce((sum, t) => sum + t.bandwidthGb, 0);
