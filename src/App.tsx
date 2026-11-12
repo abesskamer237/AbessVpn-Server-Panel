@@ -169,7 +169,7 @@ export default function App(){
         {notice&&<p className="notice" role="alert" style={{marginBottom:14}}>{notice}</p>}
         {tab==='dashboard'&&<Dashboard inventory={inventory} transactions={transactions} resellers={resellers} audit={audit} ops={ops} onNavigate={go}/>}
         {tab==='clients'&&<SshCenter inventory={inventory} resellers={resellers} role={user.role} audit={audit} request={request} refresh={refresh} createSignal={createSignal}/>}
-        {tab==='resellers'&&<ResellerCenter resellers={resellers} accounts={(inventory?.accounts||[]).filter(a=>a.managed)} busy={busy} request={request} refresh={refresh}/>}
+        {tab==='resellers'&&<ResellerCenter resellers={resellers} accounts={(inventory?.accounts||[]).filter(a=>a.managed)} busy={busy} currentUser={user} request={request} refresh={refresh}/>}
         {tab==='transactions'&&<TransactionsCenter transactions={transactions}/>}
         {tab==='servers'&&user.role==='SUPER_ADMIN'&&<ServerCenter nodes={serverNodes} ops={ops} audit={audit} busy={busy} request={request} refresh={refresh}/>}
         {tab==='security'&&<div className="stack"><div className="page-header"><div><h1>Sécurité</h1><p>MFA, mot de passe et sessions administratives.</p></div></div><SecurityCenter token={token} onLogout={()=>void logout()}/></div>}

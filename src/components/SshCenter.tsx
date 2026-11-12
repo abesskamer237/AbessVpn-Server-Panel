@@ -158,13 +158,23 @@ export function SshCenter({inventory,resellers,role,audit,request,refresh,create
 
     {createOpen&&<div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)setCreateOpen(false)}}><form className="modal" onSubmit={e=>void create(e)}>
       <div className="modal-head"><div><strong>Nouveau client SSH-WSS</strong><div className="card-subtitle">Le serveur le moins chargé est présélectionné automatiquement.</div></div><button type="button" className="icon-button" onClick={()=>setCreateOpen(false)}><X size={16}/></button></div>
-      <div className="modal-body form-grid">
+      <div className="modal-body">
+        <div style={{marginBottom:14}}><span className="field-label">Packs rapides</span><div className="filter-pills">
+          {[
+            ['Découverte',7,5,1],
+            ['Standard',30,10,1],
+            ['Duo',30,25,2],
+            ['Premium',90,50,3]
+          ].map(([name,d,q,c])=><button key={String(name)} type="button" className="filter-pill" onClick={()=>{setDays(Number(d));setQuotaGb(Number(q));setMaxConnections(Number(c))}}>{name} · {q} Go · {d} j · {c} session{Number(c)>1?'s':''}</button>)}
+        </div></div>
+        <div className="form-grid">
         <label className="field-block"><span className="field-label">Nom du client</span><input className="field" autoFocus required maxLength={80} value={label} onChange={e=>setLabel(e.target.value)} placeholder="Ex. Jean Dupont"/></label>
         <label className="field-block"><span className="field-label">Serveur</span><select className="select" required value={nodeId} onChange={e=>setNodeId(e.target.value)}>{inventory?.managedNodes.map(n=><option key={n.id} value={n.id} disabled={!n.agentOnline}>{n.name} · {n.agentOnline?'en ligne':'hors ligne'}</option>)}</select></label>
         <label className="field-block"><span className="field-label">Durée</span><select className="select" value={days} onChange={e=>setDays(Number(e.target.value))}><option value={7}>7 jours</option><option value={30}>30 jours</option><option value={60}>60 jours</option><option value={90}>90 jours</option><option value={180}>180 jours</option><option value={365}>365 jours</option></select></label>
         <label className="field-block"><span className="field-label">Quota (Go)</span><input className="field" type="number" min=".01" step=".01" required value={quotaGb} onChange={e=>setQuotaGb(Number(e.target.value))}/></label>
         <label className="field-block"><span className="field-label">Sessions simultanées</span><input className="field" type="number" min="1" max="10" required value={maxConnections} onChange={e=>setMaxConnections(Number(e.target.value))}/></label>
         {canOperate&&<label className="field-block"><span className="field-label">Revendeur propriétaire</span><select className="select" value={resellerId} onChange={e=>setResellerId(e.target.value)}><option value="">Administration</option>{resellers.filter(r=>r.status==='active').map(r=><option key={r.id} value={r.id}>{r.name} · {r.credits} Go</option>)}</select></label>}
+        </div>
       </div>
       <div className="modal-foot"><button type="button" className="btn" onClick={()=>setCreateOpen(false)}>Annuler</button><button className="btn btn-primary" disabled={working||!inventory?.managedNodes.some(n=>n.id===nodeId&&n.agentOnline)}>{working?'Création…':'Créer la licence'}</button></div>
     </form></div>}

@@ -2167,24 +2167,39 @@ async function startServer() {
     }
 
     const users = loadUsers();
-    if (user.role === 'SUPER_ADMIN' || user.role === 'ADMIN') {
-      const resellers = users
-        .filter(u => u.role === 'RESELLER')
-        .map(({ passwordHash, ...rest }) => ({
-          ...rest,
-          subResellersCount: users.filter(sub => sub.role === 'RESELLER' && sub.parentId === rest.id).length
-        }));
-      res.json(resellers);
-    } else {
-      // Resellers see their own sub-resellers
-      const resellers = users
-        .filter(u => u.role === 'RESELLER' && u.parentId === user.id)
-        .map(({ passwordHash, ...rest }) => ({
-          ...rest,
-          subResellersCount: users.filter(sub => sub.role === 'RESELLER' && sub.parentId === rest.id).length
-        }));
-      res.json(resellers);
-    }
+    const resellerUsers = users.filter(u => u.role === 'RESELLER');
+    const visibleIds = user.role === 'RESELLER'
+      ? new Set(getSubResellerIdsRecursive(user.id, users))
+      : null;
+    const depthFrom = (id:string, rootId?:string) => {
+      let depth=0,current=users.find(candidate=>candidate.id===id),guard=0;
+      while(current?.parentId && guard++ < users.length){
+        if(rootId && current.parentId===rootId)return depth+1;
+        depth++;
+        current=users.find(candidate=>candidate.id===current!.parentId);
+      }
+      return rootId ? depth+1 : depth;
+    };
+    const pathNames = (id:string) => {
+      const names:string[]=[];let current=users.find(candidate=>candidate.id===id),guard=0;
+      while(current && guard++ < users.length){
+        names.unshift(current.name);
+        if(user.role==='RESELLER' && current.parentId===user.id)break;
+        current=current.parentId?users.find(candidate=>candidate.id===current!.parentId):undefined;
+      }
+      return names;
+    };
+    const resellers = resellerUsers
+      .filter(u => !visibleIds || visibleIds.has(u.id))
+      .map(({ passwordHash, ...rest }) => ({
+        ...rest,
+        subResellersCount: resellerUsers.filter(sub => sub.parentId === rest.id).length,
+        descendantCount: getSubResellerIdsRecursive(rest.id, users).length,
+        hierarchyDepth: user.role==='RESELLER' ? depthFrom(rest.id,user.id) : depthFrom(rest.id),
+        hierarchyPath: pathNames(rest.id)
+      }))
+      .sort((a,b)=>a.hierarchyPath.join(' / ').localeCompare(b.hierarchyPath.join(' / '),'fr'));
+    res.json(resellers);
   });
 
   app.post('/api/v1/admin/resellers', authenticate, (req, res) => {
@@ -2195,6 +2210,7 @@ async function startServer() {
     }
 
     const { email, password, name, initialCredits } = req.body;
+    const requestedParentId = typeof req.body?.parentId === 'string' ? req.body.parentId.trim() : '';
     if (!email || !password || !name) {
       res.status(400).json({ error: 'Email, mot de passe et nom requis pour le revendeur.' });
       return;
@@ -2215,6 +2231,19 @@ async function startServer() {
     const dbUser = users.find(u => u.id === user.id);
     if (!dbUser) {
       res.status(401).json({ error: 'Utilisateur introuvable.' });
+      return;
+    }
+    const parentAccount = user.role === 'RESELLER'
+      ? dbUser
+      : requestedParentId
+        ? users.find(candidate=>candidate.id===requestedParentId && candidate.role==='RESELLER')
+        : dbUser;
+    if (!parentAccount) {
+      res.status(400).json({ error: 'Revendeur parent introuvable.' });
+      return;
+    }
+    if (parentAccount.status !== 'active') {
+      res.status(409).json({ error: 'Le revendeur parent est suspendu.' });
       return;
     }
 
@@ -2248,8 +2277,8 @@ async function startServer() {
       status: 'active',
       createdAt: new Date().toISOString(),
       lastLoginAt: null,
-      parentId: user.id,
-      parentName: user.name
+      parentId: parentAccount.id,
+      parentName: parentAccount.name
     };
 
     users.push(newReseller);
@@ -2282,13 +2311,16 @@ async function startServer() {
     const { passwordHash, ...safeReseller } = newReseller;
     res.status(201).json({
       ...safeReseller,
-      subResellersCount: 0
+      subResellersCount: 0,
+      descendantCount: 0,
+      hierarchyDepth: user.role==='RESELLER' ? 1 : (parentAccount.role==='RESELLER' ? 1 : 0),
+      hierarchyPath: [parentAccount.name, safeReseller.name]
     });
   });
 
   app.put('/api/v1/admin/resellers/:id/pricing', authenticate, (req,res)=>{
     const actor:AppUser=(req as any).user;
-    if(actor.role!=='SUPER_ADMIN'&&actor.role!=='ADMIN')return res.sendStatus(403);
+    if(!['SUPER_ADMIN','ADMIN','RESELLER'].includes(actor.role))return res.sendStatus(403);
     const perGb=Number(req.body?.pricePerGbCfa),costPerGb=Number(req.body?.costPerGbCfa),perLicence=Number(req.body?.pricePerLicenceCfa);
     if(!Number.isFinite(perGb)||perGb<0||perGb>10000000||
        !Number.isFinite(costPerGb)||costPerGb<0||costPerGb>10000000||
@@ -2296,6 +2328,7 @@ async function startServer() {
       return res.status(400).json({error:'Tarifs invalides.'});
     const users=loadUsers(),reseller=users.find(u=>u.id===req.params.id&&u.role==='RESELLER');
     if(!reseller)return res.sendStatus(404);
+    if(actor.role==='RESELLER' && reseller.parentId!==actor.id)return res.sendStatus(403);
     reseller.pricePerGbCfa=Math.round(perGb);
     reseller.costPerGbCfa=Math.round(costPerGb);
     reseller.pricePerLicenceCfa=Math.round(perLicence);
@@ -3024,7 +3057,8 @@ async function startServer() {
     if (user.role === 'SUPER_ADMIN' || user.role === 'ADMIN') {
       res.json(all);
     } else {
-      res.json(all.filter(t => t.resellerId === user.id));
+      const scope = new Set([user.id, ...getSubResellerIdsRecursive(user.id, loadUsers())]);
+      res.json(all.filter(t => t.resellerId && scope.has(t.resellerId)));
     }
   });
 

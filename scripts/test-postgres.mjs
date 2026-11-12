@@ -126,9 +126,9 @@ try {
     200,
     "sessions survive restart",
   );
-  async function apiCall(route, body, token, extra = {}) {
+  async function apiCall(route, body, token, extra = {}, method) {
     const response = await fetch("http://127.0.0.1:3215/api/v1/" + route, {
-      method: body ? "POST" : "GET",
+      method: method || (body ? "POST" : "GET"),
       headers: {
         Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
@@ -162,6 +162,60 @@ try {
   );
   assert.equal(resellerLogin.status, 200);
   const resellerToken = resellerLogin.body.token;
+  // Multi-level reseller tree: each reseller can create a direct child and
+  // ancestors can observe their whole descendant branch without managing
+  // a grandchild's balance directly.
+  const rootPassword=randomBytes(24).toString("hex");
+  const root=await apiCall("admin/resellers",{
+    email:"network-root@example.test",password:rootPassword,name:"Network Root",initialCredits:20
+  },session.token);
+  assert.equal(root.status,201);
+  const rootLogin=await apiCall("auth/login",{email:"network-root@example.test",password:rootPassword},session.token);
+  assert.equal(rootLogin.status,200);
+  const rootToken=rootLogin.body.token;
+
+  const level2Password = randomBytes(24).toString("hex");
+  const level2 = await apiCall("admin/resellers", {
+    email:"level2@example.test", password:level2Password, name:"Level 2", initialCredits:8
+  }, rootToken);
+  assert.equal(level2.status,201);
+  const level2Login = await apiCall("auth/login",{email:"level2@example.test",password:level2Password},session.token);
+  assert.equal(level2Login.status,200);
+  const level2Token=level2Login.body.token;
+
+  const level3Password=randomBytes(24).toString("hex");
+  const level3=await apiCall("admin/resellers",{
+    email:"level3@example.test",password:level3Password,name:"Level 3",initialCredits:3
+  },level2Token);
+  assert.equal(level3.status,201);
+  const level3Login=await apiCall("auth/login",{email:"level3@example.test",password:level3Password},session.token);
+  assert.equal(level3Login.status,200);
+  const level3Token=level3Login.body.token;
+  const level4=await apiCall("admin/resellers",{
+    email:"level4@example.test",password:randomBytes(24).toString("hex"),name:"Level 4",initialCredits:1
+  },level3Token);
+  assert.equal(level4.status,201,"a reseller descendant can create another reseller");
+
+  const branch=await apiCall("admin/resellers",undefined,rootToken);
+  assert.equal(branch.status,200);
+  assert.ok(branch.body.some(x=>x.id===level2.body.id&&x.hierarchyDepth===1));
+  assert.ok(branch.body.some(x=>x.id===level3.body.id&&x.hierarchyDepth===2));
+  assert.ok(branch.body.some(x=>x.id===level4.body.id&&x.hierarchyDepth===3));
+  assert.ok(branch.body.find(x=>x.id===level2.body.id).descendantCount>=2);
+
+  assert.equal(
+    (await apiCall(`admin/resellers/${level3.body.id}/credit`,{amount:1},rootToken,{},"PUT")).status,
+    403,
+    "an ancestor sees descendants but cannot bypass the direct-parent credit boundary",
+  );
+  assert.equal(
+    (await apiCall(`admin/resellers/${level3.body.id}/credit`,{amount:1},level2Token,{},"PUT")).status,
+    200,
+    "the direct parent can transfer credits to its child",
+  );
+  const branchTransactions=await apiCall("admin/transactions",undefined,rootToken);
+  assert.ok(branchTransactions.body.some(x=>x.resellerId===level3.body.id),"ancestor sees descendant branch transactions");
+
   const plans = await apiCall("plans", undefined, resellerToken);
   const offer = plans.body.find((plan) => plan.priceCfa > 0);
   const order = await apiCall(
@@ -287,7 +341,7 @@ try {
     assert.deepEqual(store.read(path.join(dir, "security.json")).sessions, {});
   });
   console.log(
-    "PostgreSQL passed: migration, rollback, 16 concurrent operations, API login, persistent sessions, manual transfer approval, no automatic credit, concurrent approval idempotence, encrypted offline recovery drill.",
+    "PostgreSQL passed: migration, rollback, 16 concurrent operations, API login, persistent sessions, recursive reseller hierarchy and branch isolation, manual transfer approval, no automatic credit, concurrent approval idempotence, encrypted offline recovery drill.",
   );
 } finally {
   await stop();
