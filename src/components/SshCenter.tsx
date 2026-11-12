@@ -143,7 +143,7 @@ export function SshCenter({ token, isAdmin = true }: { token: string; isAdmin?: 
           </select>
         </label>
         <label className="text-xs">Empreinte SSH Ed25519 vérifiée
-          <input aria-label="Empreinte SSH du VPS" className="block bg-slate-950 p-2 w-64" value={managedFingerprint}
+          <input aria-label="Clé hôte Ed25519 vérifiée" className="block bg-slate-950 p-2 w-64" value={managedFingerprint}
             onChange={e=>setManagedFingerprint(e.target.value)} placeholder="SHA256:…" />
         </label>
         <label className="text-xs">SNI HTTPS
