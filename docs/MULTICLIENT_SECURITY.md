@@ -77,11 +77,20 @@ Le backend publie l'inventaire authentifié
 `GET /api/v1/nodes/:id/config` : `enabled`, `expiresAt`, quotas et UUID/SSH.
 Les statistiques arrivent par heartbeat dans le sens VPS → panneau.
 
-**Pas encore réalisé :** provisionner et révoquer automatiquement des utilisateurs
-sur un VPS tiers. L'agent fourni n'exécute aucune action distante ; les accès
-déjà établis ne sont pas automatiquement interrompus quand `enabled=false`.
-Avant de vendre une suspension immédiate ou un quota strict, installer une
-intégration côté VPS et réaliser les tests suivants :
+**Évolution SSH-WS :** pour un VPS autorisé explicitement par le Super
+Administrateur, le nouvel agent `scripts/ssh-ws-reconciler.mjs` permet
+de créer et de suspendre des comptes OpenSSH `abv_...`. Il ne fonctionne
+qu'après exécution manuelle de `scripts/install-ssh-ws.sh` sur le VPS et
+configuration WSS par l'opérateur. Cela ne constitue pas une prise en charge
+de tous les fournisseurs SSH. Les limites de connexions et les quotas en Go
+ne sont pas encore techniquement garantis.
+
+**Toujours à développer pour VLESS/Xray :** le contrôle effectif des UUID,
+des connexions, des quotas et des expirations au niveau du moteur sur les VPS.
+L'agent de statistiques Xray existant se limite à reporter les relevés.
+Avant de promettre une suspension immédiate ou un quota strict sur VLESS,
+installer une intégration qui coupe les utilisateurs dans le moteur et réaliser
+les tests suivants :
 
 1. Créer un utilisateur Xray via une API/agent autorisé, constater sa présence
    dans le moteur, puis ouvrir un vrai tunnel dans une application tierce.
