@@ -80,14 +80,15 @@ try {
   assert.equal(await rejected(key,'concurrent-connection-limit'),404,'a second socket must not bypass per-user maxConnections');
   const b=await connect(keyB);
   assert.equal(gateway.ledger.online(idB),1);
-  assert.ok(seenSourceIps.has('127.120.0.1') && seenSourceIps.has('127.120.0.2'),
-    'gateway must use distinct SSH TCP peer addresses for both credentials');
   const message=once(b,'message');
   b.send(Buffer.from('echo-check'));
   let echo=(await message)[0].toString();
   // Depending on frame timing this may be the upstream SSH banner.
   if(echo.startsWith('SSH-2.0'))echo=(await once(b,'message'))[0].toString();
   assert.equal(echo,'echo-check');
+  assert.ok(seenSourceIps.has('127.120.0.1') && seenSourceIps.has('127.120.0.2'),
+    'gateway must use distinct SSH TCP peer addresses for both credentials');
+
   gateway.ledger.report();
   const measured=JSON.parse(fs.readFileSync(reportFile,'utf8'));
   assert.ok(measured.accounts.find(x=>x.id===idB).usedBytes>=2*'echo-check'.length);
