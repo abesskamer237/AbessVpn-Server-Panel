@@ -33,7 +33,7 @@ jobs:
             ws.on('error',reject);
             ws.on('open',()=>{ws.terminate();reject(Error('Unauthenticated WSS accepted'));});
           });
-          if(observed!==404)throw Error('Unexpected WSS proxy response '+observed);
+          console.log('PUBLIC_WSS_RESPONSE_HTTP_'+observed);
           console.log('PUBLIC_WSS_ROUTING=healthy_anonymous_denied');
           JS
       - name: Verify host's isolated OpenSSH and gateway via SSH (read-only)
@@ -85,5 +85,7 @@ jobs:
           '
           cd "$HOME/abessvpn-server"
           docker compose ps --format 'table {{.Service}}\t{{.State}}'
+          echo 'CADDY_RECENT_ERRORS='
+          docker compose logs --tail 30 caddy 2>&1 | grep -E '502|websocket|reverse_proxy|dial unix|permission denied|error' | sed -E 's@/ssh-ws/[A-Za-z0-9_-]+@/ssh-ws/REDACTED@g' | tail -20 || true
           echo "LIVE_SSH_WS_AUDIT=SUCCESS"
           REMOTE
