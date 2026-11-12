@@ -70,6 +70,16 @@ export interface VpnNode {
   sshWsPath?: string;
   sshWsPort?: number;
   sshWsAgentSeenAt?: string;
+  sshWsHost?: {
+    observedAt: string;
+    uptimeSeconds: number;
+    load1: number;
+    totalMemoryBytes: number;
+    freeMemoryBytes: number;
+    diskTotalBytes: number;
+    diskFreeBytes: number;
+    services: {sshd: boolean; gateway: boolean; reconciler: boolean};
+  };
 }
 export class Operations {
   private errors: number[]=[];
@@ -93,7 +103,7 @@ export class Operations {
     const alerts: string[] = [];
     this.errors=this.errors.filter(time=>Date.now()-time<300000);
     if(this.errors.length>5)alerts.push('API_ERRORS');
-    if (this.monitoringConfigured() && !this.xrayReady()) alerts.push("XRAY_NOT_READY");
+    if (process.env.SSH_WSS_ONLY!=='true' && this.monitoringConfigured() && !this.xrayReady()) alerts.push("XRAY_NOT_READY");
     if (!this.postgres()) alerts.push("POSTGRES_NOT_CONFIGURED");
     if (freeBytes < 1024 ** 3) alerts.push("LOW_DISK_SPACE");
     if (
