@@ -1,0 +1,44 @@
+name: Live end-to-end SSH WebSocket credential and session smoke
+on:
+  push:
+    branches: [deploy/sshws-first-install-20261112]
+permissions:
+  contents: read
+jobs:
+  smoke:
+    if: contains(github.event.head_commit.message, 'run live SSH-WS SSH authentication smoke')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Run one short-lived SSH-WS test client on VPS and delete its licence
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD || secrets.VPS_PASSWORD }}
+          VPS_PORT: ${{ vars.VPS_PORT }}
+          VPS_KNOWN: ${{ secrets.VPS_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          PORT="${VPS_PORT:-22}"
+          install -d -m 0700 "$HOME/.ssh"
+          if [[ -n "${VPS_KNOWN:-}" ]]; then
+            printf '%s\n' "$VPS_KNOWN" > "$HOME/.ssh/known_hosts"
+          else
+            ssh-keyscan -T 10 -p "$PORT" -t ed25519 "$VPS_HOST" 2>/dev/null > "$HOME/.ssh/known_hosts"
+          fi
+          ssh-keygen -lf "$HOME/.ssh/known_hosts" -E sha256 | grep -Fq 'SHA256:LgoMnkXsbf7RYOw5LRm0ErLVQ6n0JDJBJIAltFxOChc' || exit 1
+          chmod 0600 "$HOME/.ssh/known_hosts"
+          if ! command -v sshpass >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq sshpass >/dev/null
+          fi
+          export SSHPASS="$VPS_PASSWORD"
+          dest="$VPS_USER@$VPS_HOST"
+          sshpass -e scp -P "$PORT" -o StrictHostKeyChecking=yes -o PubkeyAuthentication=no \
+            scripts/ssh-ws-live-smoke.mjs "$dest:/tmp/abess-ssh-ws-live-smoke.mjs"
+          fingerprint="$(sha256sum scripts/ssh-ws-live-smoke.mjs | awk '{print $1}')"
+          sshpass -e ssh -p "$PORT" -o StrictHostKeyChecking=yes -o PubkeyAuthentication=no \
+            -o PreferredAuthentications=password,keyboard-interactive "$dest" \
+            "set -euo pipefail; printf '%s  %s\\n' '$fingerprint' /tmp/abess-ssh-ws-live-smoke.mjs | sha256sum -c - >/dev/null; cd /root/abessvpn-server; cid=\$(docker compose ps -q api); test -n \"\$cid\"; docker cp /tmp/abess-ssh-ws-live-smoke.mjs \"\$cid:/tmp/abess-ssh-ws-live-smoke.mjs\"; trap 'docker compose exec -T api rm -f /tmp/abess-ssh-ws-live-smoke.mjs >/dev/null 2>&1 || true; rm -f /tmp/abess-ssh-ws-live-smoke.mjs' EXIT; docker compose exec -T api node /tmp/abess-ssh-ws-live-smoke.mjs"
