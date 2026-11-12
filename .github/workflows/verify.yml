@@ -51,6 +51,8 @@ jobs:
         run: |
           set -euo pipefail
           bash -n scripts/install-ssh-ws.sh
+          bash -n scripts/ssh-ws-postdeploy.sh
+          node --check scripts/bootstrap-ssh-ws-node.mjs
           node --check scripts/ssh-ws-gateway.mjs
           node --check scripts/ssh-ws-reconciler.mjs
           node scripts/test-ssh-ws.mjs
