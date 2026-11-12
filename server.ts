@@ -2905,10 +2905,10 @@ async function startServer() {
   // Legacy plaintext backups are retired. Use encrypted /api/v1/admin/system/backup
   // and /api/v1/admin/system/restore with the documented authenticated encryption format.
   app.get('/api/v1/admin/backup', authenticate, (_req, res) => {
-    res.status(410).json({ error: 'Export JSON non chiffré retiré. Utilisez la sauvegarde système chiffrée.' });
+    res.status(410).json({ error: 'Export JSON non chiffré retiré. Utilisez /api/v1/admin/operations/backup.' });
   });
   app.post('/api/v1/admin/backup/restore', authenticate, (_req, res) => {
-    res.status(410).json({ error: 'Restauration JSON non chiffrée retirée. Utilisez la restauration système chiffrée.' });
+    res.status(410).json({ error: 'Restauration JSON non chiffrée retirée. Utilisez /api/v1/admin/operations/restore.' });
   });
 
   async function performAutoBackup(): Promise<void> {
@@ -4340,51 +4340,13 @@ async function startServer() {
     res.json(loadAuditLogs());
   });
 
-  app.get(['/api/system/backup', '/api/v1/admin/system/backup'], authenticate, (req, res) => {
-    if (!requireSuperAdmin(req, res)) return;
-    const { secretPassphrase: _secretPassphrase, ...safeConfig } = loadMasterConfig();
-    res.setHeader('Content-Disposition', `attachment; filename="abessvpn-full-backup-${Date.now()}.json"`);
-    res.json({
-      users: loadUsers(),
-      tokens: loadTokens().map(backupClientToken),
-      config: safeConfig,
-      protocolConfigs: loadProtocolConfigs(),
-      transactions: loadTransactions(),
-      plans: loadPlans(),
-      requests: loadRequests(),
-      auditLogs: loadAuditLogs(),
-      appVersion: loadAppVersionConfig(),
-      timestamp: new Date().toISOString()
-    });
+  // Historical plaintext system endpoints are disabled, including restore.
+  // Use /api/v1/admin/operations/backup and /api/v1/admin/operations/restore.
+  app.get(['/api/system/backup', '/api/v1/admin/system/backup'], authenticate, (_req, res) => {
+    res.status(410).json({ error: 'Sauvegardes JSON non chiffrées désactivées.' });
   });
-
-  app.post(['/api/system/restore', '/api/v1/admin/system/restore'], authenticate, (req, res) => {
-    const user: AppUser = (req as any).user;
-    if (user.role !== 'SUPER_ADMIN') {
-      res.status(403).json({ error: 'Accès réservé au Super Administrateur.' });
-      return;
-    }
-    const payload = req.body;
-    if (!payload || typeof payload !== 'object' ||
-        (payload.users !== undefined && !validRestoredUsers(payload.users))) {
-      res.status(400).json({ error: 'Fichier de sauvegarde invalide.' });
-      return;
-    }
-    if (Array.isArray(payload.plans)) savePlans(payload.plans);
-    if (Array.isArray(payload.requests)) saveRequests(payload.requests);
-    // Audit history is append-only and is never overwritten by a restore.
-    if (Array.isArray(payload.users)) saveUsers(payload.users);
-    if (Array.isArray(payload.tokens)) saveTokens(payload.tokens);
-    if (payload.config) saveMasterConfig(payload.config);
-    if (Array.isArray(payload.protocolConfigs)) saveProtocolConfigs(payload.protocolConfigs);
-    logAudit({
-      actor: user.name,
-      role: user.role,
-      action: 'SYSTEM_RESTORE',
-      details: 'Restauration complète de la base de données.'
-    });
-    activeSessions.clear();
-    res.json({ ok: true, message: 'Base de données restaurée avec succès.' });
+  app.post(['/api/system/restore', '/api/v1/admin/system/restore'], authenticate, (_req, res) => {
+    res.status(410).json({ error: 'Restauration JSON non chiffrée désactivée.' });
   });
 
   app.get('/api/v1/admin/tokens/:id/variants', authenticate, (req, res) => {
