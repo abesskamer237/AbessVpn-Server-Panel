@@ -54,9 +54,12 @@ export function registerSsh(app:Express,d:{
         trafficVerified:Boolean(a.usageObservedAt),usedBytes:a.usageObservedAt?a.usedBytes:null,
         online:ready(a.nodeId)&&a.usageObservedAt?a.online||0:null}))});
   });
-  app.post('/api/v1/admin/ssh/accounts',d.authenticate,admin,(req,res)=>{
+  // Resellers may register *existing* supplier credentials, never provision system users.
+  // Only Super Admin may associate a record with a managed VPS/node.
+  app.post('/api/v1/admin/ssh/accounts',d.authenticate,(req,res)=>{
     const actor=(req as any).user;
     const nodeId=String(req.body?.nodeId||'')||undefined, node=nodeId?d.nodes().find(n=>n.id===nodeId&&n.enabled):undefined, config=req.body?.config;
+    if (actor.role !== 'SUPER_ADMIN' && nodeId) return res.sendStatus(403);
     if((nodeId&&!node)||!config||typeof config.host!=='string'||!/^[a-zA-Z0-9](?:[a-zA-Z0-9.-]{0,251}[a-zA-Z0-9])?$/.test(config.host)||
       (node&&config.host!==node.host)||!SSH_MODES.includes(config.transport)||
       !Number.isInteger(config.port)||config.port<1||config.port>65535||
@@ -70,7 +73,9 @@ export function registerSsh(app:Express,d:{
     }
     const username=String(config.username||'').trim(),label=String(req.body?.label||username).trim();
     const days=Number(req.body?.days),quotaGb=Number(req.body?.quotaGb),maxConnections=Number(req.body?.maxConnections);
-    const ownerId=String(req.body?.resellerId||actor.id),owner=d.users().find(u=>u.id===ownerId&&u.status==='active');
+    // A reseller cannot charge another account or assign a supplier record to a sibling.
+    const ownerId=actor.role==='SUPER_ADMIN'?String(req.body?.resellerId||actor.id):actor.id;
+    const owner=d.users().find(u=>u.id===ownerId&&u.status==='active');
     if(!owner||!d.ownerActive(ownerId)||!/^[a-z][a-z0-9_-]{2,31}$/.test(username)||label.length>80||
       !Number.isInteger(days)||days<1||days>366||!Number.isFinite(quotaGb)||quotaGb<0.01||quotaGb>100000||
       !Number.isInteger(maxConnections)||maxConnections<1||maxConnections>10)return res.status(400).json({error:'Client, durée, quota ou connexions invalides.'});
