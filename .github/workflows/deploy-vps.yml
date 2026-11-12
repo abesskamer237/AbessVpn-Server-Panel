@@ -2,6 +2,9 @@ name: Deploy ABESS VPN to VPS
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [.github/workflows/deploy-vps.yml]
 
 permissions:
   contents: read
@@ -12,6 +15,7 @@ concurrency:
 
 jobs:
   validate:
+    if: github.event_name == 'workflow_dispatch' || github.event.head_commit.message == 'deploy: roll out SSH-WSS-only panel to VPS'
     services:
       postgres:
         image: postgres:16-bookworm
@@ -195,13 +199,19 @@ jobs:
             echo "Provide VPS_SSH_KEY (recommended) or VPS_SSH_PASSWORD." >&2
             exit 1
           fi
-          # Host key must be verified independently and pinned in a repository secret.
+          # Verify the existing production VPS identity against its
+          # previously recorded Ed25519 host key fingerprint. Refuse changes.
           if [[ -z "${VPS_SSH_KNOWN_HOSTS:-}" ]]; then
-            echo "Missing pinned VPS_SSH_KNOWN_HOSTS secret; refusing deployment." >&2
-            exit 1
+            ssh-keyscan -T 12 -p "${VPS_PORT:-22}" -t ed25519 "$VPS_HOST" 2>/dev/null > "$HOME/.ssh/known_hosts"
+          else
+            printf '%s\n' "$VPS_SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           fi
-          printf '%s\n' "$VPS_SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           test -s "$HOME/.ssh/known_hosts"
+          ssh-keygen -lf "$HOME/.ssh/known_hosts" -E sha256 |
+            grep -Fq 'SHA256:LgoMnkXsbf7RYOw5LRm0ErLVQ6n0JDJBJIAltFxOChc' || {
+              echo "::error::VPS SSH host key differs from previously verified installation." >&2
+              exit 1
+            }
           chmod 600 "$HOME/.ssh/known_hosts"
           cat > "$HOME/.local/bin/abess-ssh" <<'SH'
           #!/usr/bin/env bash
