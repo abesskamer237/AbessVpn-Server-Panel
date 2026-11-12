@@ -13,7 +13,7 @@ Le workflow GitHub `deploy-vps.yml` reste strictement manuel
 ## Architecture
 
 ```text
-Client SSH sur WebSocket (WSS) :443 /ssh-ws
+Client SSH sur WebSocket (WSS) :443 /ssh-ws/<secret-client-unique>
        |
        v
 Caddy (HTTPS, certificat public valide)
@@ -75,7 +75,7 @@ exécution, prendre une sauvegarde et programmer une fenêtre de maintenance.
 
 ```caddyfile
 ssh.example.test {
-  handle /ssh-ws {
+  handle /ssh-ws/* {
     reverse_proxy 127.0.0.1:2080 {
       stream_close_delay 5m
     }
@@ -85,7 +85,7 @@ ssh.example.test {
 ```
 
 Utiliser **le vrai domaine du VPS**, un certificat TLS vérifié et le chemin
-`/ssh-ws`. Ne pas ouvrir 2080 ou 2222 sur Internet. Si le panneau utilise
+`/ssh-ws/<secret-client>` (et non le chemin générique). Ne pas ouvrir 2080 ou 2222 sur Internet. Si le panneau utilise
 déjà Caddy sur le même hôte, fusionner cette route dans sa configuration
 avec précaution, sans supprimer les routes du panneau.
 
@@ -97,21 +97,58 @@ chemin, puis clique sur **Activer SSH-WS**.
 ## Parcours revendeur
 
 1. Le revendeur choisit **Créer un client SSH-WS administré**.
-2. Le panneau génère un identifiant `abv_...` et un mot de passe fort,
+2. Le panneau génère un identifiant `abv_...`, un mot de passe fort et **un secret WebSocket de 256 bits** réservé à ce compte,
    attribue les crédits et enregistre un compte en état `pending`.
 3. L'agent VPS effectue `GET /api/v1/nodes/ID/ssh-ws/desired` avec la clé
    unique du nœud et réconcilie uniquement les utilisateurs du groupe prévu.
-4. L'agent signale `active`, `blocked` ou `error` par
-   `POST /api/v1/nodes/ID/ssh-ws/status`.
+4. L'agent publie la politique locale (quota octets, secret hashé et nombre de sessions), puis attend la confirmation de la passerelle et signale `active`, `blocked` ou `error` ainsi que les octets réels et sessions par `POST /api/v1/nodes/ID/ssh-ws/status`.
 5. Le revendeur ne peut exporter les secrets clients qu'une fois le compte
    confirmé actif et l'agent de contrôle récent.
-6. Une suspension ou expiration devient un verrouillage sur le VPS au cycle
-   suivant (environ 10 s en conditions normales). Les sessions actives de
-   ce compte sont également terminées.
+6. Une suspension ou expiration verrouille l'accès SSH et la passerelle ferme les WebSockets du compte lors de l'actualisation de la politique ; les anciennes sessions SSH du compte sont également terminées.
+7. La consommation des octets en montée et descente est cumulée ; le quota bloque les nouveaux octets dès que la limite est atteinte. Les sessions WebSocket simultanées sont plafonnées par compte, indépendamment du nombre de connexions globales du VPS.
 
 En cas de coupure durable avec le panneau, l'agent passe en mode
 **fail-closed** après 10 minutes et révoque les comptes suivis localement.
 Les dates d'expiration déjà mémorisées restent également respectées.
+
+## Quotas réels et limite de connexions simultanées
+
+La passerelle refuse désormais **toute connexion sur le chemin générique**
+`/ssh-ws` et exige le chemin privé `/ssh-ws/<secret>` retourné par l'export
+authentifié du compte. Le secret n'apparaît pas dans les listes ou l'inventaire
+public du panneau. Le client doit être compatible WebSocket RFC6455 **binaire**
+et importer le chemin exact. Faire attention aux logs du proxy : ne jamais
+journaliser le chemin complet ni le communiquer sur un groupe public.
+
+- **Quota Go :** `quotaBytes` représente le total octets utiles transportés
+  entre SSH et WebSocket dans **les deux sens** ; 1 Go = 1024³ octets. Cela
+  comprend les octets du protocole SSH, pas l'en-tête WebSocket/TLS/IP.
+- **Connexions simultanées :** `maxConnections` est le nombre de *sessions
+  WebSocket établies avec le même secret*, pas le nombre de canaux TCP,
+  d'appareils identifiables ou de connexions Internet à l'intérieur de SSH.
+- **Durabilité :** la passerelle réserve à l'avance des blocs de 256 Kio et
+  effectue `fsync` avant de transférer ces octets. Les octets non utilisés
+  sont restitués si la session se ferme proprement. Après un arrêt brutal,
+  un solde réservé non utilisé peut rester facturé (jusqu'à 256 Kio par
+  compte). Un redémarrage ne remet donc pas le compteur à zéro.
+- **Concurrence :** toutes les sessions du même compte utilisent le *même*
+  compteur en mémoire dans **un processus unique par VPS**. Ne pas lancer
+  deux instances de cette passerelle avec la même politique/les mêmes
+  utilisateurs : le comptage partagé n'est pas distribué.
+- **Comptage vers le panneau :** la passerelle écrit un fichier de métriques
+  local ; l'agent root le lit après avoir vérifié la génération de politique
+  appliquée, puis transmet des octets cumulés monotones et le nombre de
+  WebSockets ouverts par la clé privée du VPS.
+- **Sécurité :** la création ou l'authentification SSH conserve son propre
+  mot de passe. Le secret du chemin ne remplace pas l'authentification SSH ;
+  il associe le trafic du WebSocket au quota d'un compte.
+- **Coupure du panneau :** l'agent protège aussi les dates d'expiration
+  en local, et la passerelle refuse les politiques devenues trop anciennes.
+
+**Migration impérative :** les anciens comptes SSH-WS administrés sans secret
+WebSocket dédié ne peuvent pas être utilisés tels quels. Ne pas réactiver
+le chemin commun pour assurer leur compatibilité ; provisionner de nouveaux
+comptes ou mettre en place une migration de secrets sécurisée.
 
 ## Stabilité et performance
 
@@ -121,7 +158,9 @@ Les dates d'expiration déjà mémorisées restent également respectées.
   tampon de 64 Kio
 - `TCP_NODELAY`, keepalive TCP et ping/pong WebSocket toutes les 30 s
 - 10 s maximum de connexion initiale à OpenSSH local
-- plafond de connexions simultanées configurable, valeur initiale 512
+- plafond global de connexions configuré à 512 initialement, et plafond strict par compte de 1 à 10 WebSockets
+- journal de consommation durcie sur disque avec synchronisation préalable des réservations
+- politique partagée en lecture seule par le processus non privilégié
 - service systemd relancé en cas de panne et séparé du panneau/API
 - TLS/WSS à configurer uniquement sur Caddy, côté domaine public
 
@@ -130,13 +169,17 @@ ces optimisations **ne garantissent pas une vitesse Internet précise**.
 
 ## Limites vérifiables avant exploitation commerciale
 
-**Très important : les quotas en Go et `maxConnections` sont encore des
-paramètres commerciaux, pas des garanties techniques.** La première version
-du provisionneur applique effectivement création, verrouillage, expiration,
-suspension et fermeture des sessions, mais ne dispose pas encore d'un compteur
-octets SSH fiable par utilisateur ni d'un limiteur strict de connexions.
-Ne promettre ni débit illimité ni blocage automatique à N Go tant qu'une
-mesure/limitation fiable sur le VPS n'est pas intégrée et testée.
+**Les quotas d'octets et les plafonds de WebSockets sont maintenant
+appliqués par la passerelle locale** pour les comptes SSH-WS administrés.
+Les comptes SSH importés d'un fournisseur non géré restent commerciaux
+seulement. Cette intégration ne constitue PAS une preuve de comportement
+sur ton vrai VPS : aucune installation, aucune mesure réseau réelle ni
+validation d'un client VPN tiers n'a encore été effectuée.
+
+Le débit maximal, la stabilité sur 24–72 h, l'impact des réservations durables
+sur le stockage et la configuration TLS sont à mesurer en conditions réelles
+avant d'annoncer une performance commerciale. Les comptes utilisant des
+technologies autres que WebSocket binaire RFC6455 ne sont pas couverts.
 
 Le compte `managed` n'existe que sur un VPS expressément autorisé ;
 l'importation d'un compte acheté chez un fournisseur reste **inventory-only**.
