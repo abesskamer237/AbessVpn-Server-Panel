@@ -177,20 +177,24 @@ assert.throws(()=>validateDesired({...desired,accounts:[{...desired.accounts[0],
 const users=new Set(),commands=[];
 const host={
   exists(name){return users.has(name);},
+  managed(name){return users.has(name);},
   create(name){commands.push('create');users.add(name);},
   password(_name,value){commands.push('password');assert.equal(value,password);},
   enable(){commands.push('enable');},
   disable(){commands.push('disable');}
 };
+// A pre-existing account is adopted only when the host explicitly confirms
+// that it already belongs to ABESS' managed Linux security boundary.
+users.add(user);
 let first=await reconcile(desired,{},host);
 assert.deepEqual(first.reports,[{id,state:'active'}]);
-assert.deepEqual(commands,['create','password','enable']);
+assert.deepEqual(commands,['password','enable']);
 assert.equal(first.state[user].sourceIp,'127.120.0.1');
 assert.equal(allowedUsersConfig({accounts:[{username:user,sourceIp:first.state[user].sourceIp,enabled:true}]}).includes(
   'AllowUsers '+user+'@127.120.0.1'),true);
 assert.equal(allowedUsersConfig({accounts:[]}).includes('_abess_no_active_user_'),true);
 let again=await reconcile(desired,first.state,host);
-assert.deepEqual(commands,['create','password','enable']);
+assert.deepEqual(commands,['password','enable']);
 users.delete(user);
 const recreated=await reconcile(desired,again.state,host);
 assert.deepEqual(commands.slice(-3),['create','password','enable']);
