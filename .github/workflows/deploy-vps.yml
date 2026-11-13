@@ -1,5 +1,5 @@
 name: Deploy ABESS VPN to VPS
-# Production rollout marker: loopback API control plane with CloudFront edge
+# Production rollout marker: gateway diagnostics with CloudFront edge
 
 on:
   workflow_dispatch:
