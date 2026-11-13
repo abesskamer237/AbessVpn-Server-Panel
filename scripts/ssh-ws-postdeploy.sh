@@ -139,8 +139,15 @@ for attempt in {1..20}; do
   sleep 2
 done
 [[ "$READY" = yes ]] || {
-  journalctl -u abess-ssh-ws-reconciler --lines 30 --no-pager >&2 || true
-  echo 'Gateway policy did not become ready. Check panel API and agent key.' >&2; exit 1
+  echo '[ABESS SSH-WS] Reconciler diagnostics:' >&2
+  journalctl -u abess-ssh-ws-reconciler --since '-3 min' --no-pager >&2 || true
+  echo '[ABESS SSH-WS] Gateway diagnostics:' >&2
+  journalctl -u abess-ssh-ws-gateway --since '-3 min' --no-pager >&2 || true
+  if [[ -s /var/lib/abess-ssh-ws/policy/gateway-policy.json ]]; then
+    echo '[ABESS SSH-WS] Validating generated gateway policy directly...' >&2
+    node --input-type=module -e "import fs from 'node:fs';import {validatePolicy} from '/opt/abess-panel/scripts/ssh-ws-quota.mjs';try{const p=JSON.parse(fs.readFileSync('/var/lib/abess-ssh-ws/policy/gateway-policy.json','utf8'));validatePolicy(p);console.error('GATEWAY_POLICY_DIRECT=VALID')}catch(e){console.error('GATEWAY_POLICY_DIRECT=INVALID '+e.message)}" >&2 || true
+  fi
+  echo 'Gateway policy did not become ready. Check diagnostics above.' >&2; exit 1
 }
 curl --fail --silent --show-error --max-time 10 "https://$VPN_DOMAIN/api/v1/ping" | grep -q '"ok":true'
 docker compose exec -T caddy test -S /var/run/abess-ssh-ws/gateway.sock || {
