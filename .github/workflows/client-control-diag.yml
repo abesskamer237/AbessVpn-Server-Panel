@@ -67,4 +67,5 @@ jobs:
           PY
           echo "=== PANEL SSH INVENTORY ==="
           cd "$HOME/abessvpn-server"
-          docker compose exec -T api node -e '"'"'const fs=require("fs"),p=(process.env.DATA_DIR||"/app/data")+"/ssh.json"; const j=JSON.parse(fs.readFileSync(p,"utf8")); for(const a of j.accounts||[]) console.log(a.id,a.username,JSON.stringify({label:a.label,enabled:a.enabled,managed:a.managed,provisionState:a.provisionState,nodeId:a.nodeId}));'"'"''
+          docker compose exec -T api sh -lc 'echo DATA_DIR="\${DATA_DIR:-unset}"; find / -maxdepth 4 -name ssh.json -type f 2>/dev/null | head -n 20'
+          docker compose exec -T api node -e '"'"'const fs=require("fs"),cp=require("child_process"); const paths=cp.execSync("find / -maxdepth 4 -name ssh.json -type f 2>/dev/null || true",{encoding:"utf8"}).trim().split(/\\n/).filter(Boolean); for(const p of paths){try{const j=JSON.parse(fs.readFileSync(p,"utf8")); for(const a of j.accounts||[]) console.log(a.id,a.username,JSON.stringify({label:a.label,enabled:a.enabled,managed:a.managed,provisionState:a.provisionState,nodeId:a.nodeId}));}catch{}}'"'"'
