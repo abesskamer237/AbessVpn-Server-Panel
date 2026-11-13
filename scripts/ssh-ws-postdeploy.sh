@@ -100,7 +100,7 @@ fi
 rm -f /tmp/abess-desired.json
 echo '[ABESS SSH-WS] Node credential verified.'
 echo '[ABESS SSH-WS] Configuring independent SSHD, gateway and reconciler...'
-(cd /opt/abess-panel && CONTROL_API_BASE_URL="https://$VPN_DOMAIN" \
+(cd /opt/abess-panel && CONTROL_API_BASE_URL="http://127.0.0.1:3000" \
  VPN_NODE_ID="$VPN_NODE_ID" VPN_NODE_KEY_FILE="$NODE_KEY_SOURCE" \
  bash scripts/install-ssh-ws.sh)
 GID="$(id -g abess-gateway)"
