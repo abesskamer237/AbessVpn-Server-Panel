@@ -62,6 +62,7 @@ export async function startGateway(options={}){
   });
   let previousPolicy=null;
   let policyError=false;
+  let lastPolicyError='';
   function refreshPolicy(){
     try {
       const raw=fs.readFileSync(policyFile,'utf8');
@@ -70,9 +71,12 @@ export async function startGateway(options={}){
         previousPolicy=raw;
       }
       policyError=false;
-    }catch{
+      lastPolicyError='';
+    }catch(error){
       // Never authorize from stale/malformed policy, even if previously valid.
       policyError=true;
+      const message=error instanceof Error?error.message:String(error);
+      if(message!==lastPolicyError){console.error('[SSH-WS] Gateway policy rejected:',message);lastPolicyError=message;}
     }
     for(const ws of wss.clients){
       if(policyError||!ledger.authorized(ws.accountId))ws.terminate();
