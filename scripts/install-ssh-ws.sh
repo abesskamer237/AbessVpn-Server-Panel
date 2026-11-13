@@ -9,8 +9,8 @@ fi
 if [[ "$PWD" == *" "* || "$PWD" == /root* || "$PWD" == /home/* ]]; then
   echo "Use a system checkout such as /opt/abess-panel (no spaces/home directory)." >&2; exit 1
 fi
-if [[ -z "${CONTROL_API_BASE_URL:-}" || ! "${CONTROL_API_BASE_URL}" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?$ ]]; then
-  echo "CONTROL_API_BASE_URL must be the HTTPS panel origin." >&2; exit 1
+if [[ -z "${CONTROL_API_BASE_URL:-}" || ! "${CONTROL_API_BASE_URL}" =~ ^(https://[A-Za-z0-9.-]+(:[0-9]+)?|http://127\.0\.0\.1:[0-9]+)$ ]]; then
+  echo "CONTROL_API_BASE_URL must be HTTPS or an explicit 127.0.0.1 loopback origin." >&2; exit 1
 fi
 if [[ ! "${VPN_NODE_ID:-}" =~ ^[0-9a-f-]{36}$ || ! -s "${VPN_NODE_KEY_FILE:-/dev/null}" ]]; then
   echo "Provide VPN_NODE_ID and root-only VPN_NODE_KEY_FILE." >&2; exit 1
