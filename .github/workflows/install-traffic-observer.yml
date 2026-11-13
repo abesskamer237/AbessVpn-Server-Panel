@@ -107,14 +107,7 @@ jobs:
           sleep 12
           systemctl is-active --quiet abess-traffic-observer.service
           test -s /var/lib/abess-traffic-observer/status.json
-          python3 - <<'PY'
-import json
-p='/var/lib/abess-traffic-observer/status.json'
-j=json.load(open(p))
-assert j.get('format')=='abess-passive-traffic-status-v1'
-assert j.get('lastReportOk') is True, j
-print('TRAFFIC_OBSERVER_STATUS='+json.dumps({k:j.get(k) for k in ['lastReportOk','trackedAccounts','activeMappedConnections','packets','portPayloadBytes']}))
-PY
+          python3 -c "import json; p='/var/lib/abess-traffic-observer/status.json'; j=json.load(open(p)); assert j.get('format')=='abess-passive-traffic-status-v1'; assert j.get('lastReportOk') is True, j; print('TRAFFIC_OBSERVER_STATUS='+json.dumps({k:j.get(k) for k in ['lastReportOk','trackedAccounts','activeMappedConnections','packets','portPayloadBytes']}))"
           REMOTE
           after="$("$HOME/.local/bin/abess-ssh" -p "${VPS_PORT:-22}" "${VPS_USER}@${VPS_HOST}" "systemctl show -p MainPID --value willy-ssh-ws.service 2>/dev/null || true")"
           echo "VPN_ENGINE_PID_BEFORE=$before"
