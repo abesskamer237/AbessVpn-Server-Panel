@@ -56,6 +56,10 @@ jobs:
           gateway_before="$(systemctl show -p MainPID --value abess-ssh-ws-gateway.service)"
           docker compose build api
           docker compose up -d --no-deps api
+          reconciler_exec="$(systemctl show -p ExecStart --value abess-ssh-ws-reconciler.service | sed -n 's#.* \(/[^ ]*ssh-ws-reconciler\.mjs\).*#\1#p')"
+          echo "RECONCILER_EXEC=$reconciler_exec"
+          test -n "$reconciler_exec"
+          install -m 0755 scripts/ssh-ws-reconciler.mjs "$reconciler_exec"
           systemctl restart abess-ssh-ws-reconciler.service
           sleep 14
           systemctl is-active --quiet abess-ssh-ws-reconciler.service
