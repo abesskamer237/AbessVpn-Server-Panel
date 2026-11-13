@@ -184,7 +184,7 @@ try{
     sni:'sshws.example.test',port:443,path:'/ssh-ws'
   },admin,'PUT');
   assert.equal(management.status,200);
-  const created=await call('admin/ssh/managed',{nodeId:managedNode.body.id,label:'Managed customer',days:7,quotaGb:0.5,maxConnections:1,resellerId:peer.body.id},importerSession);
+  const created=await call('admin/ssh/managed',{nodeId:managedNode.body.id,label:'Managed customer',username:'abv_managed01',password:'StrongPass_123',days:7,quotaGb:0.5,maxConnections:1,resellerId:peer.body.id},importerSession);
   assert.equal(created.status,202);
   assert.equal(created.body.managed,true);
   assert.equal(created.body.provisionState,'pending');
@@ -199,8 +199,8 @@ try{
   assert.equal(manifest.body.format,'abess-managed-ssh-ws-v1');
   assert.equal(manifest.body.accounts.length,1);
   assert.equal(manifest.body.accounts[0].enabled,true);
-  assert.match(manifest.body.accounts[0].username,/^abv_[0-9a-f]{12}$/);
-  assert.ok(manifest.body.accounts[0].password.length>=32);
+  assert.equal(manifest.body.accounts[0].username,'abv_managed01');
+  assert.equal(manifest.body.accounts[0].password,'StrongPass_123');
   assert.match(manifest.body.accounts[0].tokenHash,/^[0-9a-f]{64}$/);
   assert.equal(manifest.body.accounts[0].quotaBytes,Math.round(0.5*1024**3));
   assert.equal(manifest.body.accounts[0].maxConnections,1);
