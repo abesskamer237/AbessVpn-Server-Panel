@@ -44,8 +44,16 @@ export function hostOperations(run=command) {
   function check(username) {
     if(run('/usr/bin/id',['-gn',username]).trim()!==group)throw Error('Account not in managed group');
   }
+  function managed(username) {
+    if(!exists(username))return false;
+    try {
+      check(username);
+      const uid=Number(run('/usr/bin/id',['-u',username]).trim());
+      return Number.isInteger(uid)&&uid>=1000;
+    } catch {return false;}
+  }
   return {
-    exists,
+    exists,managed,
     create(username) {
       if(exists(username))throw Error('Refusing to adopt existing Linux account');
       run('/usr/sbin/useradd',['--no-create-home','--gid',group,'--shell','/usr/sbin/nologin',username]);
@@ -85,7 +93,8 @@ export async function reconcile(manifest,previous={},host=hostOperations()) {
     try {
       const sourceIp=allocate(old);
       if(old && old.id!==a.id)throw Error('Account id changed unexpectedly');
-      if(!old && host.exists(a.username))throw Error('Existing unmanaged Linux user');
+      if(!old && host.exists(a.username) && !(typeof host.managed==='function' && host.managed(a.username)))
+        throw Error('Existing unmanaged Linux user');
       const enabled=a.enabled && Date.parse(a.expiresAt)>Date.now();
       if(enabled) {
         const missing=!host.exists(a.username);
