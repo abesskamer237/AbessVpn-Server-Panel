@@ -1,0 +1,89 @@
+name: Capture VPS source for GitHub sync
+
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/capture-vps-source.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Configure SSH authentication
+        shell: bash
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_SSH_KNOWN_HOSTS: ${{ secrets.VPS_SSH_KNOWN_HOSTS }}
+          VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD || secrets.VPS_PASSWORD }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_PORT: ${{ vars.VPS_PORT }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.ssh" "$HOME/.local/bin"
+          if [[ -n "${VPS_SSH_KEY:-}" ]]; then
+            printf '%s\n' "$VPS_SSH_KEY" > "$HOME/.ssh/id_ed25519"
+            chmod 600 "$HOME/.ssh/id_ed25519"
+          elif [[ -n "${VPS_SSH_PASSWORD:-}" ]]; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq sshpass
+          else
+            echo "Missing VPS authentication" >&2
+            exit 1
+          fi
+          if [[ -n "${VPS_SSH_KNOWN_HOSTS:-}" ]]; then
+            printf '%s\n' "$VPS_SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          else
+            ssh-keyscan -T 12 -p "${VPS_PORT:-22}" -t ed25519 "$VPS_HOST" 2>/dev/null > "$HOME/.ssh/known_hosts"
+          fi
+          test -s "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+          cat > "$HOME/.local/bin/abess-ssh" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [[ -s "$HOME/.ssh/id_ed25519" ]]; then
+            exec ssh -o StrictHostKeyChecking=yes -i "$HOME/.ssh/id_ed25519" -o BatchMode=yes -o IdentitiesOnly=yes "$@"
+          fi
+          export SSHPASS="$VPS_SSH_PASSWORD"
+          exec sshpass -e ssh -o StrictHostKeyChecking=yes -o PreferredAuthentications=password,keyboard-interactive -o PubkeyAuthentication=no "$@"
+          SH
+          chmod 700 "$HOME/.local/bin/abess-ssh"
+
+      - name: Capture sanitized VPS source
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ vars.VPS_PORT }}
+          VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD || secrets.VPS_PASSWORD }}
+        run: |
+          set -euo pipefail
+          mkdir -p vps-source
+          "$HOME/.local/bin/abess-ssh" -p "${VPS_PORT:-22}" "${VPS_USER}@${VPS_HOST}" \
+            'cd "$HOME/abessvpn-server" && tar -czf - \
+              --exclude=.git --exclude=node_modules --exclude=dist \
+              --exclude=.env --exclude=.env.* --exclude=.deploy* \
+              --exclude=data --exclude=deployment-backups \
+              --exclude=INITIAL_ADMIN_CREDENTIALS.txt \
+              --exclude=.initial-admin-credentials.new \
+              --exclude="*.key" --exclude="*.pem" --exclude="*.crt" \
+              --exclude="*.log" .' > vps-source/source.tar.gz
+          tar -xzf vps-source/source.tar.gz -C vps-source
+          rm vps-source/source.tar.gz
+          git diff --no-index -- . vps-source > vps-source.diff || test $? -eq 1
+          tar -czf vps-source-sanitized.tar.gz -C vps-source .
+          sha256sum vps-source-sanitized.tar.gz > vps-source.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: abess-vps-source-sanitized
+          path: |
+            vps-source-sanitized.tar.gz
+            vps-source.diff
+            vps-source.sha256
+          retention-days: 1
