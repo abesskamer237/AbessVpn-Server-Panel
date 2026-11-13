@@ -16,6 +16,8 @@ export interface SshAccount {
   salt?: string; verifier?: string; nodeId?: string; connection?: SshConnection;
   resellerId?: string; resellerName?: string; renewalIds?: string[]; renewalRequests?: Record<string,{gb:number;days:number}>;
   usageObservedAt?: string;
+  blockedDeviceKeys?: string[];
+  devices?: Array<{deviceKey:string;usedBytes:number;upBytes:number;downBytes:number;firstSeenAt?:string;lastSeenAt?:string;activeSessions?:number;ip?:string;userAgent?:string;name?:string;brand?:string}>;
   online?: number; password: string; payload?: string;
   quotaBytes: number; usedBytes: number; maxConnections: number;
   expiresAt: string; enabled: boolean; createdAt: string;
@@ -205,6 +207,22 @@ export function registerSsh(app:Express,d:{
   app.delete('/api/v1/admin/ssh/accounts/:id',d.authenticate,admin,(req,res)=>{
     const state=d.read(),index=state.accounts.findIndex(a=>a.id===req.params.id);if(index<0)return res.sendStatus(404);
     state.accounts.splice(index,1);d.write(state);d.audit({action:'SSH_DELETED',actor:(req as any).user.id,role:(req as any).user.role,details:String(req.params.id)});res.sendStatus(204);
+  });
+
+  app.get('/api/v1/admin/ssh/accounts/:id/devices',d.authenticate,(req,res)=>{
+    const actor=(req as any).user,a=d.read().accounts.find(a=>a.id===req.params.id);
+    if(!a)return res.sendStatus(404);if(!allowed(actor,a))return res.sendStatus(403);
+    const blocked=new Set(a.blockedDeviceKeys||[]);
+    return res.set('Cache-Control','no-store').json((a.devices||[]).map(device=>({...device,blocked:blocked.has(device.deviceKey)})).sort((x,y)=>Date.parse(y.lastSeenAt||'')-Date.parse(x.lastSeenAt||'')));
+  });
+  app.put('/api/v1/admin/ssh/accounts/:id/devices/:deviceKey',d.authenticate,(req,res)=>{
+    const actor=(req as any).user,state=d.read(),a=state.accounts.find(a=>a.id===req.params.id);
+    if(!a)return res.sendStatus(404);if(!allowed(actor,a))return res.sendStatus(403);
+    const deviceKey=String(req.params.deviceKey||'');if(!/^[a-f0-9]{32}$/.test(deviceKey))return res.sendStatus(400);
+    const blocked=req.body?.blocked;if(typeof blocked!=='boolean')return res.sendStatus(400);
+    const set=new Set(a.blockedDeviceKeys||[]);if(blocked)set.add(deviceKey);else set.delete(deviceKey);a.blockedDeviceKeys=[...set].slice(0,50);
+    d.write(state);d.audit({action:blocked?'SSH_DEVICE_BLOCKED':'SSH_DEVICE_UNBLOCKED',actor:actor.id,role:actor.role,details:JSON.stringify({accountId:a.id,deviceKey})});
+    return res.json({deviceKey,blocked});
   });
   app.post('/api/v1/admin/ssh/accounts/:id/config',d.authenticate,(req,res)=>{
     const a=d.read().accounts.find(a=>a.id===req.params.id),actor=(req as any).user;
