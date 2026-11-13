@@ -1,5 +1,5 @@
 name: Deploy ABESS VPN to VPS
-# Production rollout marker: diagnose acknowledgement and CloudFront edge
+# Production rollout marker: diagnose gateway policy and CloudFront edge
 
 on:
   workflow_dispatch:
