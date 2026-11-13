@@ -231,13 +231,19 @@ export function registerSsh(app:Express,d:{
     if(!a)return res.sendStatus(404);if(!allowed(actor,a))return res.sendStatus(403);
     if(!a.connection||req.body?.transport!==a.connection.transport)return res.sendStatus(400);
     if(!active(a))return res.status(503).json({error:'Accès SSH indisponible.'});
-    const {hasPayload,...connection}=a.connection;
+    const {hasPayload,...storedConnection}=a.connection;
     if(a.managed && (!a.wsAccessKey || !a.wsAccessHash))
       return res.status(503).json({error:'La licence SSH-WS doit être régénérée avec un secret WebSocket personnel.'});
+    const node=a.managed?d.nodes().find(n=>n.id===a.nodeId):undefined;
+    const edgeHost=a.managed?(node?.sshWsSni||storedConnection.sni||storedConnection.host):storedConnection.host;
+    const connection={...storedConnection,host:edgeHost,sni:a.managed?edgeHost:storedConnection.sni,port:a.managed?(node?.sshWsPort||storedConnection.port):storedConnection.port};
     const clientPath=a.managed ? `${connection.path}/${unseal(a.wsAccessKey!,d.key)}` : connection.path;
+    const managedPayload=a.managed
+      ? `GET ${clientPath} HTTP/1.1[crlf]Host: ${edgeHost}[crlf]Upgrade: websocket[crlf]Connection: Upgrade[crlf]Sec-WebSocket-Version: 13[crlf][crlf]`
+      : null;
     d.audit({action:'SSH_CREDENTIALS_EXPORTED',actor:actor.id,role:actor.role,details:a.id});
     res.set('Cache-Control','no-store').json({format:'abess-ssh-v1',protocol:'ssh',...connection,path:clientPath,username:a.username,password:unseal(a.password,d.key),
-      payload:a.payload?unseal(a.payload,d.key):a.connection.wire==='http-upgrade'?sshPayload(a.connection.tls?(a.connection.sni||a.connection.host):a.connection.host,a.connection.port,a.connection.path):null,
-      expiresAt:a.expiresAt,quotaGb:a.quotaBytes/1024**3,usedGb:a.usageObservedAt?a.usedBytes/1024**3:null,trafficVerified:Boolean(a.usageObservedAt)});
+      payload:managedPayload||(a.payload?unseal(a.payload,d.key):a.connection.wire==='http-upgrade'?sshPayload(a.connection.tls?(a.connection.sni||a.connection.host):a.connection.host,a.connection.port,a.connection.path):null),
+      websocket:true,expiresAt:a.expiresAt,quotaGb:a.quotaBytes/1024**3,usedGb:a.usageObservedAt?a.usedBytes/1024**3:null,trafficVerified:Boolean(a.usageObservedAt)});
   });
 }
