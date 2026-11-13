@@ -176,6 +176,16 @@ export function registerSsh(app:Express,d:{
     a.renewalIds=[...(a.renewalIds||[]),id];a.renewalRequests={...a.renewalRequests,[id]:{gb,days}};d.write(state);d.audit({action:'SSH_RENEWED',actor:actor.id,role:actor.role,details:JSON.stringify({id:a.id,additionalGb:gb,days})});
     res.json(safeSshAccount(a));
   });
+  app.post('/api/v1/admin/ssh/accounts/:id/retry',d.authenticate,(req,res)=>{
+    const actor=(req as any).user,state=d.read(),a=state.accounts.find(a=>a.id===req.params.id);
+    if(!a)return res.sendStatus(404);if(!allowed(actor,a))return res.sendStatus(403);
+    if(!a.managed)return res.status(409).json({error:'Seuls les comptes SSH-WSS administrés peuvent être réparés.'});
+    if(Date.parse(a.expiresAt)<=Date.now()||a.usedBytes>=a.quotaBytes||!d.ownerActive(a.resellerId))
+      return res.status(409).json({error:'Renouvelez ou réactivez le propriétaire avant réparation.'});
+    a.enabled=true;a.provisionState='pending';delete a.lastAppliedAt;
+    d.write(state);d.audit({action:'SSH_REPAIR_REQUESTED',actor:actor.id,role:actor.role,details:a.id});
+    return res.status(202).set('Cache-Control','no-store').json(safeSshAccount(a));
+  });
   app.patch('/api/v1/admin/ssh/accounts/:id',d.authenticate,(req,res)=>{
     const state=d.read(),a=state.accounts.find(a=>a.id===req.params.id),actor=(req as any).user;
     if(!a)return res.sendStatus(404);if(!allowed(actor,a))return res.sendStatus(403);
