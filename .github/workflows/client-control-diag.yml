@@ -1,0 +1,67 @@
+name: One-time client control diagnostics
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/client-control-diag.yml]
+permissions:
+  contents: read
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure SSH
+        shell: bash
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_SSH_KNOWN_HOSTS: ${{ secrets.VPS_SSH_KNOWN_HOSTS }}
+          VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD || secrets.VPS_PASSWORD }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_PORT: ${{ vars.VPS_PORT }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.ssh" "$HOME/.local/bin"
+          if [[ -n "${VPS_SSH_KEY:-}" ]]; then
+            printf '%s\n' "$VPS_SSH_KEY" > "$HOME/.ssh/id_ed25519"; chmod 600 "$HOME/.ssh/id_ed25519"
+          elif [[ -n "${VPS_SSH_PASSWORD:-}" ]]; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq sshpass
+          else exit 1; fi
+          if [[ -n "${VPS_SSH_KNOWN_HOSTS:-}" ]]; then printf '%s\n' "$VPS_SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"; else ssh-keyscan -T 12 -p "${VPS_PORT:-22}" -t ed25519 "$VPS_HOST" 2>/dev/null > "$HOME/.ssh/known_hosts"; fi
+          chmod 600 "$HOME/.ssh/known_hosts"
+          cat > "$HOME/.local/bin/abess-ssh" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [[ -s "$HOME/.ssh/id_ed25519" ]]; then exec ssh -o StrictHostKeyChecking=yes -i "$HOME/.ssh/id_ed25519" -o BatchMode=yes -o IdentitiesOnly=yes "$@"; fi
+          export SSHPASS="$VPS_SSH_PASSWORD"; exec sshpass -e ssh -o StrictHostKeyChecking=yes -o PreferredAuthentications=password,keyboard-interactive -o PubkeyAuthentication=no "$@"
+          SH
+          chmod 700 "$HOME/.local/bin/abess-ssh"
+      - name: Read client control state
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ vars.VPS_PORT }}
+          VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD || secrets.VPS_PASSWORD }}
+        run: |
+          "$HOME/.local/bin/abess-ssh" -p "${VPS_PORT:-22}" "${VPS_USER}@${VPS_HOST}" 'python3 - <<'"'"'PY'"'"'
+          import json, subprocess, pathlib, pwd, grp
+          print("=== RECONCILER STATE ===")
+          p=pathlib.Path("/var/lib/abess-ssh-ws/state.json")
+          try:
+            j=json.loads(p.read_text())
+            for u,v in sorted((j.get("state") or {}).items()):
+              print(u, "id="+str(v.get("id")), "enabled="+str(v.get("enabled")), "sourceIp="+str(v.get("sourceIp")))
+          except Exception as e: print("STATE_ERROR",type(e).__name__)
+          print("=== LINUX ABV USERS ===")
+          for e in pwd.getpwall():
+            if not e.pw_name.startswith("abv_"): continue
+            try: g=grp.getgrgid(e.pw_gid).gr_name
+            except: g="?"
+            r=subprocess.run(["passwd","-S",e.pw_name],capture_output=True,text=True)
+            safe=" ".join(r.stdout.split()[:2])
+            print(e.pw_name,"uid="+str(e.pw_uid),"group="+g,"shell="+e.pw_shell,"passwd="+safe)
+          print("=== SERVICES ===")
+          for s in ["abess-ssh-ws-reconciler.service","willy-ssh-ws.service","abess-traffic-observer.service"]:
+            r=subprocess.run(["systemctl","is-active",s],capture_output=True,text=True)
+            print(s,r.stdout.strip())
+          PY'
