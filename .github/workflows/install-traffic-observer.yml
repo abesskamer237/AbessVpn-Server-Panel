@@ -53,7 +53,16 @@ jobs:
           export SSHPASS="$VPS_SSH_PASSWORD"
           exec sshpass -e ssh -o StrictHostKeyChecking=yes -o PreferredAuthentications=password,keyboard-interactive -o PubkeyAuthentication=no "$@"
           SH
-          chmod 700 "$HOME/.local/bin/abess-ssh"
+          cat > "$HOME/.local/bin/abess-scp" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [[ -s "$HOME/.ssh/id_ed25519" ]]; then
+            exec scp -o StrictHostKeyChecking=yes -i "$HOME/.ssh/id_ed25519" -o BatchMode=yes -o IdentitiesOnly=yes "$@"
+          fi
+          export SSHPASS="$VPS_SSH_PASSWORD"
+          exec sshpass -e scp -o StrictHostKeyChecking=yes -o PreferredAuthentications=password,keyboard-interactive -o PubkeyAuthentication=no "$@"
+          SH
+          chmod 700 "$HOME/.local/bin/abess-ssh" "$HOME/.local/bin/abess-scp"
       - name: Install observer without modifying VPN engine
         shell: bash
         env:
@@ -64,12 +73,12 @@ jobs:
         run: |
           set -euo pipefail
           before="$("$HOME/.local/bin/abess-ssh" -p "${VPS_PORT:-22}" "${VPS_USER}@${VPS_HOST}" "systemctl show -p MainPID --value willy-ssh-ws.service 2>/dev/null || true")"
-          base64 -w0 scripts/ssh-ws-passive-traffic.py | "$HOME/.local/bin/abess-ssh" -p "${VPS_PORT:-22}" "${VPS_USER}@${VPS_HOST}" 'bash -s' <<'REMOTE'
+          "$HOME/.local/bin/abess-scp" -P "${VPS_PORT:-22}" scripts/ssh-ws-passive-traffic.py "${VPS_USER}@${VPS_HOST}:/tmp/abess-traffic-observer.py"
+          "$HOME/.local/bin/abess-ssh" -p "${VPS_PORT:-22}" "${VPS_USER}@${VPS_HOST}" 'bash -s' <<'REMOTE'
           set -euo pipefail
-          payload="$(cat)"
           install -d -m 0755 /usr/local/lib/abess
-          printf '%s' "$payload" | base64 -d > /usr/local/lib/abess/ssh-ws-passive-traffic.py
-          chmod 0755 /usr/local/lib/abess/ssh-ws-passive-traffic.py
+          install -m 0755 /tmp/abess-traffic-observer.py /usr/local/lib/abess/ssh-ws-passive-traffic.py
+          rm -f /tmp/abess-traffic-observer.py
           python3 -m py_compile /usr/local/lib/abess/ssh-ws-passive-traffic.py
           install -d -m 0700 /var/lib/abess-traffic-observer
           cat > /etc/systemd/system/abess-traffic-observer.service <<'UNIT'
