@@ -7,6 +7,7 @@
  * the operator's trusted Caddy WSS proxy, never in this loopback process.
  */
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import path from 'node:path';
 import http from 'node:http';
 import net from 'node:net';
@@ -20,13 +21,13 @@ function validPort(value,allowZero=false){
   if(!Number.isInteger(p)||p<(allowZero?0:1)||p>65535)throw Error('Invalid TCP port');
   return p;
 }
-function meter(ledger,id,kill){
+function meter(ledger,id,deviceKey,direction,kill){
   return new Transform({
     highWaterMark:64*1024,
     transform(chunk,_encoding,callback){
       try{
         if(!Buffer.isBuffer(chunk)||chunk.length>65536){kill();return callback();}
-        const take=ledger.consume(id,chunk.length);
+        const take=ledger.consume(id,chunk.length,deviceKey,direction);
         if(take===chunk.length)return callback(null,chunk);
         // Deliver no bytes beyond the exact remaining allowance.
         if(take>0)this.push(chunk.subarray(0,take));
@@ -94,22 +95,31 @@ export async function startGateway(options={}){
   server.on('upgrade',(req,socket,head)=>{
     const secret=req.url?.startsWith(basePath+'/')?req.url.slice(basePath.length+1):null;
     const id=!policyError&&secret?ledger.findBySecret(secret):null;
-    if(req.method!=='GET'||!id||wss.clients.size>=maxConnections||!ledger.start(id)){
+    const remote=req.socket.remoteAddress;
+    const forwarded=remote==='127.0.0.1'||remote==='::1'?String(req.headers['x-forwarded-for']||'').split(',')[0].trim():'';
+    const ip=(forwarded||remote||'').slice(0,80);
+    const userAgent=String(req.headers['user-agent']||'').slice(0,160);
+    const rawDeviceId=String(req.headers['x-abess-device-id']||'').trim();
+    const stableId=/^[A-Za-z0-9._:-]{8,128}$/.test(rawDeviceId)?rawDeviceId:(ip+'|'+userAgent);
+    const deviceKey=crypto.createHash('sha256').update(stableId).digest('hex').slice(0,32);
+    const meta={deviceKey,ip,userAgent,name:String(req.headers['x-abess-device-name']||''),brand:String(req.headers['x-abess-device-brand']||'')};
+    const sessionId=id?ledger.start(id,meta):null;
+    if(req.method!=='GET'||!id||wss.clients.size>=maxConnections||!sessionId){
       socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
       return;
     }
     try {
       wss.handleUpgrade(req,socket,head,ws=>{
-        ws.accountId=id;
+        ws.accountId=id;ws.deviceKey=deviceKey;ws.sessionId=sessionId;
         wss.emit('connection',ws);
       });
     }catch {
-      ledger.stop(id);
+      ledger.stop(id,deviceKey);
       socket.destroy();
     }
   });
   wss.on('connection',ws=>{
-    const id=ws.accountId;
+    const id=ws.accountId,deviceKey=ws.deviceKey;
     ws.isAlive=true;
     ws.on('pong',()=>{ws.isAlive=true;});
     // OpenSSH sees a unique loopback *source* IP for every managed licence.
@@ -126,14 +136,14 @@ export async function startGateway(options={}){
     const release=()=>{
       if(released)return;
       released=true;
-      ledger.stop(id);
+      ledger.stop(id,deviceKey);
     };
     const kill=()=>{upstream.destroy();ws.terminate();};
     ws.on('message',(_data,isBinary)=>{if(!isBinary)kill();});
     upstream.once('connect',()=>{
       upstream.setTimeout(0);
-      const uplink=meter(ledger,id,kill);
-      const downlink=meter(ledger,id,kill);
+      const uplink=meter(ledger,id,deviceKey,'up',kill);
+      const downlink=meter(ledger,id,deviceKey,'down',kill);
       uplink.on('error',kill);
       downlink.on('error',kill);
       stream.pipe(uplink).pipe(upstream);
