@@ -270,10 +270,16 @@ export async function syncOnce(env=process.env,request=fetch,host=hostOperations
     throw Error('Node credentials missing');
   const endpoint=new URL('/api/v1/nodes/'+encodeURIComponent(env.VPN_NODE_ID)+'/ssh-ws/',base);
   const headers={Authorization:'Bearer '+env.VPN_NODE_KEY};
-  const response=await request(new URL('desired',endpoint),{
-    headers,redirect:'error',signal:AbortSignal.timeout(8000)
-  });
-  if(!response.ok)throw Error('Desired state unavailable');
+  let response;
+  try{
+    response=await request(new URL('desired',endpoint),{
+      headers,redirect:'error',signal:AbortSignal.timeout(8000)
+    });
+  }catch(error){
+    const cause=error?.cause?.code||error?.cause?.message||error?.code||error?.message||String(error);
+    throw Error('Desired request transport failed: '+cause);
+  }
+  if(!response.ok)throw Error('Desired state unavailable HTTP '+response.status);
   const desired=await response.json();
   const result=await reconcile(desired,store.state||{},host);
   store.state=result.state;
