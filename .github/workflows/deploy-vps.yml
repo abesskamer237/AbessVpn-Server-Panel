@@ -1,5 +1,5 @@
 name: Deploy ABESS VPN to VPS
-# Production rollout marker: diagnose reconciler and CloudFront edge
+# Production rollout marker: restart SSH-WSS services with CloudFront edge
 
 on:
   workflow_dispatch:
