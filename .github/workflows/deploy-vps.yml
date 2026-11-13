@@ -1,5 +1,5 @@
 name: Deploy ABESS VPN to VPS
-# Production rollout marker: CloudFront edge dfvnxizhrq0wj.cloudfront.net
+# Production rollout marker: diagnose reconciler and CloudFront edge
 
 on:
   workflow_dispatch:
