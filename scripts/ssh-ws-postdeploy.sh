@@ -59,12 +59,22 @@ VPN_NODE_ID="$(node -e 'const j=require(process.argv[1]);if(!/^[a-f0-9-]{36}$/.t
 EDGE_SNI="${SSH_WS_EDGE_HOST:-$VPN_DOMAIN}"
 [[ "$EDGE_SNI" =~ ^[a-z0-9.-]+$ ]] || { echo "Invalid SSH_WS_EDGE_HOST" >&2; exit 1; }
 FINGERPRINT="$(ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub -E sha256 | awk '{print $2}')"
-docker compose exec -T \
+CURRENT_NODE_KEY="$(node -e 'const fs=require("node:fs");const j=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));if(!/^[a-f0-9]{64}$/.test(j.key||""))process.exit(2);process.stdout.write(j.key)' "$BOOTSTRAP")"
+EDGE_RESULT="$(docker compose exec -T \
   -e "ABESS_NODE_ID=$VPN_NODE_ID" \
   -e "ABESS_SSH_SNI=$EDGE_SNI" \
   -e "ABESS_SSH_FINGERPRINT=$FINGERPRINT" \
-  api node /app/scripts/update-ssh-ws-edge.mjs >/dev/null
-node -e 'const fs=require("node:fs");const j=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));if(!/^[a-f0-9]{64}$/.test(j.key))process.exit(2);fs.writeFileSync(process.argv[2],j.key+"\n",{mode:0o600})' "$BOOTSTRAP" "$NODE_KEY_SOURCE"
+  -e "ABESS_CURRENT_NODE_KEY=$CURRENT_NODE_KEY" \
+  api node /app/scripts/update-ssh-ws-edge.mjs)"
+REPAIRED_NODE_KEY="$(printf '%s' "$EDGE_RESULT" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);if(!/^[a-f0-9]{64}$/.test(j.key||""))process.exit(2);process.stdout.write(j.key)})')"
+node - "$BOOTSTRAP" "$REPAIRED_NODE_KEY" <<'NODE'
+const fs=require('node:fs');
+const file=process.argv[2],key=process.argv[3];
+const data=JSON.parse(fs.readFileSync(file,'utf8'));
+data.key=key;
+fs.writeFileSync(file,JSON.stringify(data)+'\n',{mode:0o600});
+NODE
+printf '%s\n' "$REPAIRED_NODE_KEY" > "$NODE_KEY_SOURCE"
 chmod 0600 "$NODE_KEY_SOURCE"
 echo '[ABESS SSH-WS] Verifying node API credential before starting reconciler...'
 NODE_KEY="$(cat "$NODE_KEY_SOURCE")"
