@@ -87,7 +87,7 @@ export default function App(){
     }catch(e){setNotice(e instanceof Error?e.message:'Actualisation impossible')}
     finally{setLoading(false)}
   }
-  useEffect(()=>{if(user)void refresh()},[user?.id]);
+  useEffect(()=>{if(!user)return;void refresh();const timer=window.setInterval(()=>{void refresh()},10000);return()=>window.clearInterval(timer)},[user?.id]);
 
   const notifications=useMemo(()=>{
     const list:{tone:'danger'|'warning'|'info',title:string,detail:string,tab:Tab}[]=[];
