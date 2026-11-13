@@ -31,7 +31,13 @@ jobs:
           if [[ -s "$HOME/.ssh/id_ed25519" ]]; then exec ssh -o StrictHostKeyChecking=yes -i "$HOME/.ssh/id_ed25519" -o BatchMode=yes -o IdentitiesOnly=yes "$@"; fi
           export SSHPASS="$VPS_SSH_PASSWORD"; exec sshpass -e ssh -o StrictHostKeyChecking=yes -o PreferredAuthentications=password,keyboard-interactive -o PubkeyAuthentication=no "$@"
           SH
-          chmod 700 "$HOME/.local/bin/abess-ssh"
+          cat > "$HOME/.local/bin/abess-scp" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [[ -s "$HOME/.ssh/id_ed25519" ]]; then exec scp -o StrictHostKeyChecking=yes -i "$HOME/.ssh/id_ed25519" -o BatchMode=yes -o IdentitiesOnly=yes "$@"; fi
+          export SSHPASS="$VPS_SSH_PASSWORD"; exec sshpass -e scp -o StrictHostKeyChecking=yes -o PreferredAuthentications=password,keyboard-interactive -o PubkeyAuthentication=no "$@"
+          SH
+          chmod 700 "$HOME/.local/bin/abess-ssh" "$HOME/.local/bin/abess-scp"
       - name: Update panel and reconciler only
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
@@ -39,14 +45,15 @@ jobs:
           VPS_PORT: ${{ vars.VPS_PORT }}
           VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD || secrets.VPS_PASSWORD }}
         run: |
+          "$HOME/.local/bin/abess-scp" -P "${VPS_PORT:-22}" src/App.tsx "${VPS_USER}@${VPS_HOST}:abessvpn-server/src/App.tsx"
+          "$HOME/.local/bin/abess-scp" -P "${VPS_PORT:-22}" src/components/SshCenter.tsx "${VPS_USER}@${VPS_HOST}:abessvpn-server/src/components/SshCenter.tsx"
+          "$HOME/.local/bin/abess-scp" -P "${VPS_PORT:-22}" modules/ssh.ts "${VPS_USER}@${VPS_HOST}:abessvpn-server/modules/ssh.ts"
+          "$HOME/.local/bin/abess-scp" -P "${VPS_PORT:-22}" scripts/ssh-ws-reconciler.mjs "${VPS_USER}@${VPS_HOST}:abessvpn-server/scripts/ssh-ws-reconciler.mjs"
           "$HOME/.local/bin/abess-ssh" -p "${VPS_PORT:-22}" "${VPS_USER}@${VPS_HOST}" 'bash -s' <<'REMOTE'
           set -euo pipefail
           cd "$HOME/abessvpn-server"
           tunnel_before="$(systemctl show -p MainPID --value willy-ssh-ws.service)"
           gateway_before="$(systemctl show -p MainPID --value abess-ssh-ws-gateway.service)"
-          git fetch origin main
-          git checkout main
-          git reset --hard origin/main
           docker compose build api
           docker compose up -d --no-deps api
           systemctl restart abess-ssh-ws-reconciler.service
