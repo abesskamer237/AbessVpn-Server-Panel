@@ -1,12 +1,26 @@
 {
   email {$ACME_EMAIL}
+  auto_https disable_redirects
+}
+
+:80 {
+  @ws {
+    header Upgrade *websocket*
+  }
+  handle @ws {
+    reverse_proxy 172.18.0.1:8080
+  }
+  handle {
+    redir https://{$VPN_DOMAIN}{uri} permanent
+  }
 }
 
 {$VPN_DOMAIN} {
-  @managedSshWs path /ssh-ws/*
-  handle @managedSshWs {
-    # Bound Unix socket mounted from the VPS; no host TCP exposure.
-    reverse_proxy unix//var/run/abess-ssh-ws/gateway.sock
+  @ws {
+    header Upgrade *websocket*
+  }
+  handle @ws {
+    reverse_proxy 172.18.0.1:8080
   }
   handle {
     encode zstd gzip
