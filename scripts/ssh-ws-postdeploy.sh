@@ -56,6 +56,14 @@ if [[ ! -s "$BOOTSTRAP" ]]; then
 fi
 chmod 0600 "$BOOTSTRAP"
 VPN_NODE_ID="$(node -e 'const j=require(process.argv[1]);if(!/^[a-f0-9-]{36}$/.test(j.id))process.exit(2);process.stdout.write(j.id)' "$BOOTSTRAP")"
+EDGE_SNI="${SSH_WS_EDGE_HOST:-$VPN_DOMAIN}"
+[[ "$EDGE_SNI" =~ ^[a-z0-9.-]+$ ]] || { echo "Invalid SSH_WS_EDGE_HOST" >&2; exit 1; }
+FINGERPRINT="$(ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub -E sha256 | awk '{print $2}')"
+docker compose exec -T \
+  -e "ABESS_NODE_ID=$VPN_NODE_ID" \
+  -e "ABESS_SSH_SNI=$EDGE_SNI" \
+  -e "ABESS_SSH_FINGERPRINT=$FINGERPRINT" \
+  api node /app/scripts/update-ssh-ws-edge.mjs >/dev/null
 node -e 'const fs=require("node:fs");const j=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));if(!/^[a-f0-9]{64}$/.test(j.key))process.exit(2);fs.writeFileSync(process.argv[2],j.key+"\n",{mode:0o600})' "$BOOTSTRAP" "$NODE_KEY_SOURCE"
 chmod 0600 "$NODE_KEY_SOURCE"
 echo '[ABESS SSH-WS] Configuring independent SSHD, gateway and reconciler...'
@@ -95,7 +103,7 @@ docker compose exec -T caddy test -S /var/run/abess-ssh-ws/gateway.sock || {
 STATUS="$(curl --silent --show-error --max-time 10 -o /dev/null -w '%{http_code}' "https://$VPN_DOMAIN/ssh-ws/no-such-client")"
 [[ "$STATUS" = '404' ]] || { echo "Unexpected WSS proxy test response HTTP $STATUS" >&2; exit 1; }
 echo 'ABESS_SSH_WS_INSTALLATION=SUCCESS'
-echo "ABESS_SSH_WS_SNI=$VPN_DOMAIN"
+echo "ABESS_SSH_WS_SNI=$EDGE_SNI"
 echo 'ABESS_SSH_WS_PORT=443'
 echo 'ABESS_SSH_WS_PATH=/ssh-ws/<unique-client-secret>'
 echo "ABESS_SSH_WS_NODE_ID=$VPN_NODE_ID"
