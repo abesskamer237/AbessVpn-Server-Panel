@@ -1,0 +1,113 @@
+name: Install passive traffic observer only
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - scripts/ssh-ws-passive-traffic.py
+      - .github/workflows/install-traffic-observer.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate observer syntax
+        run: python -m py_compile scripts/ssh-ws-passive-traffic.py
+      - name: Configure SSH
+        shell: bash
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_SSH_KNOWN_HOSTS: ${{ secrets.VPS_SSH_KNOWN_HOSTS }}
+          VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD || secrets.VPS_PASSWORD }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_PORT: ${{ vars.VPS_PORT }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.ssh" "$HOME/.local/bin"
+          if [[ -n "${VPS_SSH_KEY:-}" ]]; then
+            printf '%s\n' "$VPS_SSH_KEY" > "$HOME/.ssh/id_ed25519"; chmod 600 "$HOME/.ssh/id_ed25519"
+          elif [[ -n "${VPS_SSH_PASSWORD:-}" ]]; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq sshpass
+          else exit 1; fi
+          if [[ -n "${VPS_SSH_KNOWN_HOSTS:-}" ]]; then
+            printf '%s\n' "$VPS_SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          else
+            ssh-keyscan -T 12 -p "${VPS_PORT:-22}" -t ed25519 "$VPS_HOST" 2>/dev/null > "$HOME/.ssh/known_hosts"
+          fi
+          chmod 600 "$HOME/.ssh/known_hosts"
+          cat > "$HOME/.local/bin/abess-ssh" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [[ -s "$HOME/.ssh/id_ed25519" ]]; then
+            exec ssh -o StrictHostKeyChecking=yes -i "$HOME/.ssh/id_ed25519" -o BatchMode=yes -o IdentitiesOnly=yes "$@"
+          fi
+          export SSHPASS="$VPS_SSH_PASSWORD"
+          exec sshpass -e ssh -o StrictHostKeyChecking=yes -o PreferredAuthentications=password,keyboard-interactive -o PubkeyAuthentication=no "$@"
+          SH
+          chmod 700 "$HOME/.local/bin/abess-ssh"
+      - name: Install observer without modifying VPN engine
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ vars.VPS_PORT }}
+          VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD || secrets.VPS_PASSWORD }}
+        run: |
+          set -euo pipefail
+          before="$("$HOME/.local/bin/abess-ssh" -p "${VPS_PORT:-22}" "${VPS_USER}@${VPS_HOST}" "systemctl show -p MainPID --value willy-ssh-ws.service 2>/dev/null || true")"
+          base64 -w0 scripts/ssh-ws-passive-traffic.py | "$HOME/.local/bin/abess-ssh" -p "${VPS_PORT:-22}" "${VPS_USER}@${VPS_HOST}" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          payload="$(cat)"
+          install -d -m 0755 /usr/local/lib/abess
+          printf '%s' "$payload" | base64 -d > /usr/local/lib/abess/ssh-ws-passive-traffic.py
+          chmod 0755 /usr/local/lib/abess/ssh-ws-passive-traffic.py
+          python3 -m py_compile /usr/local/lib/abess/ssh-ws-passive-traffic.py
+          install -d -m 0700 /var/lib/abess-traffic-observer
+          cat > /etc/systemd/system/abess-traffic-observer.service <<'UNIT'
+          [Unit]
+          Description=ABESS passive SSH-WSS traffic observer
+          After=network-online.target
+          Wants=network-online.target
+          [Service]
+          Type=simple
+          User=root
+          ExecStart=/usr/bin/python3 /usr/local/lib/abess/ssh-ws-passive-traffic.py
+          Restart=always
+          RestartSec=3
+          NoNewPrivileges=true
+          PrivateTmp=true
+          ProtectHome=true
+          ProtectSystem=strict
+          ReadWritePaths=/var/lib/abess-traffic-observer
+          CapabilityBoundingSet=CAP_NET_RAW
+          AmbientCapabilities=CAP_NET_RAW
+          [Install]
+          WantedBy=multi-user.target
+          UNIT
+          systemctl daemon-reload
+          systemctl enable --now abess-traffic-observer.service
+          sleep 12
+          systemctl is-active --quiet abess-traffic-observer.service
+          test -s /var/lib/abess-traffic-observer/status.json
+          python3 - <<'PY'
+import json
+p='/var/lib/abess-traffic-observer/status.json'
+j=json.load(open(p))
+assert j.get('format')=='abess-passive-traffic-status-v1'
+assert j.get('lastReportOk') is True, j
+print('TRAFFIC_OBSERVER_STATUS='+json.dumps({k:j.get(k) for k in ['lastReportOk','trackedAccounts','activeMappedConnections','packets','portPayloadBytes']}))
+PY
+          REMOTE
+          after="$("$HOME/.local/bin/abess-ssh" -p "${VPS_PORT:-22}" "${VPS_USER}@${VPS_HOST}" "systemctl show -p MainPID --value willy-ssh-ws.service 2>/dev/null || true")"
+          echo "VPN_ENGINE_PID_BEFORE=$before"
+          echo "VPN_ENGINE_PID_AFTER=$after"
+          test -n "$before" && test "$before" = "$after"
