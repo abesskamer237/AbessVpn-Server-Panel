@@ -131,7 +131,7 @@ function policyAccounts(desired,report) {
     enabled:a.enabled && states.get(a.id)==='active',
     expiresAt:a.expiresAt,
     quotaBytes:a.quotaBytes,baselineUsedBytes:a.baselineUsedBytes,
-    maxConnections:a.maxConnections
+    maxConnections:a.maxConnections,blockedDevices:Array.isArray(a.blockedDevices)?a.blockedDevices:[]
   }));
 }
 async function persist(file,store,mode=0o600,gid=null) {
@@ -208,7 +208,8 @@ async function readUsage(env,store,policyTime) {
   for(const a of usage.accounts){
     if(!a || !accountIdPattern.test(a.id) || seen.has(a.id) ||
        !Number.isSafeInteger(a.usedBytes) || a.usedBytes<0 ||
-       !Number.isInteger(a.online) || a.online<0 || a.online>5000)return null;
+       !Number.isInteger(a.online) || a.online<0 || a.online>5000 ||
+       (a.devices!==undefined && (!Array.isArray(a.devices) || a.devices.length>50 || a.devices.some(d=>!d||!/^[a-f0-9]{32}$/.test(String(d.deviceKey||''))||!Number.isSafeInteger(Number(d.usedBytes||0))||Number(d.usedBytes||0)<0||!Number.isSafeInteger(Number(d.upBytes||0))||Number(d.upBytes||0)<0||!Number.isSafeInteger(Number(d.downBytes||0))||Number(d.downBytes||0)<0))))return null;
     seen.add(a.id);
   }
   return usage;
@@ -288,7 +289,7 @@ export async function syncOnce(env=process.env,request=fetch,host=hostOperations
     const settings=store.policyAccounts.find(a=>a.id===x.id);
     if(!entry || !settings)return {id:x.id,state:'error'};
     return {id:x.id,state:settings.enabled && entry.usedBytes>=settings.quotaBytes
-      ?'blocked':x.state,usedBytes:entry.usedBytes,online:entry.online};
+      ?'blocked':x.state,usedBytes:entry.usedBytes,online:entry.online,devices:entry.devices||[]};
   });
   const telemetry=await hostTelemetry();
   const ack=await request(new URL('status',endpoint),{
