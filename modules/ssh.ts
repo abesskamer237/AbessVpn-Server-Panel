@@ -143,7 +143,7 @@ export function registerSsh(app:Express,d:{
       id:'ssh_'+crypto.randomUUID(), username, label, managed:true,
       wsAccessKey:seal(wsSecret,d.key),wsAccessHash:crypto.createHash('sha256').update(wsSecret).digest('hex'),
       provisionState:'pending',nodeId:node.id,resellerId:owner.id,resellerName:owner.name,
-      connection:{host:node.host,port:node.sshWsPort||443,transport:'wss',
+      connection:{host:node.sshWsSni||node.host,port:node.sshWsPort||443,transport:'wss',
         fingerprint:node.sshWsFingerprint!,tls:true,sni:node.sshWsSni||node.host,
         path:node.sshWsPath||'/ssh-ws',wire:'websocket',hasPayload:false},
       password:seal(password,d.key),quotaBytes:Math.round(quotaGb*1024**3),usedBytes:0,
