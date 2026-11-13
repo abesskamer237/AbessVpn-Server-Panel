@@ -135,6 +135,8 @@ SSH_WS_POLICY_FILE=/var/lib/abess-ssh-ws/policy/gateway-policy.json
 SSH_WS_USAGE_REPORT_FILE=/var/lib/abess-ssh-ws/gateway/usage-live.json
 SSH_WS_GATEWAY_GID=$(id -g abess-gateway)
 SSH_WS_OFFLINE_LIMIT_MS=600000
+NO_PROXY=127.0.0.1,localhost
+no_proxy=127.0.0.1,localhost
 ENV
 chmod 0600 /etc/abess-ssh-ws/agent.env
 cat > /etc/systemd/system/abess-ssh-ws-reconciler.service <<UNIT
