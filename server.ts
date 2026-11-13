@@ -2020,7 +2020,7 @@ async function startServer() {
           a.usedBytes<a.quotaBytes);
         return {id:a.id,username:a.username,expiresAt:a.expiresAt,enabled,
           tokenHash:a.wsAccessHash || '',quotaBytes:a.quotaBytes,
-          baselineUsedBytes:a.usedBytes,maxConnections:a.maxConnections,
+          baselineUsedBytes:a.usedBytes,maxConnections:a.maxConnections,blockedDevices:a.blockedDeviceKeys||[],
           ...(enabled?{password:unseal(a.password,process.env.MASTER_SECRET!)}:{})};
       })
     }),
@@ -2038,6 +2038,11 @@ async function startServer() {
           a.usedBytes=Math.max(a.usedBytes,report.usedBytes);
           a.online=report.online;
           a.usageObservedAt=now;
+          if(Array.isArray(report.devices))a.devices=report.devices.map((dv:any)=>({
+            deviceKey:String(dv.deviceKey),usedBytes:Number(dv.usedBytes||0),upBytes:Number(dv.upBytes||0),downBytes:Number(dv.downBytes||0),
+            firstSeenAt:String(dv.firstSeenAt||''),lastSeenAt:String(dv.lastSeenAt||''),activeSessions:Number(dv.activeSessions||0),
+            ip:String(dv.ip||'').slice(0,80),userAgent:String(dv.userAgent||'').slice(0,160),name:String(dv.name||'').slice(0,80),brand:String(dv.brand||'').slice(0,80)
+          }));
         }
         const allowed=a.enabled&&sshOwnerActive(a.resellerId)&&
           Date.parse(a.expiresAt)>Date.now()&&a.usedBytes<a.quotaBytes;
