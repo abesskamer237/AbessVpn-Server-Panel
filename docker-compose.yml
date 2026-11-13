@@ -46,6 +46,9 @@ services:
       - abessvpn_data:/app/data
     expose:
       - "3000"
+    # Host-only control plane for the SSH-WSS reconciler. Never exposed publicly.
+    ports:
+      - "127.0.0.1:3000:3000"
     healthcheck:
       test:
         - CMD
