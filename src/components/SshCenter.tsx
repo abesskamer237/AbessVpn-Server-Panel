@@ -148,7 +148,7 @@ export function SshCenter({inventory,resellers,role,audit,request,refresh,create
           <td>{fmtDate(a.expiresAt)}<div className="table-secondary">créé {fmtDate(a.createdAt)}</div></td>
           <td>{a.resellerName||'Administration'}</td>
           <td><div className="row-actions"><button className="btn btn-sm" onClick={()=>setSelectedId(a.id)}><Eye size={13}/>Ouvrir</button>
-            <button className="btn btn-sm" disabled={working} onClick={()=>void run(async()=>{await request('/api/v1/admin/ssh/accounts/'+a.id,'PATCH',{enabled:!a.enabled})})}>{a.enabled?'Suspendre':'Réactiver'}</button></div></td>
+            {a.provisionState==='error'?<button className="btn btn-sm btn-primary" disabled={working} onClick={()=>void run(async()=>{await request('/api/v1/admin/ssh/accounts/'+a.id+'/retry','POST',{})})}>Réparer</button>:<button className="btn btn-sm" disabled={working} onClick={()=>void run(async()=>{await request('/api/v1/admin/ssh/accounts/'+a.id,'PATCH',{enabled:!a.enabled})})}>{a.enabled?'Suspendre':'Réactiver'}</button>}</div></td>
         </tr>})}</tbody></table></div>
 
       <div className="mobile-client-list">{filtered.map(a=>{const st=accountStatus(a);return <article className="mobile-client-card" key={a.id} onClick={()=>setSelectedId(a.id)}>
@@ -221,7 +221,7 @@ export function SshCenter({inventory,resellers,role,audit,request,refresh,create
         </section>
 
         <div className="row-actions">
-          <button className="btn" disabled={working} onClick={()=>void run(async()=>request('/api/v1/admin/ssh/accounts/'+selected.id,'PATCH',{enabled:!selected.enabled}))}>{selected.enabled?'Suspendre':'Réactiver'}</button>
+          {selected.provisionState==='error'?<button className="btn btn-primary" disabled={working} onClick={()=>void run(async()=>request('/api/v1/admin/ssh/accounts/'+selected.id+'/retry','POST',{}))}>Réparer le compte</button>:<button className="btn" disabled={working} onClick={()=>void run(async()=>request('/api/v1/admin/ssh/accounts/'+selected.id,'PATCH',{enabled:!selected.enabled}))}>{selected.enabled?'Suspendre':'Réactiver'}</button>}
           {canOperate&&<button className="btn btn-danger" disabled={working} onClick={()=>{if(confirm('Supprimer définitivement cette licence SSH-WSS ?'))void run(async()=>{await request('/api/v1/admin/ssh/accounts/'+selected.id,'DELETE');setSelectedId('')})}}><Trash2 size={13}/>Supprimer</button>}
         </div>
       </div>
