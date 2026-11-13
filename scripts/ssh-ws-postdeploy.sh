@@ -66,6 +66,29 @@ docker compose exec -T \
   api node /app/scripts/update-ssh-ws-edge.mjs >/dev/null
 node -e 'const fs=require("node:fs");const j=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));if(!/^[a-f0-9]{64}$/.test(j.key))process.exit(2);fs.writeFileSync(process.argv[2],j.key+"\n",{mode:0o600})' "$BOOTSTRAP" "$NODE_KEY_SOURCE"
 chmod 0600 "$NODE_KEY_SOURCE"
+echo '[ABESS SSH-WS] Verifying node API credential before starting reconciler...'
+NODE_KEY="$(cat "$NODE_KEY_SOURCE")"
+DESIRED_STATUS="$(curl --silent --show-error --max-time 12 -o /tmp/abess-desired.json -w '%{http_code}' \
+  -H "Authorization: Bearer $NODE_KEY" "https://$VPN_DOMAIN/api/v1/nodes/$VPN_NODE_ID/ssh-ws/desired" || true)"
+if [[ "$DESIRED_STATUS" != "200" ]]; then
+  echo "[ABESS SSH-WS] Node API credential rejected with HTTP $DESIRED_STATUS; rotating managed node key..." >&2
+  NEW_KEY="$(docker compose exec -T \
+    -e "ABESS_NODE_ID=$VPN_NODE_ID" \
+    api node /app/scripts/rotate-ssh-ws-node-key.mjs)"
+  [[ "$NEW_KEY" =~ ^[a-f0-9]{64}$ ]] || { echo "Invalid rotated node key" >&2; exit 1; }
+  printf '%s\n' "$NEW_KEY" > "$NODE_KEY_SOURCE"
+  chmod 0600 "$NODE_KEY_SOURCE"
+  DESIRED_STATUS="$(curl --silent --show-error --max-time 12 -o /tmp/abess-desired.json -w '%{http_code}' \
+    -H "Authorization: Bearer $NEW_KEY" "https://$VPN_DOMAIN/api/v1/nodes/$VPN_NODE_ID/ssh-ws/desired" || true)"
+fi
+[[ "$DESIRED_STATUS" == "200" ]] || {
+  echo "[ABESS SSH-WS] Desired-state endpoint still failing: HTTP $DESIRED_STATUS" >&2
+  cat /tmp/abess-desired.json >&2 || true
+  rm -f /tmp/abess-desired.json
+  exit 1
+}
+rm -f /tmp/abess-desired.json
+echo '[ABESS SSH-WS] Node credential verified.'
 echo '[ABESS SSH-WS] Configuring independent SSHD, gateway and reconciler...'
 (cd /opt/abess-panel && CONTROL_API_BASE_URL="https://$VPN_DOMAIN" \
  VPN_NODE_ID="$VPN_NODE_ID" VPN_NODE_KEY_FILE="$NODE_KEY_SOURCE" \
