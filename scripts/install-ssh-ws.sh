@@ -157,7 +157,11 @@ UMask=0077
 WantedBy=multi-user.target
 UNIT
 systemctl daemon-reload
-systemctl enable --now abess-ssh-ws-sshd.service abess-ssh-ws-gateway.service abess-ssh-ws-reconciler.service
+systemctl enable abess-ssh-ws-sshd.service abess-ssh-ws-gateway.service abess-ssh-ws-reconciler.service
+# Always restart: installation rewrites unit files, SSHD policy and gateway/reconciler code.
+systemctl restart abess-ssh-ws-sshd.service
+systemctl restart abess-ssh-ws-gateway.service
+systemctl restart abess-ssh-ws-reconciler.service
 printf 'SSH-WS on private Unix socket -> SSH on 127.0.0.1:2222\n'
 printf 'Ed25519 SSH host fingerprint (verify independently):\n'
 ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub -E sha256
