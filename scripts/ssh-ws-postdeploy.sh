@@ -109,6 +109,20 @@ if grep -q '^SSH_WS_GATEWAY_GID=' .env; then
 else printf '\nSSH_WS_GATEWAY_GID=%s\n' "$GID" >> .env
 fi
 chmod 0600 .env
+echo '[ABESS SSH-WS] Verifying reconciler loopback control path with host Node...'
+set -a
+source /etc/abess-ssh-ws/agent.env
+set +a
+VPN_NODE_KEY="$(cat "$VPN_NODE_KEY_FILE")" node -e '
+const base=process.env.CONTROL_API_BASE_URL;
+const id=process.env.VPN_NODE_ID;
+const key=process.env.VPN_NODE_KEY;
+fetch(base+"/api/v1/nodes/"+encodeURIComponent(id)+"/ssh-ws/desired",{
+  headers:{Authorization:"Bearer "+key},signal:AbortSignal.timeout(8000)
+}).then(async r=>{if(!r.ok){console.error("HOST_NODE_CONTROL_HTTP="+r.status+" "+(await r.text()).slice(0,200));process.exit(2)}
+  console.log("HOST_NODE_CONTROL=OK")
+}).catch(e=>{console.error("HOST_NODE_CONTROL_ERROR="+e.message);process.exit(3)})
+'
 echo '[ABESS SSH-WS] Applying secure Caddy Unix socket group membership...'
 docker compose up -d --no-deps --force-recreate caddy
 for name in abess-ssh-ws-sshd abess-ssh-ws-gateway abess-ssh-ws-reconciler; do
