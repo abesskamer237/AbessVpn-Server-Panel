@@ -338,13 +338,13 @@ async function main() {
     try{
       const key=(await fs.readFile(process.env.VPN_NODE_KEY_FILE,'utf8')).trim();
       await syncOnce({...process.env,VPN_NODE_KEY:key},fetch,host,store);
-    }catch{
+    }catch(error){
       failClosedOffline(store,host,Date.now(),offlineLimit);
       const policy={format:'abess-ssh-ws-policy-v1',generatedAt:new Date().toISOString(),
         accounts:store.policyAccounts||[]};
       await configureSshdAccess(process.env,store,policy);
       await publishPolicy(process.env,store,policy);
-      console.error('[SSH-WS] Panel unreachable; local SSH expiry and offline policy enforced.');
+      console.error('[SSH-WS] Synchronization failed; fail-closed policy enforced:',error instanceof Error?error.message:String(error));
     }
     await persist(stateFile,store);
     if(running)await delay(10000);
