@@ -87,18 +87,7 @@ jobs:
           NODE
           echo '=== PORT 8080 SERVICE SOURCE METADATA ==='
           if [[ -r /usr/local/bin/willy_ssh_ws.py ]]; then
-            python3 - <<'PY'
-from pathlib import Path
-p=Path('/usr/local/bin/willy_ssh_ws.py')
-s=p.read_text(errors='replace')
-print('SOURCE_BYTES='+str(len(s.encode())))
-for kw in ['bytes','traffic','usage','counter','log','path','GET ','websocket','recv','send','127.0.0.1','22']:
-    print('KW_'+kw.replace(' ','_')+'='+str(s.lower().count(kw.lower())))
-for i,line in enumerate(s.splitlines(),1):
-    low=line.lower()
-    if any(k in low for k in ['traffic','usage','counter','bytes','logging','logger','path']):
-        print(f'{i}: '+line[:220])
-PY
+            python3 -c "from pathlib import Path; s=Path('/usr/local/bin/willy_ssh_ws.py').read_text(errors='replace'); print('SOURCE_BYTES='+str(len(s.encode()))); [print('KW_'+k.replace(' ','_')+'='+str(s.lower().count(k.lower()))) for k in ['bytes','traffic','usage','counter','log','path','GET ','websocket','recv','send','127.0.0.1','22']]; [print(str(i)+': '+line[:220]) for i,line in enumerate(s.splitlines(),1) if any(k in line.lower() for k in ['traffic','usage','counter','bytes','logging','logger','path'])]"
           fi
           echo '=== SERVICE UNIT ==='
           systemctl cat willy-ssh-ws.service 2>/dev/null | sed -E 's/(Environment=.*(PASS|TOKEN|KEY|SECRET)[^=]*=).*/\1<redacted>/Ig' || true
