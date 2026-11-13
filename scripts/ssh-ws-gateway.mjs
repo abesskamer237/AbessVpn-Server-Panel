@@ -139,7 +139,6 @@ export async function startGateway(options={}){
       ledger.stop(id,deviceKey);
     };
     const kill=()=>{upstream.destroy();ws.terminate();};
-    ws.on('message',(_data,isBinary)=>{if(!isBinary)kill();});
     upstream.once('connect',()=>{
       upstream.setTimeout(0);
       const uplink=meter(ledger,id,deviceKey,'up',kill);
@@ -161,7 +160,7 @@ export async function startGateway(options={}){
       if(!ws.isAlive){ws.terminate();continue;}
       ws.isAlive=false;ws.ping();
     }
-  },30000);
+  },15000);
   const maintenance=setInterval(()=>{
     refreshPolicy();
     try{ledger.report();}catch{
