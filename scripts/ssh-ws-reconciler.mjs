@@ -127,13 +127,17 @@ export function httpsOrigin(value) {
 }
 function policyAccounts(desired,report) {
   const states=new Map(report.reports.map(x=>[x.id,x.state]));
-  return desired.accounts.filter(a=>/^[a-f0-9]{64}$/.test(a.tokenHash)).map(a=>({
-    id:a.id,username:a.username,sourceIp:report.state[a.username]?.sourceIp,tokenHash:a.tokenHash,
-    enabled:a.enabled && states.get(a.id)==='active',
-    expiresAt:a.expiresAt,
-    quotaBytes:a.quotaBytes,baselineUsedBytes:a.baselineUsedBytes,
-    maxConnections:a.maxConnections,blockedDevices:Array.isArray(a.blockedDevices)?a.blockedDevices:[]
-  }));
+  // A locally broken/unmanaged Linux account must fail closed by itself, not
+  // poison the complete gateway policy for every other customer.
+  return desired.accounts
+    .filter(a=>/^[a-f0-9]{64}$/.test(a.tokenHash) && validSourceIp(report.state[a.username]?.sourceIp))
+    .map(a=>({
+      id:a.id,username:a.username,sourceIp:report.state[a.username].sourceIp,tokenHash:a.tokenHash,
+      enabled:a.enabled && states.get(a.id)==='active',
+      expiresAt:a.expiresAt,
+      quotaBytes:a.quotaBytes,baselineUsedBytes:a.baselineUsedBytes,
+      maxConnections:a.maxConnections,blockedDevices:Array.isArray(a.blockedDevices)?a.blockedDevices:[]
+    }));
 }
 async function persist(file,store,mode=0o600,gid=null) {
   await fs.mkdir(path.dirname(file),{recursive:true,mode:0o700});
