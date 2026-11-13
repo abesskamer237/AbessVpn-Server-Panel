@@ -1,5 +1,5 @@
 name: Deploy ABESS VPN to VPS
-# Production rollout marker: CloudFront/WillyVPN SSH-WSS compatibility repair
+# Production rollout marker: CloudFront edge dfvnxizhrq0wj.cloudfront.net
 
 on:
   workflow_dispatch:
