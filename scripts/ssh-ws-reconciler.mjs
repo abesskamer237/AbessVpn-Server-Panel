@@ -296,7 +296,7 @@ export async function syncOnce(env=process.env,request=fetch,host=hostOperations
     method:'POST',headers:{...headers,'Content-Type':'application/json'},
     body:JSON.stringify({reports,telemetry}),redirect:'error',signal:AbortSignal.timeout(8000)
   });
-  if(!ack.ok)throw Error('Acknowledgement rejected');
+  if(!ack.ok){const body=(await ack.text()).slice(0,300).replace(/\s+/g,' ');throw Error('Acknowledgement rejected HTTP '+ack.status+(body?': '+body:''));}
   store.lastSuccessfulAt=Date.now();
   return {...result,reports};
 }
