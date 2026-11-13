@@ -1,5 +1,5 @@
 name: Deploy ABESS VPN to VPS
-# Production rollout marker: client credentials required at creation
+# Production rollout marker: per-device SSH-WSS telemetry and reseller device controls
 
 on:
   workflow_dispatch:
