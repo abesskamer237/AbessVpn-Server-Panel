@@ -1,5 +1,5 @@
 name: Deploy ABESS VPN to VPS
-# Production rollout marker: per-device SSH-WSS telemetry and reseller device controls
+# Production rollout marker: CloudFront/WillyVPN SSH-WSS compatibility repair
 
 on:
   workflow_dispatch:
