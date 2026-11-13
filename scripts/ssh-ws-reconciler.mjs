@@ -120,8 +120,9 @@ export async function reconcile(manifest,previous={},host=hostOperations()) {
 }
 export function httpsOrigin(value) {
   const url=new URL(value);
-  if(url.protocol!=='https:' || url.username || url.password ||
-     url.pathname!=='/' || url.search || url.hash)throw Error('HTTPS panel required');
+  const loopbackHttp=url.protocol==='http:' && url.hostname==='127.0.0.1';
+  if((url.protocol!=='https:' && !loopbackHttp) || url.username || url.password ||
+     url.pathname!=='/' || url.search || url.hash)throw Error('HTTPS or loopback control API required');
   return url;
 }
 function policyAccounts(desired,report) {
