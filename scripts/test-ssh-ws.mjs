@@ -201,6 +201,8 @@ const oldCount=commands.length;
 failClosedOffline({state:first.state,lastSuccessfulAt:Date.now()-700000},host);
 assert.equal(commands.length,oldCount+1);
 assert.throws(()=>httpsOrigin('http://panel.example.test'));
+assert.throws(()=>httpsOrigin('http://localhost:3000'));
+assert.equal(httpsOrigin('http://127.0.0.1:3000').hostname,'127.0.0.1');
 assert.equal(httpsOrigin('https://panel.example.test').hostname,'panel.example.test');
 const mocked=[];
 const store={state:again.state,lastSuccessfulAt:0,
