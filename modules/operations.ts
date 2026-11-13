@@ -182,7 +182,7 @@ export function registerOperations(
     nodeConfig: (node: VpnNode) => unknown;
     nodeUsage: (node: VpnNode, snapshot: any) => void;
     nodeSshDesired: (node: VpnNode) => unknown;
-    nodeSshReport: (node: VpnNode, reports: Array<{id: string; state: string; usedBytes?: number; online?: number}>) => void;
+    nodeSshReport: (node: VpnNode, reports: Array<{id: string; state: string; usedBytes?: number; online?: number; devices?: Array<{deviceKey:string;usedBytes:number;upBytes:number;downBytes:number;firstSeenAt?:string;lastSeenAt?:string;activeSessions?:number;ip?:string;userAgent?:string;name?:string;brand?:string}>}>) => void;
   },
 ) {
   const admin: RequestHandler = (req, res, next) => {
@@ -387,7 +387,8 @@ export function registerOperations(
           !['active','blocked','error'].includes(x.state) ||
           (x.state==='active' && (x.usedBytes===undefined || x.online===undefined)) ||
           (x.usedBytes!==undefined && (!Number.isSafeInteger(x.usedBytes) || x.usedBytes<0)) ||
-          (x.online!==undefined && (!Number.isInteger(x.online)||x.online<0||x.online>10)))) return res.sendStatus(400);
+          (x.online!==undefined && (!Number.isInteger(x.online)||x.online<0||x.online>10)) ||
+          (x.devices!==undefined && (!Array.isArray(x.devices)||x.devices.length>50||x.devices.some((dv:any)=>!dv||!/^[a-f0-9]{32}$/.test(String(dv.deviceKey||''))||!Number.isSafeInteger(Number(dv.usedBytes||0))||Number(dv.usedBytes||0)<0||!Number.isSafeInteger(Number(dv.upBytes||0))||Number(dv.upBytes||0)<0||!Number.isSafeInteger(Number(dv.downBytes||0))||Number(dv.downBytes||0)<0||Number(dv.activeSessions||0)<0||Number(dv.activeSessions||0)>10)))) ) return res.sendStatus(400);
     const telemetry=req.body?.telemetry;
     let safeTelemetry:VpnNode['sshWsHost']|undefined;
     if(telemetry!==undefined){
