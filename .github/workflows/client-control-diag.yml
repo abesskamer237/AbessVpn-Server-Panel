@@ -64,4 +64,7 @@ jobs:
           for s in ["abess-ssh-ws-reconciler.service","willy-ssh-ws.service","abess-traffic-observer.service"]:
             r=subprocess.run(["systemctl","is-active",s],capture_output=True,text=True)
             print(s,r.stdout.strip())
-          PY'
+          PY
+          echo "=== PANEL SSH INVENTORY ==="
+          cd "$HOME/abessvpn-server"
+          docker compose exec -T api node -e '"'"'const fs=require("fs"),p=(process.env.DATA_DIR||"/app/data")+"/ssh.json"; const j=JSON.parse(fs.readFileSync(p,"utf8")); for(const a of j.accounts||[]) console.log(a.id,a.username,JSON.stringify({label:a.label,enabled:a.enabled,managed:a.managed,provisionState:a.provisionState,nodeId:a.nodeId}));'"'"''
