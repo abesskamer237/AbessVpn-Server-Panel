@@ -67,7 +67,7 @@ test('transactions, security and server supervision are reachable for super admi
 test('billing: super admin publishes an offer, reseller orders and declares a Mobile Money payment',async({page,browser})=>{
   const errors:string[]=[];page.on('pageerror',err=>errors.push(err.message));
   await login(page);
-  await page.getByRole('button',{name:'Facturation'}).click();
+  await page.locator('.side-nav').getByRole('button',{name:'Facturation'}).click();
   await expect(page.getByRole('heading',{level:1,name:'Facturation'})).toBeVisible();
   await page.getByRole('button',{name:'Nouvelle offre'}).click();
   await page.getByLabel('Nom de l’offre').fill('Pack Test 50 Go');
@@ -92,7 +92,7 @@ test('billing: super admin publishes an offer, reseller orders and declares a Mo
   await expect(reseller.getByRole('heading',{level:1,name:'Vue d’ensemble'})).toBeVisible();
   await expect(reseller.getByRole('button',{name:'Serveurs'})).toHaveCount(0);
   await expect(reseller.getByRole('button',{name:'Journal d’audit'})).toHaveCount(0);
-  await reseller.getByRole('button',{name:'Facturation'}).click();
+  await reseller.locator('.side-nav').getByRole('button',{name:'Facturation'}).click();
   await expect(reseller.getByText('Coordonnées de paiement')).toBeVisible();
   await reseller.locator('.plan-card',{hasText:'Pack Test 50 Go'}).getByRole('button',{name:'Commander'}).click();
   await expect(reseller.locator('.modal').getByText('Déclarer le paiement',{exact:true})).toBeVisible();
@@ -102,10 +102,22 @@ test('billing: super admin publishes an offer, reseller orders and declares a Mo
   await context.close();
 
   await page.reload();
-  await page.getByRole('button',{name:'Facturation'}).click();
+  await page.locator('.side-nav').getByRole('button',{name:'Facturation'}).click();
   await expect(page.locator('tr',{hasText:'Boutique Test'}).getByRole('button',{name:'Vérifier'})).toBeVisible();
-  await page.getByRole('button',{name:'Journal d’audit'}).click();
+  await page.locator('.side-nav').getByRole('button',{name:'Journal d’audit'}).click();
   await expect(page.getByRole('heading',{level:1,name:'Journal d’audit'})).toBeVisible();
   await expect(page.getByText('PAYMENT DECLARED').first()).toBeVisible();
   expect(errors).toEqual([]);
+});
+
+test('command palette navigates with the keyboard and the sidebar collapses',async({page})=>{
+  await login(page);
+  await page.keyboard.press('Control+k');
+  await expect(page.getByRole('dialog',{name:'Palette de commandes'})).toBeVisible();
+  await page.getByLabel('Rechercher une commande').fill('factur');
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('heading',{level:1,name:'Facturation'})).toBeVisible();
+  await page.getByLabel('Replier la barre latérale').click();
+  await expect(page.locator('.panel-shell.collapsed')).toBeVisible();
+  await page.getByLabel('Déplier la barre latérale').click();
 });

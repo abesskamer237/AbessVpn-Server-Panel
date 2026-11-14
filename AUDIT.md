@@ -48,6 +48,16 @@ Audit complet du panneau, de l’API et du bot Telegram, en production `SSH_WSS_
 - **Validation :** annonces (type, plateforme, priorité), forfaits (longueurs), demandes d’adhésion (longueurs, moyen de paiement), refus d’une demande déjà traitée.
 - **Divers :** MFA signalée comme requise pour les ADMIN, métriques sans plantage si le fichier de jeton est absent.
 
+## Design v3
+
+Interface entièrement redessinée :
+- **Système de design compact :** police Geist hébergée localement, tons neutres et accent émeraude-cyan, thèmes sombre et clair.
+- **Cases groupées par fonction :** les indicateurs d’une page forment une seule bande séparée par de fines lignes. Le tableau de bord est organisé en grille, et les blocs de même nature ont la même forme.
+- **Navigation :** barre latérale par sections, repliable en rail d’icônes ; fil d’Ariane ; palette de commandes Ctrl/⌘ + K (pages, actions, recherche de clients et de revendeurs).
+- **Clients :** tableau dense avec filtres segmentés ; fiche client en panneau latéral organisée en sections ; création par formules prédéfinies.
+- **Revendeurs :** actions en icônes et fenêtre dédiée aux transferts de crédits.
+- **Graphiques :** courbe d’activations en SVG natif (sans bibliothèque), anneau de taux d’activité, jauges de capacité.
+
 ## Panneau web
 
 - **Nouvelle page Facturation**
