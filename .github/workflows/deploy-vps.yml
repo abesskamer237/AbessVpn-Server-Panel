@@ -1,5 +1,5 @@
 name: Deploy ABESS VPN to VPS
-# Production rollout marker: isolate invalid SSH accounts and CloudFront edge
+# Production rollout marker: ABESS VPN v3 billing and reseller workspace
 
 on:
   workflow_dispatch:
