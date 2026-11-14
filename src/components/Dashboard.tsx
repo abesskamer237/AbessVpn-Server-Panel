@@ -1,15 +1,16 @@
 import {Activity,AlertTriangle,ArrowRight,CalendarClock,Radio,Server,Users,Wifi} from 'lucide-react';
-import type {AuditEvent,OpsHealth,Reseller,SshInventory,Transaction} from '../panelTypes';
-import {accountStatus,bytesToGb,fmtDateTime,percent} from '../panelTypes';
+import type {AuditEvent,OpsHealth,Reseller,Role,SshInventory,Transaction} from '../panelTypes';
+import {accountStatus,bytesToGb,fmtDateTime,money,percent} from '../panelTypes';
 
 type Props={
   inventory:SshInventory|null;transactions:Transaction[];resellers:Reseller[];audit:AuditEvent[];
-  ops:OpsHealth|null;onNavigate:(tab:string)=>void;
+  ops:OpsHealth|null;role:Role;onNavigate:(tab:string)=>void;onCreateClient:()=>void;
 };
 
 const compact=(n:number)=>new Intl.NumberFormat('fr-FR',{notation:'compact',maximumFractionDigits:1}).format(n);
 
-export function Dashboard({inventory,transactions,resellers,audit,ops,onNavigate}:Props){
+export function Dashboard({inventory,transactions,resellers,audit,ops,role,onNavigate,onCreateClient}:Props){
+  const isSuper=role==='SUPER_ADMIN';
   const accounts=(inventory?.accounts||[]).filter(a=>a.managed);
   const active=accounts.filter(a=>accountStatus(a).key==='active').length;
   const expiring=accounts.filter(a=>accountStatus(a).key==='expiring').length;
@@ -44,7 +45,7 @@ export function Dashboard({inventory,transactions,resellers,audit,ops,onNavigate
   const days=Array.from({length:7},(_,i)=>{
     const d=new Date();d.setHours(0,0,0,0);d.setDate(d.getDate()-(6-i));
     const start=d.getTime(),end=start+86400000;
-    return {label:d.toLocaleDateString('fr-FR',{weekday:'short'}).replace('.',''),value:accounts.filter(a=>{const t=Date.parse(a.createdAt);return t>=start&&t<end}).length};
+    return {key:start,label:d.toLocaleDateString('fr-FR',{weekday:'short'}).replace('.',''),value:accounts.filter(a=>{const t=Date.parse(a.createdAt);return t>=start&&t<end}).length};
   });
   const maxDay=Math.max(1,...days.map(d=>d.value));
   const recent=[...accounts].sort((a,b)=>Date.parse(b.createdAt)-Date.parse(a.createdAt)).slice(0,6);
@@ -58,7 +59,6 @@ export function Dashboard({inventory,transactions,resellers,audit,ops,onNavigate
     estimatedCost+=q*Number(r.costPerGbCfa||0);
   }
   const estimatedMargin=estimatedRevenue-estimatedCost;
-  const money=(n:number)=>new Intl.NumberFormat('fr-FR',{style:'currency',currency:'XAF',maximumFractionDigits:0}).format(n||0);
   const credits=resellers.reduce((n,r)=>n+Number(r.credits||0),0);
   const recentActivity=audit.length?audit.slice(0,7):transactions.slice(0,7).map(t=>({id:t.id,timestamp:t.timestamp,action:t.type,details:t.note} as AuditEvent));
 
@@ -66,8 +66,9 @@ export function Dashboard({inventory,transactions,resellers,audit,ops,onNavigate
     <div className="page-header">
       <div><h1>Vue d’ensemble</h1><p>Activité commerciale et santé de l’infrastructure SSH-WSS.</p></div>
       <div className="page-actions">
-        <button className="btn btn-primary" onClick={()=>onNavigate('clients')}><Users size={15}/>Nouveau client</button>
-        <button className="btn" onClick={()=>onNavigate('servers')}><Server size={15}/>Voir les serveurs</button>
+        <button className="btn btn-primary" onClick={onCreateClient}><Users size={15}/>Nouveau client</button>
+        {isSuper?<button className="btn" onClick={()=>onNavigate('servers')}><Server size={15}/>Voir les serveurs</button>
+          :<button className="btn" onClick={()=>onNavigate('billing')}><Server size={15}/>Acheter des crédits</button>}
       </div>
     </div>
 
@@ -82,7 +83,7 @@ export function Dashboard({inventory,transactions,resellers,audit,ops,onNavigate
       <section className="card card-pad">
         <div className="section-head"><div><h2>Activations des 7 derniers jours</h2><p>Nouveaux comptes SSH-WSS créés.</p></div><span className="badge badge-success">{monthly} ce mois</span></div>
         <div className="chart">
-          {days.map(d=><div className="chart-column" key={d.label}><div className="chart-value">{d.value}</div><div className="chart-bar" style={{height:Math.max(4,(d.value/maxDay)*125)}}/><div className="chart-label">{d.label}</div></div>)}
+          {days.map(d=><div className="chart-column" key={d.key}><div className="chart-value">{d.value}</div><div className="chart-bar" style={{height:Math.max(4,(d.value/maxDay)*125)}}/><div className="chart-label">{d.label}</div></div>)}
         </div>
       </section>
       <section className="card card-pad">
@@ -105,7 +106,7 @@ export function Dashboard({inventory,transactions,resellers,audit,ops,onNavigate
         </div>
       </section>
       <section className="card card-pad">
-        <div className="section-head"><div><h2>État réseau</h2><p>Disponibilité des nœuds et capacité allouée.</p></div><button className="btn btn-sm btn-ghost" onClick={()=>onNavigate('servers')}>Serveurs <ArrowRight size={13}/></button></div>
+        <div className="section-head"><div><h2>État réseau</h2><p>Disponibilité des nœuds et capacité allouée.</p></div>{isSuper&&<button className="btn btn-sm btn-ghost" onClick={()=>onNavigate('servers')}>Serveurs <ArrowRight size={13}/></button>}</div>
         <div className="service-line"><span>Agents connectés</span><strong>{onlineNodes} / {nodes.length}</strong></div>
         <div className="service-line"><span>Sessions actives</span><strong>{sessions}</strong></div>
         <div className="service-line"><span>Quota total alloué</span><strong>{compact(bytesToGb(quota))} Go</strong></div>
@@ -121,7 +122,7 @@ export function Dashboard({inventory,transactions,resellers,audit,ops,onNavigate
         </tbody></table></div>:<div className="empty-state"><Users size={22}/><strong>Aucun client</strong><span>Crée ta première licence SSH-WSS.</span></div>}
       </section>
       <section className="card card-pad">
-        <div className="section-head"><div><h2>Activité récente</h2><p>Actions administratives et commerciales.</p></div><button className="btn btn-sm btn-ghost" onClick={()=>onNavigate('transactions')}>Registre <ArrowRight size={13}/></button></div>
+        <div className="section-head"><div><h2>Activité récente</h2><p>Actions administratives et commerciales.</p></div><button className="btn btn-sm btn-ghost" onClick={()=>onNavigate(isSuper?'audit':'transactions')}>{isSuper?'Journal':'Registre'} <ArrowRight size={13}/></button></div>
         <div className="alert-list">
           {recentActivity.length?recentActivity.map(x=><div className="alert-row" key={x.id}><span className="alert-dot" style={{background:'var(--brand)'}}/><div><p>{x.action.replaceAll('_',' ')}</p><span>{fmtDateTime(x.timestamp)}{x.details?' · '+String(x.details).slice(0,90):''}</span></div></div>):<div className="empty-state"><AlertTriangle size={22}/><strong>Pas encore d’activité</strong></div>}
         </div>
