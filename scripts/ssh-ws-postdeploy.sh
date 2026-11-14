@@ -39,7 +39,11 @@ rsync -a \
  --exclude 'INITIAL_ADMIN_CREDENTIALS.txt' --exclude '.initial-admin-credentials.new' \
  --exclude 'node_modules/' --exclude 'dist/' --exclude '.git/' \
  ./ /opt/abess-panel/
-(cd /opt/abess-panel && npm ci --omit=dev --no-audit --no-fund)
+# The parent deployment uses umask 077 for secrets. Runtime packages must
+# also be readable by the unprivileged gateway service.
+(cd /opt/abess-panel && umask 022 && npm ci --omit=dev --no-audit --no-fund)
+chmod -R a+rX /opt/abess-panel/node_modules /opt/abess-panel/scripts
+chmod a+r /opt/abess-panel/package.json
 install -d -m 0700 /etc/abess-ssh-ws
 BOOTSTRAP=/etc/abess-ssh-ws/node-bootstrap.json
 NODE_KEY_SOURCE=/etc/abess-ssh-ws/node-key-source

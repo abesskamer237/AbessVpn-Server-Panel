@@ -1,5 +1,5 @@
 name: Deploy ABESS VPN to VPS
-# Production rollout marker: ABESS VPN v3 billing and reseller workspace
+# Production rollout marker: ABESS VPN v3 with readable gateway dependencies
 
 on:
   workflow_dispatch:

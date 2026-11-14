@@ -158,6 +158,8 @@ UMask=0077
 [Install]
 WantedBy=multi-user.target
 UNIT
+# Check module access under the actual gateway identity before restarting.
+runuser -u abess-gateway -- "$NODE_BIN" --input-type=module -e "await import('file://$PWD/node_modules/ws/wrapper.mjs')"
 systemctl daemon-reload
 systemctl enable abess-ssh-ws-sshd.service abess-ssh-ws-gateway.service abess-ssh-ws-reconciler.service
 # Always restart: installation rewrites unit files, SSHD policy and gateway/reconciler code.
