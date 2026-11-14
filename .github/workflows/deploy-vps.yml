@@ -375,9 +375,20 @@ jobs:
           fi
           rollback_allowed=0
           if [ -f .env ] && grep -q '^POSTGRES_PASSWORD=' .env; then
-            old_api="$(dc images -q api | head -n1)"
+            # Read the running container's image ID; Compose may return a stale
+            # digest which Docker cannot tag after image metadata changes.
+            old_container="$(dc ps -q api)"
+            old_api=""
+            if [ -n "$old_container" ]; then
+              old_api="$(docker inspect --format '{{.Image}}' "$old_container")"
+            fi
             if [ -n "$old_api" ]; then
-              docker tag "$old_api" abessvpn-api:rollback
+              if docker image inspect "$old_api" >/dev/null 2>&1; then
+                docker tag "$old_api" abessvpn-api:rollback
+              else
+                # Preserve the existing API filesystem without pausing it.
+                docker commit --pause=false "$old_container" abessvpn-api:rollback >/dev/null
+              fi
               printf 'services:\n  api:\n    image: abessvpn-api:rollback\n' > .rollback.yml
               chmod 600 .rollback.yml
               rollback_allowed=1

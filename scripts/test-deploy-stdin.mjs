@@ -19,6 +19,26 @@ const docker = args => {
 const quote = value => "'" + value.replaceAll("'", "'\\''") + "'";
 try {
   docker(['up', '-d']);
+  // Exercise the workflow's rollback image selection against a real container.
+  const rollbackBlock = workflow.split('old_container="$(dc ps -q api)"')[1]?.split('mkdir -p deployment-backups')[0];
+  assert(rollbackBlock, 'The running API container must determine the rollback image.');
+  const rollbackTag = `abess-deploy-rollback-test:${process.pid}`;
+  const rollbackScript = 'old_container="$(dc ps -q api)"' + rollbackBlock.slice(0, rollbackBlock.lastIndexOf('fi'));
+  const rollbackResult = spawnSync('bash', ['-s'], {
+    input: 'set -euo pipefail\n' +
+      'dc() { ' + ['docker', ...base].map(quote).join(' ') + ' "$@"; }\n' +
+      rollbackScript.replaceAll('abessvpn-api:rollback', rollbackTag) +
+      '\ndocker image inspect ' + quote(rollbackTag) + ' --format "{{.Id}}"\n',
+    encoding: 'utf8', timeout: 15000, cwd: directory,
+  });
+  try {
+    assert.equal(rollbackResult.status, 0, rollbackResult.stderr || rollbackResult.error?.message);
+    const running = spawnSync('docker', [...base, 'ps', '-q', 'api'], {encoding:'utf8'}).stdout.trim();
+    const image = spawnSync('docker', ['inspect', '--format', '{{.Image}}', running], {encoding:'utf8'}).stdout.trim();
+    assert.equal(rollbackResult.stdout.trim().split('\n').at(-1), image, 'Rollback must retain the running API image.');
+  } finally {
+    spawnSync('docker', ['image', 'rm', rollbackTag], {encoding:'utf8'});
+  }
   // The flags come from the actual deployment command. Without disabling
   // interactive stdin, Docker consumes SCRIPT_CONTINUED as container input.
   const command = ['docker', ...base, ...flags, 'api', 'node', '-e', 'setTimeout(() => console.log("BACKUP_COMPLETE"), 500)'];
