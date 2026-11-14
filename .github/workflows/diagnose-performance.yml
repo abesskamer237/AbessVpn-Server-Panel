@@ -1,5 +1,5 @@
 name: Diagnose VPN performance
-# Recheck CPU and transport after the reversible BBR/observer optimization.
+# Check numeric-port socket statistics and mobile SSH liveness defaults.
 on:
   workflow_dispatch:
   push:

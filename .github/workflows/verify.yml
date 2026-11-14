@@ -58,6 +58,9 @@ jobs:
           node scripts/test-ssh-ws.mjs
           node scripts/benchmark-ssh-ws.mjs
 
+      - name: Verify scoped VPN SSH stability settings
+        run: python3 scripts/test-vpn-ssh-stability.py
+
       - name: Verify per-account SSH socket consumption
         run: python3 scripts/test-ssh-socket-traffic.py
 

@@ -27,7 +27,7 @@ for interface in interfaces:
     print('INTERFACE_3S='+json.dumps({k:y[k]-x[k] for k in x}))
     try:print('QDISC='+subprocess.check_output(['tc','-s','qdisc','show','dev',interface],text=True).strip())
     except (OSError,subprocess.CalledProcessError):pass
-out=subprocess.check_output(['ss','-tiemH','state','established','( sport = :443 or sport = :22 or sport = :8080 )'],text=True)
+out=subprocess.check_output(['ss','-tinemH','state','established','( sport = :443 or sport = :22 or sport = :8080 )'],text=True)
 groups={22:[],443:[],8080:[]};current=None
 for line in out.splitlines():
     parts=line.split()
