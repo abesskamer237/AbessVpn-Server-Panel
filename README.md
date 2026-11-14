@@ -1,20 +1,19 @@
-# ABESS VPN — backend de serveurs VPN externes
+# ABESS VPN — panneau commercial et de gestion SSH-WSS
 
-Backend Node/Express et panneau React pour des comptes VPN/SSH créés ailleurs et, facultativement, des VPS externes avec agent de suivi. Caddy sert uniquement le panneau HTTPS. Le client Android Flutter est maintenu dans [AbessVpn-Cyber](https://github.com/abesskamer237/AbessVpn-Cyber).
+Backend Node/Express, panneau React et bot Telegram pour vendre et administrer des licences **SSH sur WebSocket TLS (WSS)** via un réseau de revendeurs. Caddy sert le panneau HTTPS ; le moteur SSH-WSS du VPS (OpenSSH dédié, gateway et réconciliateur) est provisionné à part et **n’est pas modifié par le panneau**. Le client Android est maintenu dans [AbessVpn-Cyber](https://github.com/abesskamer237/AbessVpn-Cyber), l’application mobile de gestion dans `AbessVpn-Mobile-App` (voir [MOBILE_SYNC_POLICY.md](MOBILE_SYNC_POLICY.md)).
 
-## Fonctions
+## Fonctions du panneau
 
-- Administrateurs et hiérarchie de revendeurs, crédits, licences, renouvellements idempotents et quotas comptabilisés par Xray.
-- PostgreSQL transactionnel, migration initiale des fichiers JSON existants et historique d’audit chaîné.
-- Double authentification TOTP, codes de récupération à usage unique, sessions révocables, changement de mot de passe et cookie de panneau HttpOnly.
-- Règlements **manuels** MTN MoMo / Orange Money, déclaration de référence, vérification par un administrateur et factures après confirmation.
-- Sauvegardes AES-GCM, copie S3 optionnelle, supervision et alertes.
-- Vente et renouvellement SSH aux revendeurs, crédits débités et journal financier conservé.
-- API de relevés authentifiés par VPS et agent facultatif en lecture seule, isolation des licences et rapprochement persistant des compteurs réels.
+- **Tableau de bord** : clients actifs, renouvellements, sessions, trafic, alertes VPS et performance commerciale.
+- **Clients SSH-WSS** : création sur le VPS le moins chargé, quotas, sessions simultanées, suspension, renouvellement idempotent, export de configuration et message client.
+- **Revendeurs** : hiérarchie multi-niveaux, transferts de crédits (Go), tarifs, marges estimées, suspension en cascade.
+- **Facturation** : catalogue d’offres, commandes de crédits, déclaration MTN MoMo / Orange Money, vérification manuelle par le Super Admin, factures imprimables, export CSV.
+- **Transactions** et **Journal d’audit** : registre financier complet et traçabilité HMAC des actions sensibles.
+- **Serveurs** : enrôlement des VPS, télémétrie CPU/RAM/disque/services, sauvegarde chiffrée.
+- **Sécurité** : MFA TOTP, codes de récupération, sessions révocables, cookie HttpOnly.
+- **Équipe** : administrateurs délégués sans privilèges d’infrastructure.
 
-Les exports client prennent en charge **VLESS avec TLS** : WebSocket, gRPC, HTTPUpgrade et XHTTP. Aucun service VPN ni utilisateur SSH n’est provisionné. Les comptes SSH existants peuvent être importés et exportés. VLESS/TCP sans TLS est désactivé par défaut ; TCP/10050 n’est pas exposé par le Compose sécurisé.
-
-Import d’un compte fournisseur sans API ni agent, API de compteurs facultative, import SSH et responsabilités d’application des quotas : [Serveurs externes](docs/EXTERNAL_SERVERS.md).
+PostgreSQL transactionnel en production ; sauvegardes AES-GCM avec copie S3 optionnelle ; métriques et alertes. Aucune passerelle de paiement automatique : un crédit n’est jamais ajouté sans vérification humaine. Détails de la dernière revue : [AUDIT.md](AUDIT.md).
 
 ## Développement
 
@@ -25,7 +24,7 @@ npm ci
 npm run lint
 npm run build
 npm run build:server
-node scripts/test-security.mjs
+node --import tsx scripts/test-security.mjs
 node --import tsx scripts/test-platform.mjs
 node --import tsx scripts/test-external-backend.mjs
 node scripts/test-mobile-contract.mjs
@@ -78,7 +77,9 @@ La clé maître doit rester stable : une rotation nécessite une migration des l
 - `POST /api/v1/client/availability`, `/client/telemetry` : disponibilité du nœud affecté et quotas autoritaires.
 - `/api/v1/admin/tokens/:id/renew`, `/migrate-tls` : renouvellement et migration vers TLS.
 - `/api/v1/payments/instructions` : numéros et bénéficiaires du règlement manuel.
-- `/api/v1/commerce/orders`, `/orders/:id/submit`, `/confirm`, `/reject`, `/invoice` : demandes, vérification manuelle et factures. Aucune passerelle de paiement automatique.
+- `/api/v1/plans`, `/api/v1/admin/plans` : catalogue des offres de crédits.
+- `/api/v1/commerce/orders`, `/orders/:id/submit`, `/confirm`, `/reject`, `/invoice` : commandes, vérification manuelle (inscrite au registre des transactions) et factures. Aucune passerelle de paiement automatique.
+- `/api/v1/admin/ssh`, `/admin/ssh/managed`, `/admin/ssh/accounts/:id/*` : clients SSH-WSS ; `/api/v1/nodes/:id/ssh-ws/desired|status` : contrat du réconciliateur VPS.
 - `/api/v1/admin/operations`, `/operations/backup`, `/operations/restore`, `/metrics` : exploitation protégée.
 - `/api/v1/admin/nodes` et `/api/v1/nodes/:id/config`, `/heartbeat` : gestion des agents.
 

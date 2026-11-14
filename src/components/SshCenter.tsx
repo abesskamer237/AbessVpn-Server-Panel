@@ -38,9 +38,15 @@ export function SshCenter({inventory,resellers,role,audit,request,refresh,create
   const [editLabel,setEditLabel]=useState('');
   const [editConnections,setEditConnections]=useState(1);
   const [config,setConfig]=useState<ExportData|null>(null);
+  const [copied,setCopied]=useState('');
+  useEffect(()=>{if(!copied)return;const t=window.setTimeout(()=>setCopied(''),2500);return()=>window.clearTimeout(t)},[copied]);
   const canOperate=role==='SUPER_ADMIN'||role==='ADMIN';
 
   useEffect(()=>{if(createSignal)setCreateOpen(true)},[createSignal]);
+  useEffect(()=>{
+    const onKey=(e:KeyboardEvent)=>{if(e.key==='Escape'){setCreateOpen(false);setSelectedId('')}};
+    window.addEventListener('keydown',onKey);return()=>window.removeEventListener('keydown',onKey);
+  },[]);
   useEffect(()=>{
     if(!inventory?.managedNodes?.length)return;
     setNodeId(current=>{
@@ -106,8 +112,8 @@ export function SshCenter({inventory,resellers,role,audit,request,refresh,create
       '',
       'Transport : SSH via WebSocket sécurisé (WSS/TLS).',
       'Ne partagez pas ces identifiants avec une autre personne.'
-    ].filter(Boolean).join('\\n');
-    void navigator.clipboard.writeText(msg);
+    ].filter(Boolean).join('\n');
+    void navigator.clipboard?.writeText(msg).then(()=>setCopied('Message client copié.'),()=>setError('Copie impossible : autorisez le presse-papiers.'));
   }
   function saveConfig(){
     if(!config)return;
@@ -132,9 +138,10 @@ export function SshCenter({inventory,resellers,role,audit,request,refresh,create
     </div>
 
     {error&&<p className="notice" role="alert">{error}</p>}
+    {copied&&<p className="notice notice-success" role="status">{copied}</p>}
     <section className="card card-pad">
       <div className="toolbar">
-        <div style={{position:'relative',flex:'0 1 320px'}}><Search size={14} style={{position:'absolute',left:11,top:12,color:'var(--muted)'}}/><input className="search-input" style={{paddingLeft:32,width:'100%'}} placeholder="Client, utilisateur, revendeur…" value={search} onChange={e=>setSearch(e.target.value)}/></div>
+        <div className="search-wrap"><Search size={14}/><input className="search-input" placeholder="Client, utilisateur, revendeur…" value={search} onChange={e=>setSearch(e.target.value)}/></div>
         <div className="filter-pills">{filters.map(([key,name,count])=><button key={key} className={'filter-pill '+(filter===key?'active':'')} onClick={()=>setFilter(key)}>{name} · {count}</button>)}</div>
         <button className="btn btn-sm" style={{marginLeft:'auto'}} onClick={()=>void refresh()}><RefreshCw size={13}/>Actualiser</button>
       </div>
@@ -175,9 +182,9 @@ export function SshCenter({inventory,resellers,role,audit,request,refresh,create
         <label className="field-block"><span className="field-label">Mot de passe SSH</span><input className="field" type="password" required minLength={8} maxLength={96} pattern="[A-Za-z0-9@#$%&*+=._-]{8,96}" autoComplete="new-password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="8 caractères minimum"/><span className="field-help">Obligatoire · 8 à 96 caractères.</span></label>
         <label className="field-block"><span className="field-label">Serveur</span><select className="select" required value={nodeId} onChange={e=>setNodeId(e.target.value)}>{inventory?.managedNodes.map(n=><option key={n.id} value={n.id} disabled={!n.agentOnline}>{n.name} · {n.agentOnline?'en ligne':'hors ligne'}</option>)}</select></label>
         <label className="field-block"><span className="field-label">Durée</span><select className="select" value={days} onChange={e=>setDays(Number(e.target.value))}><option value={7}>7 jours</option><option value={30}>30 jours</option><option value={60}>60 jours</option><option value={90}>90 jours</option><option value={180}>180 jours</option><option value={365}>365 jours</option></select></label>
-        <label className="field-block"><span className="field-label">Quota (Go)</span><input className="field" type="number" min=".01" step=".01" required value={quotaGb} onChange={e=>setQuotaGb(Number(e.target.value))}/></label>
+        <label className="field-block"><span className="field-label">Quota (Go)</span><input className="field" type="number" min=".01" step=".01" required value={quotaGb} onChange={e=>setQuotaGb(Number(e.target.value))}/><span className="field-help">Débité du solde du revendeur propriétaire.</span></label>
         <label className="field-block"><span className="field-label">Sessions simultanées</span><input className="field" type="number" min="1" max="10" required value={maxConnections} onChange={e=>setMaxConnections(Number(e.target.value))}/></label>
-        {canOperate&&<label className="field-block"><span className="field-label">Revendeur propriétaire</span><select className="select" value={resellerId} onChange={e=>setResellerId(e.target.value)}><option value="">Administration</option>{resellers.filter(r=>r.status==='active').map(r=><option key={r.id} value={r.id}>{r.name} · {r.credits} Go</option>)}</select></label>}
+        {canOperate&&<label className="field-block"><span className="field-label">Revendeur propriétaire</span><select className="select" value={resellerId} onChange={e=>setResellerId(e.target.value)}><option value="">Administration</option>{resellers.filter(r=>r.status==='active').map(r=><option key={r.id} value={r.id}>{r.name} · {Number(r.credits||0).toFixed(2)} Go</option>)}</select></label>}
         </div>
       </div>
       <div className="modal-foot"><button type="button" className="btn" onClick={()=>setCreateOpen(false)}>Annuler</button><button className="btn btn-primary" disabled={working||!inventory?.managedNodes.some(n=>n.id===nodeId&&n.agentOnline)}>{working?'Création…':'Créer la licence'}</button></div>
@@ -212,7 +219,7 @@ export function SshCenter({inventory,resellers,role,audit,request,refresh,create
             <div><span className="field-label">Mot de passe</span><div className="secret-value">{config.password}</div></div>
             <div><span className="field-label">Chemin WebSocket personnel</span><div className="secret-value">{config.path}</div></div>
             <div><span className="field-label">Empreinte Ed25519</span><div className="secret-value">{config.fingerprint}</div></div>
-            <div className="row-actions"><button className="btn btn-sm" onClick={()=>void navigator.clipboard.writeText(JSON.stringify(config,null,2))}><Copy size={13}/>Copier tout</button><button className="btn btn-sm" onClick={copyClientMessage}><Copy size={13}/>Message client</button><button className="btn btn-sm" onClick={saveConfig}><Download size={13}/>JSON</button><button className="btn btn-sm btn-ghost" onClick={()=>setConfig(null)}>Masquer</button></div>
+            <div className="row-actions"><button className="btn btn-sm" onClick={()=>void navigator.clipboard?.writeText(JSON.stringify(config,null,2)).then(()=>setCopied('Configuration copiée.'))}><Copy size={13}/>Copier tout</button><button className="btn btn-sm" onClick={copyClientMessage}><Copy size={13}/>Message client</button><button className="btn btn-sm" onClick={saveConfig}><Download size={13}/>JSON</button><button className="btn btn-sm btn-ghost" onClick={()=>setConfig(null)}>Masquer</button></div>
           </div>}
         </section>
 

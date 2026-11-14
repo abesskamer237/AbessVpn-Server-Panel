@@ -22,7 +22,10 @@ export interface SshAccount {
   quotaBytes: number; usedBytes: number; maxConnections: number;
   expiresAt: string; enabled: boolean; createdAt: string;
 }
-export interface SshState { accounts: SshAccount[] }
+export interface SshState { accounts: SshAccount[];
+  /** Usernames of deleted managed accounts. The VPS reconciler keeps their
+   * Linux user bound to the old account id, so they must never be reused. */
+  retiredUsernames?: string[] }
 export function safeSshAccount(a: SshAccount) {
   const {password, payload, salt, verifier, wsAccessKey, wsAccessHash, renewalIds, renewalRequests, ...safe} = a;
   return {...safe,trafficVerified:Boolean(a.usageObservedAt),usedBytes:a.usageObservedAt?a.usedBytes:null,online:a.usageObservedAt?a.online??null:null};
@@ -64,7 +67,7 @@ export function registerSsh(app:Express,d:{
       nodes:isAdmin?d.nodes().filter(n=>n.enabled).map(n=>({id:n.id,name:n.name,host:n.host})):[],
       managedNodes:d.nodes().filter(n=>n.enabled&&n.sshWsManaged).map(n=>({
         id:n.id,name:n.name,host:n.host,port:n.sshWsPort,path:n.sshWsPath,
-        sni:n.sshWsSni||n.host,agentOnline:managedOnline(n),hostTelemetry:n.sshWsHost||null
+        sni:n.sshWsSni||n.host,agentOnline:managedOnline(n),hostTelemetry:isAdmin?n.sshWsHost||null:null
       })),
       resellers:isAdmin?d.users().filter(u=>u.status==='active').map(u=>({id:u.id,name:u.name})):[],
       accounts:d.read().accounts.filter(a=>allowed(actor,a)).map(a=>({...safeSshAccount(a),
@@ -136,8 +139,8 @@ export function registerSsh(app:Express,d:{
     const state=d.read();
     if(state.accounts.length>=5000||state.accounts.filter(a=>a.nodeId===node.id&&a.managed).length>=2000)
       return res.status(409).json({error:'Capacité maximale atteinte.'});
-    if(state.accounts.some(a=>a.username===username))
-      return res.status(409).json({error:'Ce nom d’utilisateur SSH est déjà utilisé.'});
+    if(state.accounts.some(a=>a.username===username)||(state.retiredUsernames||[]).includes(username))
+      return res.status(409).json({error:'Ce nom d’utilisateur SSH est déjà utilisé ou a appartenu à une licence supprimée.'});
     const wsSecret=crypto.randomBytes(32).toString('base64url');
     const account:SshAccount={
       id:'ssh_'+crypto.randomUUID(), username, label, managed:true,
@@ -168,7 +171,11 @@ export function registerSsh(app:Express,d:{
       if(previous&&(previous.gb!==gb||previous.days!==days))return res.status(409).json({error:'Clé de renouvellement déjà utilisée.'});
       return res.json(safeSshAccount(a));
     }
-    if(!a.enabled||!d.ownerActive(a.resellerId))return res.status(409).json({error:'Compte suspendu.'});
+    // A disabled or expired licence may be renewed; only an inactive owner
+    // branch or a removed VPS blocks the (charged) renewal.
+    if(!d.ownerActive(a.resellerId))return res.status(409).json({error:'Le revendeur propriétaire est suspendu.'});
+    if(a.managed&&!d.nodes().some(n=>n.id===a.nodeId&&n.enabled&&n.sshWsManaged))
+      return res.status(409).json({error:'Le serveur de cette licence n’est plus disponible.'});
     const quota=a.quotaBytes+Math.round(gb*1024**3);
     if(!Number.isSafeInteger(quota)||quota>1000000*1024**3)return res.status(400).json({error:'Quota total trop élevé.'});
     if(!d.charge(['SUPER_ADMIN','ADMIN'].includes(actor.role)?(a.resellerId||actor.id):actor.id,gb,a.id,true))return res.status(409).json({error:'Solde insuffisant ou compte indisponible.'});
@@ -216,7 +223,9 @@ export function registerSsh(app:Express,d:{
   });
   app.delete('/api/v1/admin/ssh/accounts/:id',d.authenticate,admin,(req,res)=>{
     const state=d.read(),index=state.accounts.findIndex(a=>a.id===req.params.id);if(index<0)return res.sendStatus(404);
-    state.accounts.splice(index,1);d.write(state);d.audit({action:'SSH_DELETED',actor:(req as any).user.id,role:(req as any).user.role,details:String(req.params.id)});res.sendStatus(204);
+    const [removed]=state.accounts.splice(index,1);
+    if(removed.managed)state.retiredUsernames=[...new Set([...(state.retiredUsernames||[]),removed.username])];
+    d.write(state);d.audit({action:'SSH_DELETED',actor:(req as any).user.id,role:(req as any).user.role,details:String(req.params.id)});res.sendStatus(204);
   });
 
   app.get('/api/v1/admin/ssh/accounts/:id/devices',d.authenticate,(req,res)=>{
@@ -230,23 +239,30 @@ export function registerSsh(app:Express,d:{
     if(!a)return res.sendStatus(404);if(!allowed(actor,a))return res.sendStatus(403);
     const deviceKey=String(req.params.deviceKey||'');if(!/^[a-f0-9]{32}$/.test(deviceKey))return res.sendStatus(400);
     const blocked=req.body?.blocked;if(typeof blocked!=='boolean')return res.sendStatus(400);
-    const set=new Set(a.blockedDeviceKeys||[]);if(blocked)set.add(deviceKey);else set.delete(deviceKey);a.blockedDeviceKeys=[...set].slice(0,50);
+    const set=new Set(a.blockedDeviceKeys||[]);
+    if(blocked&&!set.has(deviceKey)&&set.size>=50)return res.status(409).json({error:'50 appareils bloqués au maximum.'});
+    if(blocked)set.add(deviceKey);else set.delete(deviceKey);a.blockedDeviceKeys=[...set].slice(0,50);
     d.write(state);d.audit({action:blocked?'SSH_DEVICE_BLOCKED':'SSH_DEVICE_UNBLOCKED',actor:actor.id,role:actor.role,details:JSON.stringify({accountId:a.id,deviceKey})});
     return res.json({deviceKey,blocked});
   });
   app.post('/api/v1/admin/ssh/accounts/:id/config',d.authenticate,(req,res)=>{
     const a=d.read().accounts.find(a=>a.id===req.params.id),actor=(req as any).user;
-    if(process.env.SSH_WSS_ONLY==='true' && a && (!a.managed || a.connection?.transport!=='wss'))
-      return res.status(410).json({error:'Seuls les comptes SSH-WSS administrés sont autorisés.'});
     if(!a)return res.sendStatus(404);if(!allowed(actor,a))return res.sendStatus(403);
+    if(process.env.SSH_WSS_ONLY==='true' && (!a.managed || a.connection?.transport!=='wss'))
+      return res.status(410).json({error:'Seuls les comptes SSH-WSS administrés sont autorisés.'});
     if(!a.connection||req.body?.transport!==a.connection.transport)return res.sendStatus(400);
-    if(!active(a))return res.status(503).json({error:'Accès SSH indisponible.'});
+    // 409, not 5xx: a 5xx would roll back the request and be reported as a storage failure.
+    if(!active(a))return res.status(409).json({error:'Licence inactive : vérifiez expiration, quota, suspension ou serveur hors ligne.'});
     const {hasPayload,...storedConnection}=a.connection;
     if(a.managed && (!a.wsAccessKey || !a.wsAccessHash))
-      return res.status(503).json({error:'La licence SSH-WS doit être régénérée avec un secret WebSocket personnel.'});
+      return res.status(409).json({error:'La licence SSH-WS doit être régénérée avec un secret WebSocket personnel.'});
     const node=a.managed?d.nodes().find(n=>n.id===a.nodeId):undefined;
     const edgeHost=a.managed?(node?.sshWsSni||storedConnection.sni||storedConnection.host):storedConnection.host;
-    const connection={...storedConnection,host:edgeHost,sni:a.managed?edgeHost:storedConnection.sni,port:a.managed?(node?.sshWsPort||storedConnection.port):storedConnection.port};
+    // Managed licences follow the node's current policy (host key and path) so a
+    // node update never leaves exported clients with a stale pinned fingerprint.
+    const connection={...storedConnection,host:edgeHost,sni:a.managed?edgeHost:storedConnection.sni,port:a.managed?(node?.sshWsPort||storedConnection.port):storedConnection.port,
+      fingerprint:a.managed?(node?.sshWsFingerprint||storedConnection.fingerprint):storedConnection.fingerprint,
+      path:a.managed?(node?.sshWsPath||storedConnection.path):storedConnection.path};
     const clientPath=a.managed ? `${connection.path}/${unseal(a.wsAccessKey!,d.key)}` : connection.path;
     const managedPayload=a.managed
       ? `GET ${clientPath} HTTP/1.1[crlf]Host: ${edgeHost}[crlf]Upgrade: websocket[crlf]Connection: Upgrade[crlf]Sec-WebSocket-Version: 13[crlf][crlf]`

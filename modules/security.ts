@@ -230,7 +230,7 @@ export function registerSecurityRoutes(app: Express, d: Dependencies) {
       mfaEnabled: d.security.enabled(user(req).id),
       mfaRequired:
         process.env.REQUIRE_ADMIN_MFA === "true" &&
-        user(req).role === "SUPER_ADMIN",
+        ["SUPER_ADMIN", "ADMIN"].includes(user(req).role),
       sessions: d.security.sessions
         .entries()
         .filter(

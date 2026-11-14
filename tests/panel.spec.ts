@@ -63,3 +63,49 @@ test('transactions, security and server supervision are reachable for super admi
   await expect(page.getByRole('heading',{name:'Sécurité de votre compte'})).toBeVisible();
   await expect(page.getByText('Cette session',{exact:true})).toBeVisible();
 });
+
+test('billing: super admin publishes an offer, reseller orders and declares a Mobile Money payment',async({page,browser})=>{
+  const errors:string[]=[];page.on('pageerror',err=>errors.push(err.message));
+  await login(page);
+  await page.getByRole('button',{name:'Facturation'}).click();
+  await expect(page.getByRole('heading',{level:1,name:'Facturation'})).toBeVisible();
+  await page.getByRole('button',{name:'Nouvelle offre'}).click();
+  await page.getByLabel('Nom de l’offre').fill('Pack Test 50 Go');
+  await page.getByLabel('Prix (XAF)').fill('5000');
+  await page.getByLabel('Crédits (Go)').fill('50');
+  await page.getByRole('button',{name:'Enregistrer l’offre'}).click();
+  await expect(page.getByText('Pack Test 50 Go',{exact:true})).toBeVisible();
+
+  const resellerEmail='reseller-'+Date.now()+'@example.test',resellerPassword='Reseller-password-'+Date.now();
+  const created=await page.evaluate(async([email,password])=>{
+    const r=await fetch('/api/v1/admin/resellers',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:'Boutique Test',email,password,initialCredits:0})});
+    return r.status;
+  },[resellerEmail,resellerPassword]);
+  expect(created).toBeLessThan(300);
+
+  const context=await browser.newContext();const reseller=await context.newPage();
+  reseller.on('pageerror',err=>errors.push(err.message));
+  await reseller.goto('/');
+  await reseller.getByLabel('Adresse email',{exact:true}).fill(resellerEmail);
+  await reseller.getByLabel('Mot de passe',{exact:true}).fill(resellerPassword);
+  await reseller.getByRole('button',{name:'Se connecter',exact:true}).click();
+  await expect(reseller.getByRole('heading',{level:1,name:'Vue d’ensemble'})).toBeVisible();
+  await expect(reseller.getByRole('button',{name:'Serveurs'})).toHaveCount(0);
+  await expect(reseller.getByRole('button',{name:'Journal d’audit'})).toHaveCount(0);
+  await reseller.getByRole('button',{name:'Facturation'}).click();
+  await expect(reseller.getByText('Coordonnées de paiement')).toBeVisible();
+  await reseller.locator('.plan-card',{hasText:'Pack Test 50 Go'}).getByRole('button',{name:'Commander'}).click();
+  await expect(reseller.locator('.modal').getByText('Déclarer le paiement',{exact:true})).toBeVisible();
+  await reseller.getByLabel('Référence de la transaction').fill('MP260101.1234.TEST01');
+  await reseller.getByRole('button',{name:'Envoyer la déclaration'}).click();
+  await expect(reseller.locator('td').getByText('Paiement déclaré',{exact:true})).toBeVisible();
+  await context.close();
+
+  await page.reload();
+  await page.getByRole('button',{name:'Facturation'}).click();
+  await expect(page.locator('tr',{hasText:'Boutique Test'}).getByRole('button',{name:'Vérifier'})).toBeVisible();
+  await page.getByRole('button',{name:'Journal d’audit'}).click();
+  await expect(page.getByRole('heading',{level:1,name:'Journal d’audit'})).toBeVisible();
+  await expect(page.getByText('PAYMENT DECLARED').first()).toBeVisible();
+  expect(errors).toEqual([]);
+});

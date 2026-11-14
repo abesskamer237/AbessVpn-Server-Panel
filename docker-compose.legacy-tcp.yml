@@ -1,2 +1,0 @@
-# Compatibility overlay: external VPN listeners are never created by the panel.
-services: {}

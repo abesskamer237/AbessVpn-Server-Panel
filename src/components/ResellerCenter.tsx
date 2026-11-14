@@ -1,14 +1,13 @@
 import {useMemo,useState,type FormEvent} from 'react';
 import {BadgeDollarSign,ChevronRight,Network,Plus,Search,Store,Users,X} from 'lucide-react';
 import type {Reseller,SshAccount,User} from '../panelTypes';
-import {bytesToGb,csvDownload} from '../panelTypes';
+import {bytesToGb,csvDownload,money} from '../panelTypes';
 
 type Props={
   resellers:Reseller[];accounts:SshAccount[];busy:boolean;currentUser:User;
   request:(url:string,method?:string,body?:unknown)=>Promise<any>;
   refresh:()=>Promise<void>;
 };
-const money=(n:number)=>new Intl.NumberFormat('fr-FR',{style:'currency',currency:'XAF',maximumFractionDigits:0}).format(n||0);
 
 export function ResellerCenter({resellers,accounts,busy,currentUser,request,refresh}:Props){
   const [createOpen,setCreateOpen]=useState(false);
@@ -104,7 +103,7 @@ export function ResellerCenter({resellers,accounts,busy,currentUser,request,refr
 
     <section className="card card-pad">
       <div className="section-head"><div><h2>Arbre des revendeurs</h2><p>La profondeur est illimitée côté logique ; chaque compte contrôle ses enfants directs et voit sa descendance.</p></div></div>
-      <div className="toolbar"><div style={{position:'relative',flex:'0 1 340px'}}><Search size={14} style={{position:'absolute',left:11,top:12,color:'var(--muted)'}}/><input className="search-input" style={{paddingLeft:32,width:'100%'}} placeholder="Nom, email, parent ou branche…" value={search} onChange={e=>setSearch(e.target.value)}/></div></div>
+      <div className="toolbar"><div className="search-wrap"><Search size={14}/><input className="search-input" placeholder="Nom, email, parent ou branche…" value={search} onChange={e=>setSearch(e.target.value)}/></div></div>
       <div className="data-table-wrap"><table className="data-table"><thead><tr>
         <th>Hiérarchie</th><th>Solde</th><th>Clients</th><th>Consommation</th><th>CA / marge</th><th>État</th><th>Actions</th>
       </tr></thead><tbody>{filtered.map(r=>{

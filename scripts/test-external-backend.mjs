@@ -135,7 +135,7 @@ try{
   const afterSuspension=(await call(`nodes/${node.body.id}/config`,undefined,node.body.key)).body;
   assert.equal(afterSuspension.sshAccounts.find(a=>a.id===sale.body.id).enabled,false,'suspended sellers cannot keep active SSH entitlements');
   assert.equal((await call(`admin/ssh/accounts/${ssh.body.id}`,{enabled:false},admin,'PATCH')).status,200);
-  assert.equal((await call(`admin/ssh/accounts/${ssh.body.id}/config`,{transport:config.transport},admin)).status,503);
+  assert.equal((await call(`admin/ssh/accounts/${ssh.body.id}/config`,{transport:config.transport},admin)).status,409,'inactive licences are a business conflict, not a storage failure');
   snapshot=sample(2*1024**3,'manual-process-2');assert.equal((await send(snapshot)).status,200);
   const exhausted=await used();assert.equal(exhausted.status,'quota_exceeded');assert.ok(exhausted.bandwidthUsedGb>1,'retain actual usage beyond quota');
   assert.equal((await call('auth/token',{token:licence.body.token,deviceId:'external-device-test'})).status,403);
@@ -191,7 +191,7 @@ try{
   assert.equal(created.body.resellerId,importer.body.id,'cannot charge arbitrary reseller');
   assert.ok(!JSON.stringify(created.body).includes('password'));
   const managedId=created.body.id;
-  assert.equal((await call(`admin/ssh/accounts/${managedId}/config`,{transport:'wss'},importerSession)).status,503,'never export a managed account before node confirmation');
+  assert.equal((await call(`admin/ssh/accounts/${managedId}/config`,{transport:'wss'},importerSession)).status,409,'never export a managed account before node confirmation');
   assert.equal((await call(`nodes/${managedNode.body.id}/ssh-ws/desired`,undefined,'invalid')).status,401);
   assert.equal((await call(`nodes/${managedNode.body.id}/ssh-ws/desired`,undefined,node.body.key)).status,401);
   const manifest=await call(`nodes/${managedNode.body.id}/ssh-ws/desired`,undefined,managedNode.body.key);
@@ -225,7 +225,7 @@ try{
   assert.equal(suspendedManifest.body.accounts[0].password,undefined);
   assert.equal((await call(`nodes/${managedNode.body.id}/ssh-ws/status`,
     {reports:[{id:managedId,state:'blocked',usedBytes:1048576,online:0}]},managedNode.body.key)).status,200);
-  assert.equal((await call(`admin/ssh/accounts/${managedId}/config`,{transport:'wss'},importerSession)).status,503);
+  assert.equal((await call(`admin/ssh/accounts/${managedId}/config`,{transport:'wss'},importerSession)).status,409);
   console.log(`External backend passed (${database?'PostgreSQL':'JSON'}): manual endpoints/UUID, client exports, node isolation, real counters, duplicate/reset/replay validation, SSH import/export, persistence, reporting-only agent, no provisioned services.`);
 }finally{
   await stop();await rm(dir,{recursive:true,force:true});

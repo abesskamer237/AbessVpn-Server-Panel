@@ -196,9 +196,11 @@ export function registerOperations(
     res.set("Cache-Control", "no-store").json(d.ops.health()),
   );
   const metricsAuth: RequestHandler = (req, res, next) => {
-    const expected = process.env.METRICS_TOKEN_FILE
-      ? fs.readFileSync(process.env.METRICS_TOKEN_FILE, "utf8").trim()
-      : process.env.METRICS_TOKEN;
+    let expected = process.env.METRICS_TOKEN;
+    if (process.env.METRICS_TOKEN_FILE) {
+      try { expected = fs.readFileSync(process.env.METRICS_TOKEN_FILE, "utf8").trim(); }
+      catch { expected = undefined; } // Fall back to an authenticated admin session.
+    }
     const supplied = req.headers.authorization?.replace(/^Bearer /, "") || "";
     if (
       expected &&
@@ -236,13 +238,21 @@ export function registerOperations(
     d.authenticate,
     admin,
     asyncHandler(async (req, res) => {
+      let snapshot: any;
       try {
         if (req.body?.format !== "abess-backup-v1")
           throw new Error("Invalid envelope");
-        const snapshot = unseal(
+        snapshot = unseal(
           req.body.sealed,
           process.env.BACKUP_ENCRYPTION_KEY || process.env.MASTER_SECRET!,
         );
+      } catch {
+        return res
+          .status(400)
+          .json({ error: "Sauvegarde invalide, altérée ou clé incompatible." });
+      }
+      try {
+        // A failure while writing must answer 5xx so the whole restore rolls back.
         await d.restore(snapshot);
         d.audit({
           actor: (req as any).user.id,
@@ -251,10 +261,10 @@ export function registerOperations(
           details: "Sauvegarde chiffrée restaurée.",
         });
         res.json({ ok: true, relogin: true });
-      } catch {
-        res
-          .status(400)
-          .json({ error: "Sauvegarde invalide, altérée ou clé incompatible." });
+      } catch (error) {
+        if (error instanceof Error && error.message === "Invalid snapshot")
+          return res.status(400).json({ error: "Contenu de sauvegarde invalide ou clé maître différente." });
+        res.status(500).json({ error: "Restauration annulée : aucune donnée n’a été modifiée." });
       }
     }),
   );
@@ -387,8 +397,8 @@ export function registerOperations(
           !['active','blocked','error'].includes(x.state) ||
           (x.state==='active' && (x.usedBytes===undefined || x.online===undefined)) ||
           (x.usedBytes!==undefined && (!Number.isSafeInteger(x.usedBytes) || x.usedBytes<0)) ||
-          (x.online!==undefined && (!Number.isInteger(x.online)||x.online<0||x.online>10)) ||
-          (x.devices!==undefined && (!Array.isArray(x.devices)||x.devices.length>50||x.devices.some((dv:any)=>!dv||!/^[a-f0-9]{32}$/.test(String(dv.deviceKey||''))||!Number.isSafeInteger(Number(dv.usedBytes||0))||Number(dv.usedBytes||0)<0||!Number.isSafeInteger(Number(dv.upBytes||0))||Number(dv.upBytes||0)<0||!Number.isSafeInteger(Number(dv.downBytes||0))||Number(dv.downBytes||0)<0||Number(dv.activeSessions||0)<0||Number(dv.activeSessions||0)>10)))) ) return res.sendStatus(400);
+          (x.online!==undefined && (!Number.isInteger(x.online)||x.online<0||x.online>5000)) ||
+          (x.devices!==undefined && (!Array.isArray(x.devices)||x.devices.length>50||x.devices.some((dv:any)=>!dv||!/^[a-f0-9]{32}$/.test(String(dv.deviceKey||''))||!Number.isSafeInteger(Number(dv.usedBytes||0))||Number(dv.usedBytes||0)<0||!Number.isSafeInteger(Number(dv.upBytes||0))||Number(dv.upBytes||0)<0||!Number.isSafeInteger(Number(dv.downBytes||0))||Number(dv.downBytes||0)<0||Number(dv.activeSessions||0)<0||Number(dv.activeSessions||0)>5000)))) ) return res.sendStatus(400);
     const telemetry=req.body?.telemetry;
     let safeTelemetry:VpnNode['sshWsHost']|undefined;
     if(telemetry!==undefined){

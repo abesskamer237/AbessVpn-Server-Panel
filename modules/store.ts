@@ -278,14 +278,26 @@ export class DocumentStore {
       client.release();
     }
   }
+  /** Routes that never read business documents: no global lock needed. */
+  static readonly stateless = new Set([
+    "/api/time",
+    "/api/v1/time",
+    "/api/countries",
+    "/api/v1/countries",
+    "/api/v1/payments/instructions",
+  ]);
   middleware(): RequestHandler {
     return (req, res, next) => {
       if (
         !this.pool ||
+        DocumentStore.stateless.has(req.path) ||
+        req.path.startsWith("/api/v1/speedtest/") ||
         !(
           req.path.startsWith("/api/") ||
           req.path.startsWith("/sub/") ||
-          req.path.startsWith("/nexus/sub/")
+          req.path.startsWith("/nexus/sub/") ||
+          req.path === "/app" ||
+          req.path.startsWith("/nexus/app")
         )
       )
         return next();

@@ -9,6 +9,7 @@ import path from 'path';
 import crypto from 'crypto';
 import os from 'os';
 import QRCode from 'qrcode';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import type {
   AppUser,
   ClientToken,
@@ -25,6 +26,8 @@ import type {
 export interface TelegramBotContext {
   encryptedBackup: () => Promise<unknown>;
   runTransaction: <T>(work: () => Promise<T>) => Promise<T>;
+  /** True when the server runs SSH-WSS only: VLESS voucher features are retired. */
+  legacyVlessRetired?: boolean;
   botToken?: string;
   adminIds?: string[];
   vpnDomain: string;
@@ -121,9 +124,24 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
   }
 
   // Telegram HTTP Call Helper
+  // Outgoing Telegram calls made inside a storage transaction are queued and
+  // sent only after the transaction commits: the global database lock is never
+  // held while waiting on the network, and admins are never told "success"
+  // for a change that is later rolled back.
+  const outbox = new AsyncLocalStorage<Array<() => Promise<unknown>>>();
+  async function inTransaction(work: () => Promise<void>): Promise<void> {
+    const queued: Array<() => Promise<unknown>> = [];
+    await ctx.runTransaction(() => outbox.run(queued, work));
+    for (const send of queued) await send();
+  }
   async function callApi(method: string, body?: Record<string, unknown> | FormData): Promise<any> {
+    const queue = outbox.getStore();
+    if (queue) {
+      queue.push(() => outbox.exit(() => callApi(method, body)));
+      return { ok: true, queued: true };
+    }
     const url = `https://api.telegram.org/bot${token}/${method}`;
-    const options: RequestInit = { method: 'POST' };
+    const options: RequestInit = { method: 'POST', signal: AbortSignal.timeout(15000) };
 
     if (body instanceof FormData) {
       options.body = body;
@@ -915,17 +933,27 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
     const messageId = cb.message?.message_id;
     const userId = cb.from.id;
 
+    // Telegram accepts a single answer per callback: keep the first one only.
+    let answered = false;
+    const answer = (text?: string, showAlert?: boolean) => {
+      if (answered) return Promise.resolve(null);
+      answered = true;
+      return answerCallbackQuery(cb.id, text, showAlert);
+    };
     if (!chatId || !messageId || !data) {
-      await answerCallbackQuery(cb.id);
+      await answer();
       return;
     }
 
     if (!isAdmin(userId)) {
-      await answerCallbackQuery(cb.id, '⛔ Vous n\'êtes pas autorisé.', true);
+      await answer('⛔ Vous n\'êtes pas autorisé.', true);
       return;
     }
 
-    await answerCallbackQuery(cb.id);
+    if (ctx.legacyVlessRetired && /^(menu_create|menu_batch|create_quick_|batch_run_|menu_clients_p|client_view_|action_(reset|addgb|adddays|delete|resend_qr)_|action_toggle_(?!mandatory$)|action_reload_xray$|menu_xray$|req_app_)/.test(data)) {
+      await answer('Fonction VLESS retirée : gérez les clients SSH-WSS depuis le panneau web.', true);
+      return;
+    }
 
     try {
       if (data === 'menu_main') {
@@ -977,7 +1005,7 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
         const tokenId = data.replace('client_view_', '');
         const token = ctx.loadTokens().find(t => t.id === tokenId);
         if (!token) {
-          await answerCallbackQuery(cb.id, 'Token introuvable.', true);
+          await answer('Token introuvable.', true);
           return;
         }
         await editMessageText(chatId, messageId, getClientDetailText(token), {
@@ -988,7 +1016,7 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
         const tokens = ctx.loadTokens();
         const found = tokens.find(t => t.id === tokenId);
         if (!found) {
-          await answerCallbackQuery(cb.id, 'Token introuvable.', true);
+          await answer('Token introuvable.', true);
           return;
         }
         const prevCount = Array.isArray(found.deviceIds) ? found.deviceIds.length : 0;
@@ -1006,18 +1034,19 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
           note: `Réinitialisation slots appareils pour ${found.token}`
         });
 
-        await answerCallbackQuery(cb.id, `✅ Appareils réinitialisés (${prevCount} libérés) !`, true);
+        await answer(`✅ Appareils réinitialisés (${prevCount} libérés) !`, true);
         await editMessageText(chatId, messageId, getClientDetailText(found), {
           reply_markup: getClientDetailKeyboard(found)
         });
       } else if (data.startsWith('action_addgb_')) {
-        const parts = data.replace('action_addgb_', '').split('_');
-        const tokenId = parts[0];
-        const addGb = Number(parts[1]) || 10;
+        // Token ids contain underscores (tok_…): parse the amount from the end.
+        const parsed = /^action_addgb_(.+)_(\d{1,4})$/.exec(data);
+        const tokenId = parsed?.[1] || '';
+        const addGb = Math.min(1000, Number(parsed?.[2]) || 10);
         const tokens = ctx.loadTokens();
         const found = tokens.find(t => t.id === tokenId);
         if (!found) {
-          await answerCallbackQuery(cb.id, 'Token introuvable.', true);
+          await answer('Token introuvable.', true);
           return;
         }
         found.bandwidthGb += addGb;
@@ -1036,18 +1065,18 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
           note: `Ajout de +${addGb} Go sur token ${found.token}`
         });
 
-        await answerCallbackQuery(cb.id, `✅ +${addGb} Go ajoutés avec succès !`, true);
+        await answer(`✅ +${addGb} Go ajoutés avec succès !`, true);
         await editMessageText(chatId, messageId, getClientDetailText(found), {
           reply_markup: getClientDetailKeyboard(found)
         });
       } else if (data.startsWith('action_adddays_')) {
-        const parts = data.replace('action_adddays_', '').split('_');
-        const tokenId = parts[0];
-        const addDays = Number(parts[1]) || 7;
+        const parsed = /^action_adddays_(.+)_(\d{1,3})$/.exec(data);
+        const tokenId = parsed?.[1] || '';
+        const addDays = Math.min(366, Number(parsed?.[2]) || 7);
         const tokens = ctx.loadTokens();
         const found = tokens.find(t => t.id === tokenId);
         if (!found) {
-          await answerCallbackQuery(cb.id, 'Token introuvable.', true);
+          await answer('Token introuvable.', true);
           return;
         }
         const currentExp = Math.max(Date.now(), new Date(found.expiresAt).getTime() || Date.now());
@@ -1056,22 +1085,22 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
         if (found.status === 'expired') found.status = 'active';
         ctx.saveTokens(tokens);
 
-        await answerCallbackQuery(cb.id, `✅ Validité prolongée de +${addDays} jours !`, true);
+        await answer(`✅ Validité prolongée de +${addDays} jours !`, true);
         await editMessageText(chatId, messageId, getClientDetailText(found), {
           reply_markup: getClientDetailKeyboard(found)
         });
-      } else if (data.startsWith('action_toggle_')) {
+      } else if (data.startsWith('action_toggle_') && data !== 'action_toggle_mandatory') {
         const tokenId = data.replace('action_toggle_', '');
         const tokens = ctx.loadTokens();
         const found = tokens.find(t => t.id === tokenId);
         if (!found) {
-          await answerCallbackQuery(cb.id, 'Token introuvable.', true);
+          await answer('Token introuvable.', true);
           return;
         }
         found.status = found.status === 'revoked' ? 'active' : 'revoked';
         ctx.saveTokens(tokens);
 
-        await answerCallbackQuery(cb.id, `✅ Statut modifié : ${found.status.toUpperCase()}`, true);
+        await answer(`✅ Statut modifié : ${found.status.toUpperCase()}`, true);
         await editMessageText(chatId, messageId, getClientDetailText(found), {
           reply_markup: getClientDetailKeyboard(found)
         });
@@ -1080,13 +1109,13 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
         let tokens = ctx.loadTokens();
         const found = tokens.find(t => t.id === tokenId);
         if (!found) {
-          await answerCallbackQuery(cb.id, 'Token introuvable.', true);
+          await answer('Token introuvable.', true);
           return;
         }
         tokens = tokens.filter(t => t.id !== tokenId);
         ctx.saveTokens(tokens);
 
-        await answerCallbackQuery(cb.id, `🗑️ Token ${found.token} supprimé.`, true);
+        await answer(`🗑️ Token ${found.token} supprimé.`, true);
         await editMessageText(chatId, messageId, `👥 *GESTION DU PARC CLIENTS*\n\nToken \`${found.token}\` supprimé définitivement.`, {
           reply_markup: getClientsPageKeyboard(0, 'all')
         });
@@ -1094,7 +1123,7 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
         const tokenId = data.replace('action_resend_qr_', '');
         const found = ctx.loadTokens().find(t => t.id === tokenId);
         if (!found) {
-          await answerCallbackQuery(cb.id, 'Token introuvable.', true);
+          await answer('Token introuvable.', true);
           return;
         }
         let qrBuffer: Buffer | null = null;
@@ -1115,7 +1144,7 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
       } else if (data === 'action_reload_xray') {
         const tokens = ctx.loadTokens();
         const ok = ctx.refreshTrafficTotals(tokens);
-        await answerCallbackQuery(cb.id, ok ? '✅ Statistiques actualisées.' : '⚠️ Statistiques indisponibles.', true);
+        await answer(ok ? '✅ Statistiques actualisées.' : '⚠️ Statistiques indisponibles.', true);
         await editMessageText(chatId, messageId, getXrayMenuText(), {
           reply_markup: {
             inline_keyboard: [
@@ -1173,12 +1202,12 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
         const v = ctx.loadAppVersionConfig();
         v.isMandatory = !v.isMandatory;
         ctx.saveAppVersionConfig(v);
-        await answerCallbackQuery(cb.id, `Mise à jour passée en : ${v.isMandatory ? 'OBLIGATOIRE' : 'OPTIONNELLE'}`, true);
+        await answer(`Mise à jour passée en : ${v.isMandatory ? 'OBLIGATOIRE' : 'OPTIONNELLE'}`, true);
         await editMessageText(chatId, messageId, getVersionMenuText(), {
           reply_markup: getVersionMenuKeyboard()
         });
       } else if (data === 'action_server_update') {
-        await answerCallbackQuery(cb.id, 'Vérification mise à jour serveur...');
+        await answer('Vérification mise à jour serveur...');
         await sendMessage(chatId, '⏳ *Vérification du dépôt Git distant origin/main...*');
         const status = await ctx.getServerUpdateStatus();
         if (!status.isGitRepo) {
@@ -1229,11 +1258,11 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
         const reqs = ctx.loadRequests ? ctx.loadRequests() : [];
         const targetReq = reqs.find(r => r.id === reqId);
         if (!targetReq) {
-          await answerCallbackQuery(cb.id, '❌ Demande introuvable.', true);
+          await answer('❌ Demande introuvable.', true);
           return;
         }
         if (targetReq.status !== 'PENDING') {
-          await answerCallbackQuery(cb.id, `⚠️ Demande déjà traitée (${targetReq.status}).`, true);
+          await answer(`⚠️ Demande déjà traitée (${targetReq.status}).`, true);
           return;
         }
 
@@ -1316,7 +1345,7 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
           note: `Approbation demande adhésion ${targetReq.fullName} -> ${tokenCode}`
         });
 
-        await answerCallbackQuery(cb.id, `✅ Approuvé pour ${targetReq.fullName} !`);
+        await answer(`✅ Approuvé pour ${targetReq.fullName} !`);
         await sendMessage(chatId, `🎉 *DEMANDE APPROUVÉE AVEC SUCCÈS !*\n\n` +
           `👤 *Client :* ${targetReq.fullName} (${targetReq.flag || '🌍'} ${targetReq.countryName})\n` +
           `📞 *Contact :* \`${targetReq.dialPrefix || ''} ${targetReq.contactDetail}\` (${targetReq.channel || 'WHATSAPP'})\n` +
@@ -1339,7 +1368,7 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
           targetReq.status = 'REJECTED';
           targetReq.processedAt = new Date().toISOString();
           if (ctx.saveRequests) ctx.saveRequests(reqs);
-          await answerCallbackQuery(cb.id, `Demande rejetée.`);
+          await answer(`Demande rejetée.`);
           await sendMessage(chatId, `❌ *Demande rejetée pour ${targetReq.fullName}* (${targetReq.dialPrefix || ''} ${targetReq.contactDetail}).`, {
             reply_markup: {
               inline_keyboard: [
@@ -1352,6 +1381,8 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
       }
     } catch (err: unknown) {
       console.error('[TelegramBot] Callback Error:', err instanceof Error ? err.message : String(err));
+    } finally {
+      await answer();
     }
   }
 
@@ -1379,6 +1410,11 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
         chatId,
         `⛔ *ACCÈS RESTREINT — ABESS VPN MASTER*\n\nCe bot est réservé aux identifiants présents dans TELEGRAM_ADMIN_IDS. Demandez au propriétaire du serveur de configurer cette variable dans l’environnement du backend.`
       );
+      return;
+    }
+
+    if (ctx.legacyVlessRetired && /^\/(create|batch|search|reset|xray|reload)(\s|$)/.test(text)) {
+      await sendMessage(chatId, 'ℹ️ Cette commande concernait les licences VLESS, retirées. Les clients SSH-WSS se gèrent depuis le panneau web.');
       return;
     }
 
@@ -1702,7 +1738,8 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
 
   // Periodic proactive notifications for admins (Quota exceeded, Expirations)
   const alertInterval = setInterval(() => {
-    void ctx.runTransaction(async () => {
+    if (ctx.legacyVlessRetired) return; // VLESS tokens no longer exist in SSH-WSS mode.
+    void inTransaction(async () => {
     if (!isRunning || authorizedAdmins.size === 0) return;
     try {
       const tokens = ctx.loadTokens();
@@ -1738,7 +1775,7 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
       pollAbortController = new AbortController();
       try {
         const res = await fetch(`https://api.telegram.org/bot${token}/getUpdates?offset=${offset}&timeout=25`, {
-          signal: pollAbortController.signal
+          signal: AbortSignal.any([pollAbortController.signal, AbortSignal.timeout(40000)])
         });
         const json = await res.json() as any;
 
@@ -1747,9 +1784,9 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
             offset = Math.max(offset, update.update_id + 1);
 
             if (update.callback_query) {
-              await ctx.runTransaction(() => handleCallbackQuery(update.callback_query!)).catch(() => console.error('[TelegramBot] Operation failed.'));
+              await inTransaction(() => handleCallbackQuery(update.callback_query!)).catch(() => console.error('[TelegramBot] Operation failed.'));
             } else if (update.message) {
-              await ctx.runTransaction(() => handleMessage(update.message!)).catch(() => console.error('[TelegramBot] Operation failed.'));
+              await inTransaction(() => handleMessage(update.message!)).catch(() => console.error('[TelegramBot] Operation failed.'));
             }
           }
         } else if (json.error_code === 409) {
