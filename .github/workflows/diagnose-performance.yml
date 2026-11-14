@@ -1,4 +1,5 @@
 name: Diagnose VPN performance
+# Recheck CPU and transport after the reversible BBR/observer optimization.
 on:
   workflow_dispatch:
   push:
