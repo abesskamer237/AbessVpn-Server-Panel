@@ -1,0 +1,90 @@
+name: Update consumption observer
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/update-traffic-observer.yml
+      - scripts/ssh-ws-passive-traffic.py
+      - scripts/install-traffic-observer.sh
+      - scripts/test-ssh-socket-traffic.py
+permissions:
+  contents: read
+concurrency:
+  group: abess-traffic-observer-update
+  cancel-in-progress: false
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Test accounting and kernel counters
+        run: python3 scripts/test-ssh-socket-traffic.py
+      - name: Configure SSH authentication
+        shell: bash
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_SSH_KNOWN_HOSTS: ${{ secrets.VPS_SSH_KNOWN_HOSTS }}
+          VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD || secrets.VPS_PASSWORD }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_PORT: ${{ vars.VPS_PORT }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.ssh" "$HOME/.local/bin"
+          if [[ -n "${VPS_SSH_KEY:-}" ]]; then
+            printf '%s\n' "$VPS_SSH_KEY" > "$HOME/.ssh/id_ed25519"
+            chmod 600 "$HOME/.ssh/id_ed25519"
+          elif [[ -n "${VPS_SSH_PASSWORD:-}" ]]; then
+            if ! command -v sshpass >/dev/null 2>&1; then
+              sudo apt-get update
+              sudo apt-get install -y sshpass
+            fi
+          else
+            echo "Provide VPS_SSH_KEY (recommended) or VPS_SSH_PASSWORD." >&2
+            exit 1
+          fi
+          # Verify the existing production VPS identity against its
+          # previously recorded Ed25519 host key fingerprint. Refuse changes.
+          if [[ -z "${VPS_SSH_KNOWN_HOSTS:-}" ]]; then
+            ssh-keyscan -T 12 -p "${VPS_PORT:-22}" -t ed25519 "$VPS_HOST" 2>/dev/null > "$HOME/.ssh/known_hosts"
+          else
+            printf '%s\n' "$VPS_SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          fi
+          test -s "$HOME/.ssh/known_hosts"
+          ssh-keygen -lf "$HOME/.ssh/known_hosts" -E sha256 |
+            grep -Fq 'SHA256:LgoMnkXsbf7RYOw5LRm0ErLVQ6n0JDJBJIAltFxOChc' || {
+              echo "::error::VPS SSH host key differs from previously verified installation." >&2
+              exit 1
+            }
+          chmod 600 "$HOME/.ssh/known_hosts"
+          cat > "$HOME/.local/bin/abess-ssh" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [[ -s "$HOME/.ssh/id_ed25519" ]]; then
+            exec ssh -o StrictHostKeyChecking=yes -i "$HOME/.ssh/id_ed25519" -o BatchMode=yes -o IdentitiesOnly=yes "$@"
+          fi
+          export SSHPASS="$VPS_SSH_PASSWORD"
+          exec sshpass -e ssh -o StrictHostKeyChecking=yes -o PreferredAuthentications=password,keyboard-interactive -o PubkeyAuthentication=no "$@"
+          SH
+          cat > "$HOME/.local/bin/abess-scp" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [[ -s "$HOME/.ssh/id_ed25519" ]]; then
+            exec scp -o StrictHostKeyChecking=yes -i "$HOME/.ssh/id_ed25519" -o BatchMode=yes -o IdentitiesOnly=yes "$@"
+          fi
+          export SSHPASS="$VPS_SSH_PASSWORD"
+          exec sshpass -e scp -o StrictHostKeyChecking=yes -o PreferredAuthentications=password,keyboard-interactive -o PubkeyAuthentication=no "$@"
+          SH
+          chmod 700 "$HOME/.local/bin/abess-ssh" "$HOME/.local/bin/abess-scp"
+      - name: Update only the consumption observer
+        env:
+          VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD || secrets.VPS_PASSWORD }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ vars.VPS_PORT }}
+        run: |
+          set -euo pipefail
+          remote_dir="$("$HOME/.local/bin/abess-ssh" -p "${VPS_PORT:-22}" "${VPS_USER}@${VPS_HOST}" 'mktemp -d /tmp/abess-traffic-update.XXXXXXXX')"
+          [[ "$remote_dir" =~ ^/tmp/abess-traffic-update\.[A-Za-z0-9]+$ ]]
+          "$HOME/.local/bin/abess-scp" -P "${VPS_PORT:-22}" scripts/ssh-ws-passive-traffic.py scripts/install-traffic-observer.sh scripts/test-ssh-socket-traffic.py "${VPS_USER}@${VPS_HOST}:$remote_dir/"
+          "$HOME/.local/bin/abess-ssh" -p "${VPS_PORT:-22}" "${VPS_USER}@${VPS_HOST}" "bash '$remote_dir/install-traffic-observer.sh' </dev/null; result=\$?; rm -rf '$remote_dir'; exit \$result"

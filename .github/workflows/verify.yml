@@ -58,6 +58,9 @@ jobs:
           node scripts/test-ssh-ws.mjs
           node scripts/benchmark-ssh-ws.mjs
 
+      - name: Verify per-account SSH socket consumption
+        run: python3 scripts/test-ssh-socket-traffic.py
+
       - name: Verify MFA, backup encryption and manual transfer approval
         run: node --import tsx scripts/test-platform.mjs
 

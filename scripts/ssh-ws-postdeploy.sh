@@ -169,3 +169,8 @@ echo "ABESS_SSH_WS_SNI=$EDGE_SNI"
 echo 'ABESS_SSH_WS_PORT=443'
 echo 'ABESS_SSH_WS_PATH=/ssh-ws/<unique-client-secret>'
 echo "ABESS_SSH_WS_NODE_ID=$VPN_NODE_ID"
+
+# Keep passive accounting on the existing raw-upgrade forwarding service.
+if systemctl is-active --quiet willy-ssh-ws.service; then
+  bash scripts/install-traffic-observer.sh </dev/null
+fi
