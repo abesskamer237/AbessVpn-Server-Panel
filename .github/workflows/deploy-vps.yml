@@ -448,7 +448,7 @@ jobs:
           echo 'ABESS backend HTTPS readiness verified.'
           # Reuse the established connection: opening a fresh SSH session
           # immediately after rollout can be reset by the VPS SSH service.
-          bash scripts/ssh-ws-postdeploy.sh
+          bash scripts/ssh-ws-postdeploy.sh </dev/null
           for service in abess-ssh-ws-sshd abess-ssh-ws-gateway abess-ssh-ws-reconciler; do
             systemctl is-active --quiet "$service" || exit 1
           done
