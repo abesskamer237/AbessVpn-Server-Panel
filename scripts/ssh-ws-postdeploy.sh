@@ -157,9 +157,13 @@ curl --fail --silent --show-error --max-time 10 "https://$VPN_DOMAIN/api/v1/ping
 docker compose exec -T caddy test -S /var/run/abess-ssh-ws/gateway.sock || {
  echo 'Caddy container cannot access private SSH-WS socket' >&2; exit 1;
 }
-# The path is intentionally not a functional client licence; it must be refused.
-STATUS="$(curl --silent --show-error --max-time 10 -o /dev/null -w '%{http_code}' "https://$VPN_DOMAIN/ssh-ws/no-such-client")"
-[[ "$STATUS" = '404' ]] || { echo "Unexpected WSS proxy test response HTTP $STATUS" >&2; exit 1; }
+# Test the managed gateway directly. The public Caddyfile also supports a
+# separate raw-upgrade upstream; a plain HTTPS GET there serves the panel.
+# Do not mistake that SPA response for managed-gateway authentication.
+STATUS="$(curl --silent --show-error --max-time 10 \
+  --unix-socket /var/lib/abess-ssh-ws/socket/gateway.sock \
+  -o /dev/null -w '%{http_code}' http://localhost/ssh-ws/no-such-client)"
+[[ "$STATUS" = '404' ]] || { echo "Unexpected managed gateway rejection response HTTP $STATUS" >&2; exit 1; }
 echo 'ABESS_SSH_WS_INSTALLATION=SUCCESS'
 echo "ABESS_SSH_WS_SNI=$EDGE_SNI"
 echo 'ABESS_SSH_WS_PORT=443'
