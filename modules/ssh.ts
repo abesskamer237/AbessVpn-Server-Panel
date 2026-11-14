@@ -199,26 +199,34 @@ export function registerSsh(app:Express,d:{
     const hasEnabled=typeof req.body?.enabled==='boolean';
     const hasLabel=req.body?.label!==undefined;
     const hasConnections=req.body?.maxConnections!==undefined;
-    if(!hasEnabled&&!hasLabel&&!hasConnections)return res.sendStatus(400);
-    if(hasLabel){
-      const label=String(req.body.label||'').trim();
-      if(!label||label.length>80)return res.status(400).json({error:'Nom client invalide.'});
-      a.label=label;
+    const hasPassword=req.body?.password!==undefined;
+    const hasOwner=req.body?.resellerId!==undefined;
+    if(!hasEnabled&&!hasLabel&&!hasConnections&&!hasPassword&&!hasOwner)return res.sendStatus(400);
+    // Validate every field before mutating anything: a 4xx response still commits.
+    if(hasPassword&&(!a.managed||typeof req.body.password!=='string'||!/^[A-Za-z0-9@#$%&*+=._-]{8,96}$/.test(req.body.password)))
+      return res.status(400).json({error:'Mot de passe SSH invalide (8 à 96 caractères : lettres, chiffres, @#$%&*+=._-).'});
+    let newOwner:User|undefined;
+    if(hasOwner){
+      if(!['SUPER_ADMIN','ADMIN'].includes(actor.role))return res.status(403).json({error:'Seule l’administration peut transférer un client.'});
+      newOwner=d.users().find(u=>u.id===String(req.body.resellerId)&&u.status==='active');
+      if(!newOwner||!d.ownerActive(newOwner.id))return res.status(400).json({error:'Nouveau propriétaire introuvable ou inactif.'});
     }
-    if(hasConnections){
-      const maxConnections=Number(req.body.maxConnections);
-      if(!Number.isInteger(maxConnections)||maxConnections<1||maxConnections>10)
-        return res.status(400).json({error:'La limite de sessions doit être comprise entre 1 et 10.'});
-      a.maxConnections=maxConnections;
-    }
-    if(hasEnabled){
-      if(req.body.enabled&&(Date.parse(a.expiresAt)<=Date.now()||a.usedBytes>=a.quotaBytes||!d.ownerActive(a.resellerId)))
-        return res.status(409).json({error:'Renouvelez le compte avant réactivation.'});
-      a.enabled=req.body.enabled;
-    }
+    const label=hasLabel?String(req.body.label||'').trim():a.label;
+    if(hasLabel&&(!label||label.length>80))return res.status(400).json({error:'Nom client invalide.'});
+    const maxConnections=hasConnections?Number(req.body.maxConnections):a.maxConnections;
+    if(hasConnections&&(!Number.isInteger(maxConnections)||maxConnections<1||maxConnections>10))
+      return res.status(400).json({error:'La limite de sessions doit être comprise entre 1 et 10.'});
+    if(hasEnabled&&req.body.enabled&&(Date.parse(a.expiresAt)<=Date.now()||a.usedBytes>=a.quotaBytes||!d.ownerActive(newOwner?.id||a.resellerId)))
+      return res.status(409).json({error:'Renouvelez le compte avant réactivation.'});
+    a.label=label;a.maxConnections=maxConnections;
+    // The VPS reconciler already re-applies a password whose hash changed.
+    if(hasPassword)a.password=seal(req.body.password,d.key);
+    if(newOwner){a.resellerId=newOwner.id;a.resellerName=newOwner.name;}
+    if(hasEnabled)a.enabled=req.body.enabled;
     d.write(state);
     d.audit({action:'SSH_UPDATED',actor:actor.id,role:actor.role,
-      details:JSON.stringify({id:a.id,enabled:a.enabled,label:a.label,maxConnections:a.maxConnections})});
+      details:JSON.stringify({id:a.id,enabled:a.enabled,label:a.label,maxConnections:a.maxConnections,
+        ...(hasPassword?{passwordChanged:true}:{}),...(newOwner?{ownerId:newOwner.id}:{})})});
     res.json(safeSshAccount(a));
   });
   app.delete('/api/v1/admin/ssh/accounts/:id',d.authenticate,admin,(req,res)=>{

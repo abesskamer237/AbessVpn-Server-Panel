@@ -121,3 +121,41 @@ test('command palette navigates with the keyboard and the sidebar collapses',asy
   await expect(page.locator('.panel-shell.collapsed')).toBeVisible();
   await page.getByLabel('Déplier la barre latérale').click();
 });
+
+test('reseller workspace: sub-reseller creation, credit transfer, profile, password reset and deletion',async({page,browser})=>{
+  const errors:string[]=[];page.on('pageerror',err=>errors.push(err.message));
+  await login(page);
+  const stamp=Date.now(),parentEmail='parent-'+stamp+'@example.test',parentPassword='Parent-password-'+stamp;
+  expect(await page.evaluate(async([email,password])=>(await fetch('/api/v1/admin/resellers',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:'Parent Shop',email,password,initialCredits:40})})).status,[parentEmail,parentPassword])).toBe(201);
+
+  const context=await browser.newContext();const r=await context.newPage();r.on('pageerror',err=>errors.push(err.message));
+  await r.goto('/');
+  await r.getByLabel('Adresse email',{exact:true}).fill(parentEmail);await r.getByLabel('Mot de passe',{exact:true}).fill(parentPassword);
+  await r.getByRole('button',{name:'Se connecter',exact:true}).click();
+  await expect(r.getByText('Votre solde de crédits')).toBeVisible();
+  await r.locator('.side-nav').getByRole('button',{name:'Revendeurs'}).click();
+  await r.getByRole('button',{name:'Nouveau sous-revendeur'}).click();
+  await r.getByLabel('Nom',{exact:true}).fill('Child Shop');
+  await r.getByLabel('Email',{exact:true}).fill('child-'+stamp+'@example.test');
+  await r.getByLabel('Crédits de départ (Go)').fill('10');
+  await r.getByRole('button',{name:'Créer le revendeur'}).click();
+  await expect(r.getByText('Revendeur créé',{exact:true})).toBeVisible();
+  await r.getByLabel('Fermer').click();
+  await r.locator('tr',{hasText:'Child Shop'}).getByRole('button',{name:'Crédits'}).click();
+  await r.getByLabel('Montant (Go)').fill('5');
+  await r.getByRole('button',{name:'Transférer 5 Go'}).click();
+  await expect(r.locator('.drawer .detail-item',{hasText:'Solde'}).first()).toContainText('15.00 Go');
+  await r.locator('.drawer-tab',{hasText:'Réglages'}).click();
+  await r.locator('.drawer').getByLabel('Nom',{exact:true}).fill('Child Shop Renamed');
+  await r.getByRole('button',{name:'Enregistrer le profil'}).click();
+  await expect(r.locator('.drawer-head')).toContainText('Child Shop Renamed');
+  await r.getByLabel('Générer un mot de passe revendeur').click();
+  await r.getByRole('button',{name:'Réinitialiser'}).click();
+  await expect(r.getByText('Nouveau mot de passe :')).toBeVisible();
+  r.once('dialog',d=>void d.accept());
+  await r.getByRole('button',{name:'Supprimer'}).click();
+  await expect(r.locator('tr',{hasText:'Child Shop Renamed'})).toHaveCount(0);
+  await expect(r.locator('.balance-card')).toContainText('40.00 Go'); // 40 - 10 - 5 + 15 refunded on deletion
+  await context.close();
+  expect(errors).toEqual([]);
+});

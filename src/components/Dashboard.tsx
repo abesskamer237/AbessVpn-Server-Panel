@@ -1,4 +1,4 @@
-import {Activity,ArrowRight,CalendarClock,CreditCard,Plus,Radio,ReceiptText,Server,Users,Wallet,Wifi} from 'lucide-react';
+import {Activity,ArrowRight,CalendarClock,CreditCard,History,Plus,Radio,ReceiptText,Server,UserPlus,Users,Wallet,Wifi} from 'lucide-react';
 import type {AuditEvent,OpsHealth,Reseller,Role,SshInventory,Transaction,User} from '../panelTypes';
 import {accountStatus,bytesToGb,fmtDateTime,money,percent} from '../panelTypes';
 
@@ -98,10 +98,17 @@ export function Dashboard({inventory,transactions,resellers,audit,ops,role,user,
       <div><h1>Vue d’ensemble</h1><p>Bonjour {firstName} — activité commerciale et santé de l’infrastructure SSH-WSS.</p></div>
       <div className="page-actions">
         {isSuper?<button className="btn" onClick={()=>onNavigate('servers')}><Server size={14}/>Voir les serveurs</button>
-          :<button className="btn" onClick={()=>onNavigate('billing')}><Wallet size={14}/>Acheter des crédits</button>}
+          :role==='RESELLER'?<button className="btn" onClick={()=>onNavigate('resellers')}><UserPlus size={14}/>Mes sous-revendeurs</button>
+          :<button className="btn" onClick={()=>onNavigate('billing')}><Wallet size={14}/>Facturation</button>}
         <button className="btn btn-primary" onClick={onCreateClient}><Plus size={14}/>Nouveau client</button>
       </div>
     </div>
+
+    {role==='RESELLER'&&<div className="balance-card">
+      <div><div className="bc-label">Votre solde de crédits</div><div className="bc-value">{Number(user.credits||0).toFixed(2)} Go</div>
+        <div className="bc-label">{Number(user.credits||0)<5?'Solde faible : rechargez pour continuer à créer et renouveler vos clients.':'Chaque Go de quota vendu ou renouvelé est débité de ce solde.'}</div></div>
+      <div className="row-actions"><button className="btn" onClick={()=>onNavigate('transactions')}><History size={14}/>Historique</button><button className="btn btn-primary" onClick={()=>onNavigate('billing')}><Wallet size={14}/>Acheter des crédits</button></div>
+    </div>}
 
     {/* Group 1 — activity KPIs in one strip */}
     <div className="metric-grid">
@@ -143,7 +150,16 @@ export function Dashboard({inventory,transactions,resellers,audit,ops,role,user,
         </div>
         <div className="service-line" style={{marginTop:6}}><span>Revendeurs actifs</span><strong>{resellers.filter(r=>r.status==='active').length} / {resellers.length}</strong></div>
       </section>
-      <section className="card card-pad span-4">
+      {role==='RESELLER'?<section className="card card-pad span-4">
+        <div className="section-head"><div><h2>Actions rapides</h2><p>Les opérations les plus fréquentes</p></div></div>
+        <div className="quick-grid">
+          <button className="quick-action" onClick={onCreateClient}><span className="qa-icon"><Plus size={14}/></span><span><strong>Nouveau client</strong><span>Licence SSH-WSS</span></span></button>
+          <button className="quick-action" onClick={()=>onNavigate('clients')}><span className="qa-icon"><CalendarClock size={14}/></span><span><strong>Renouveler</strong><span>{expiring} à renouveler</span></span></button>
+          <button className="quick-action" onClick={()=>onNavigate('resellers')}><span className="qa-icon"><UserPlus size={14}/></span><span><strong>Sous-revendeur</strong><span>Créer ou créditer</span></span></button>
+          <button className="quick-action" onClick={()=>onNavigate('billing')}><span className="qa-icon"><ReceiptText size={14}/></span><span><strong>Crédits</strong><span>Commander, payer</span></span></button>
+        </div>
+        <div className="service-line" style={{marginTop:8}}><span>Serveurs disponibles</span><strong>{onlineNodes} / {nodes.length}</strong></div>
+      </section>:<section className="card card-pad span-4">
         <div className="section-head"><div><h2>Infrastructure</h2><p>Nœuds et capacité</p></div>{isSuper&&<button className="btn btn-sm btn-ghost" onClick={()=>onNavigate('servers')}>Serveurs <ArrowRight size={12}/></button>}</div>
         <div className="stack" style={{gap:10}}>
           <div className="meter"><div className="meter-head"><span>Agents connectés</span><b>{onlineNodes} / {nodes.length}</b></div><div className="progress"><span style={{width:percent(onlineNodes,nodes.length)+'%'}}/></div></div>
@@ -151,7 +167,7 @@ export function Dashboard({inventory,transactions,resellers,audit,ops,role,user,
           <div className="meter"><div className="meter-head"><span>Quota consommé</span><b>{percent(used,quota)} %</b></div><div className={'progress '+(percent(used,quota)>85?'warning':'')}><span style={{width:percent(used,quota)+'%'}}/></div></div>
           {isSuper&&<div className="service-line"><span>Stockage</span><strong>{ops?.storage||'—'}</strong></div>}
         </div>
-      </section>
+      </section>}
 
       {/* Group 4 — two lists of the same shape */}
       <section className="card span-6">

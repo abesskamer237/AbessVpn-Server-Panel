@@ -58,6 +58,35 @@ Interface entièrement redessinée :
 - **Revendeurs :** actions en icônes et fenêtre dédiée aux transferts de crédits.
 - **Graphiques :** courbe d’activations en SVG natif (sans bibliothèque), anneau de taux d’activité, jauges de capacité.
 
+## Espace revendeur, onglets Clients et Revendeurs
+
+Le moteur VPN et le protocole SSH-WSS ne sont pas modifiés. Les nouvelles options passent par le contrat existant du réconciliateur, qui réapplique déjà un mot de passe dont l’empreinte change. Les paiements restent manuels : déclaration Mobile Money, puis validation par le Super Admin.
+
+**Clients**
+- **Tri et filtres :** filtres par état, revendeur et serveur ; tri par date, expiration, consommation ou nom ; indicateur J-x avant expiration.
+- **Actions groupées :** renouvellement (avec total débité), suspension, réactivation et export CSV.
+- **Fiche client en quatre onglets :**
+  - **Aperçu :** renouvellement en un clic avec solde après opération, paramètres, changement du mot de passe SSH, transfert de propriétaire (administration seulement), suppression.
+  - **Configuration :** copie du message client, partage WhatsApp, JSON, fichier.
+  - **Appareils :** liste des appareils et blocage ou déblocage.
+  - **Historique.**
+- **Création :** nom d’utilisateur proposé automatiquement, générateur de mot de passe, coût et solde après création, création bloquée si le solde est insuffisant.
+
+**Revendeurs**
+- **Liste :** filtres (actifs, suspendus, solde faible) et tris.
+- **Fiche revendeur :**
+  - **Aperçu :** crédits en ajout ou retrait, montants rapides, note, soldes avant et après, sous-revendeurs directs.
+  - **Clients**, **Mouvements de crédits.**
+  - **Réglages :** tarifs, profil (nom et email), réinitialisation du mot de passe avec révocation des sessions, suspension, suppression de la branche avec remboursement au parent.
+- **Création :** mot de passe généré, puis écran des accès à copier ou à envoyer par WhatsApp.
+
+**Tableau de bord revendeur :** solde mis en avant, achat de crédits et actions rapides.
+
+**Nouvelles routes de l’API**
+- `PATCH /admin/ssh/accounts/:id` accepte désormais `password` et `resellerId` (administration seulement).
+- Ajout de `PUT /admin/resellers/:id/profile` et `PUT /admin/resellers/:id/password`, réservées à l’administration ou au parent direct.
+- Toutes les validations ont lieu avant la moindre écriture.
+
 ## Panneau web
 
 - **Nouvelle page Facturation**

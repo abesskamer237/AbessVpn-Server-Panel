@@ -239,8 +239,8 @@ export default function App(){
       <main className="main-content">
         {notice&&<p className="notice" role="alert" style={{marginBottom:12}}>{notice}</p>}
         {tab==='dashboard'&&<Dashboard inventory={inventory} transactions={transactions} resellers={resellers} audit={audit} ops={ops} role={user.role} user={user} onNavigate={go} onCreateClient={newClient}/>}
-        {tab==='clients'&&<SshCenter inventory={inventory} resellers={resellers} role={user.role} audit={audit} request={request} refresh={refresh} createSignal={createSignal} openClient={openClient}/>}
-        {tab==='resellers'&&<ResellerCenter resellers={resellers} accounts={(inventory?.accounts||[]).filter(a=>a.managed)} busy={busy} currentUser={user} request={request} refresh={refresh}/>}
+        {tab==='clients'&&<SshCenter inventory={inventory} resellers={resellers} role={user.role} audit={audit} currentUser={user} request={request} refresh={refresh} createSignal={createSignal} openClient={openClient}/>}
+        {tab==='resellers'&&<ResellerCenter resellers={resellers} accounts={(inventory?.accounts||[]).filter(a=>a.managed)} transactions={transactions} busy={busy} currentUser={user} request={request} refresh={refresh} onOpenClient={id=>{go('clients');setOpenClient({id,n:Date.now()})}}/>}
         {tab==='billing'&&<BillingCenter currentUser={user} role={user.role} request={request} onCreditsChanged={refresh}/>}
         {tab==='transactions'&&<TransactionsCenter transactions={transactions}/>}
         {tab==='audit'&&user.role==='SUPER_ADMIN'&&<AuditCenter audit={audit} people={people}/>}
