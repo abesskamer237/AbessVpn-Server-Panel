@@ -2516,6 +2516,53 @@ async function startServer() {
     res.json({ success: true, status: reseller.status });
   });
 
+  // Edit a sub-reseller's identity or reset its password. Allowed to the
+  // administration and to the direct parent only, like status changes.
+  const manageableReseller = (req: express.Request, res: express.Response) => {
+    const user: AppUser = (req as any).user;
+    const users = loadUsers();
+    const reseller = users.find(u => u.id === req.params.id && u.role === 'RESELLER');
+    if (!reseller) { res.status(404).json({ error: 'Revendeur introuvable.' }); return null; }
+    if (user.role === 'RESELLER' && reseller.parentId !== user.id) {
+      res.status(403).json({ error: 'Vous ne pouvez modifier que vos propres sous-revendeurs.' }); return null;
+    }
+    if (!['SUPER_ADMIN', 'ADMIN', 'RESELLER'].includes(user.role)) { res.sendStatus(403); return null; }
+    return { user, users, reseller };
+  };
+  app.put('/api/v1/admin/resellers/:id/profile', authenticate, (req, res) => {
+    const ctx = manageableReseller(req, res); if (!ctx) return;
+    const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+    const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+    if (!name || name.length > 80 || !/^[^\s@]{1,64}@[^\s@]{1,190}\.[^\s@]{2,}$/.test(email)) {
+      return res.status(400).json({ error: 'Nom (80 caractères max.) et email valide requis.' });
+    }
+    if (ctx.users.some(u => u.id !== ctx.reseller.id && u.email.toLowerCase() === email)) {
+      return res.status(409).json({ error: 'Un compte avec cet email existe déjà.' });
+    }
+    ctx.reseller.name = name; ctx.reseller.email = email;
+    for (const child of ctx.users) if (child.parentId === ctx.reseller.id) child.parentName = name;
+    saveUsers(ctx.users);
+    // Keep the denormalised owner name of the reseller's SSH-WSS customers in sync.
+    const sshState = readSsh(); let renamed = 0;
+    for (const account of sshState.accounts) if (account.resellerId === ctx.reseller.id) { account.resellerName = name; renamed++; }
+    if (renamed) writeJsonAtomically(sshFile, sshState);
+    logAudit({ actor: ctx.user.id, role: ctx.user.role, action: 'RESELLER_PROFILE_UPDATED', details: ctx.reseller.id });
+    const { passwordHash, ...safe } = ctx.reseller;
+    res.json(safe);
+  });
+  app.put('/api/v1/admin/resellers/:id/password', authenticate, (req, res) => {
+    const ctx = manageableReseller(req, res); if (!ctx) return;
+    const password = req.body?.password;
+    if (typeof password !== 'string' || password.length < 12 || password.length > 256) {
+      return res.status(400).json({ error: 'Le mot de passe doit contenir 12 à 256 caractères.' });
+    }
+    ctx.reseller.passwordHash = hashPassword(password);
+    saveUsers(ctx.users);
+    for (const [sessionToken, session] of activeSessions.entries()) if (session.userId === ctx.reseller.id) activeSessions.delete(sessionToken);
+    logAudit({ actor: ctx.user.id, role: ctx.user.role, action: 'RESELLER_PASSWORD_RESET', details: ctx.reseller.id });
+    res.json({ success: true, sessionsRevoked: true });
+  });
+
   // Delete a reseller and its full descendant branch. Outstanding credits are
   // returned to the direct parent; every associated licence and session is revoked.
   app.delete('/api/v1/admin/resellers/:id', authenticate, (req, res) => {
