@@ -99,7 +99,7 @@ export function confirmManualOrder(
     account.credits + order.quotaGb > 1000000
   )
     throw new Error("Compte bénéficiaire indisponible ou plafond dépassé.");
-  account.credits += order.quotaGb;
+  account.credits = Math.round((account.credits + order.quotaGb) * 1e6) / 1e6;
   order.status = "paid";
   order.channel = verified.channel;
   order.verifiedReference = verified.reference.trim();
@@ -121,6 +121,8 @@ export function registerCommerce(
     plans: () => any[];
     audit: (event: any) => void;
     durable: () => boolean;
+    /** Credit ledger: every confirmed payment must appear in the transactions journal. */
+    ledger?: (entry: {resellerId:string;resellerName:string;type:'CREDIT_ADD';amountGb:number;balanceBefore:number;balanceAfter:number;note:string}) => void;
   },
 ) {
   const actor = (req: any) => req.user;
@@ -170,6 +172,13 @@ export function registerCommerce(
         .status(409)
         .json({ error: "Cette clé appartient à une autre commande." });
     if (!order) {
+      const open = state.orders.filter(
+        (o) => o.userId === actor(req).id && (o.status === "pending" || o.status === "submitted"),
+      ).length;
+      if (open >= 10)
+        return res.status(429).json({
+          error: "Vous avez déjà 10 commandes en cours. Finalisez-les avant d’en créer d’autres.",
+        });
       const plan = d.plans().find((plan) => plan.id === req.body?.planId);
       if (
         !plan ||
@@ -249,6 +258,8 @@ export function registerCommerce(
       if (!order) return res.sendStatus(404);
       try {
         const users = d.users();
+        const payer = users.find((user) => user.id === order.userId);
+        const balanceBefore = Number(payer?.credits || 0);
         if (
           confirmManualOrder(
             state,
@@ -264,6 +275,15 @@ export function registerCommerce(
         ) {
           d.saveUsers(users);
           d.write(state);
+          d.ledger?.({
+            resellerId: order.userId,
+            resellerName: payer?.name || order.userId,
+            type: "CREDIT_ADD",
+            amountGb: order.quotaGb,
+            balanceBefore,
+            balanceAfter: Number(payer?.credits || 0),
+            note: `Achat ${order.planName} — facture ${order.invoiceNumber} (${order.amount} XAF)`,
+          });
           d.audit({
             actor: actor(req).id,
             role: actor(req).role,

@@ -63,3 +63,99 @@ test('transactions, security and server supervision are reachable for super admi
   await expect(page.getByRole('heading',{name:'Sécurité de votre compte'})).toBeVisible();
   await expect(page.getByText('Cette session',{exact:true})).toBeVisible();
 });
+
+test('billing: super admin publishes an offer, reseller orders and declares a Mobile Money payment',async({page,browser})=>{
+  const errors:string[]=[];page.on('pageerror',err=>errors.push(err.message));
+  await login(page);
+  await page.locator('.side-nav').getByRole('button',{name:'Facturation'}).click();
+  await expect(page.getByRole('heading',{level:1,name:'Facturation'})).toBeVisible();
+  await page.getByRole('button',{name:'Nouvelle offre'}).click();
+  await page.getByLabel('Nom de l’offre').fill('Pack Test 50 Go');
+  await page.getByLabel('Prix (XAF)').fill('5000');
+  await page.getByLabel('Crédits (Go)').fill('50');
+  await page.getByRole('button',{name:'Enregistrer l’offre'}).click();
+  await expect(page.getByText('Pack Test 50 Go',{exact:true})).toBeVisible();
+
+  const resellerEmail='reseller-'+Date.now()+'@example.test',resellerPassword='Reseller-password-'+Date.now();
+  const created=await page.evaluate(async([email,password])=>{
+    const r=await fetch('/api/v1/admin/resellers',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:'Boutique Test',email,password,initialCredits:0})});
+    return r.status;
+  },[resellerEmail,resellerPassword]);
+  expect(created).toBeLessThan(300);
+
+  const context=await browser.newContext();const reseller=await context.newPage();
+  reseller.on('pageerror',err=>errors.push(err.message));
+  await reseller.goto('/');
+  await reseller.getByLabel('Adresse email',{exact:true}).fill(resellerEmail);
+  await reseller.getByLabel('Mot de passe',{exact:true}).fill(resellerPassword);
+  await reseller.getByRole('button',{name:'Se connecter',exact:true}).click();
+  await expect(reseller.getByRole('heading',{level:1,name:'Vue d’ensemble'})).toBeVisible();
+  await expect(reseller.getByRole('button',{name:'Serveurs'})).toHaveCount(0);
+  await expect(reseller.getByRole('button',{name:'Journal d’audit'})).toHaveCount(0);
+  await reseller.locator('.side-nav').getByRole('button',{name:'Facturation'}).click();
+  await expect(reseller.getByText('Coordonnées de paiement')).toBeVisible();
+  await reseller.locator('.plan-card',{hasText:'Pack Test 50 Go'}).getByRole('button',{name:'Commander'}).click();
+  await expect(reseller.locator('.modal').getByText('Déclarer le paiement',{exact:true})).toBeVisible();
+  await reseller.getByLabel('Référence de la transaction').fill('MP260101.1234.TEST01');
+  await reseller.getByRole('button',{name:'Envoyer la déclaration'}).click();
+  await expect(reseller.locator('td').getByText('Paiement déclaré',{exact:true})).toBeVisible();
+  await context.close();
+
+  await page.reload();
+  await page.locator('.side-nav').getByRole('button',{name:'Facturation'}).click();
+  await expect(page.locator('tr',{hasText:'Boutique Test'}).getByRole('button',{name:'Vérifier'})).toBeVisible();
+  await page.locator('.side-nav').getByRole('button',{name:'Journal d’audit'}).click();
+  await expect(page.getByRole('heading',{level:1,name:'Journal d’audit'})).toBeVisible();
+  await expect(page.getByText('PAYMENT DECLARED').first()).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test('command palette navigates with the keyboard and the sidebar collapses',async({page})=>{
+  await login(page);
+  await page.keyboard.press('Control+k');
+  await expect(page.getByRole('dialog',{name:'Palette de commandes'})).toBeVisible();
+  await page.getByLabel('Rechercher une commande').fill('factur');
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('heading',{level:1,name:'Facturation'})).toBeVisible();
+  await page.getByLabel('Replier la barre latérale').click();
+  await expect(page.locator('.panel-shell.collapsed')).toBeVisible();
+  await page.getByLabel('Déplier la barre latérale').click();
+});
+
+test('reseller workspace: sub-reseller creation, credit transfer, profile, password reset and deletion',async({page,browser})=>{
+  const errors:string[]=[];page.on('pageerror',err=>errors.push(err.message));
+  await login(page);
+  const stamp=Date.now(),parentEmail='parent-'+stamp+'@example.test',parentPassword='Parent-password-'+stamp;
+  expect(await page.evaluate(async([email,password])=>(await fetch('/api/v1/admin/resellers',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:'Parent Shop',email,password,initialCredits:40})})).status,[parentEmail,parentPassword])).toBe(201);
+
+  const context=await browser.newContext();const r=await context.newPage();r.on('pageerror',err=>errors.push(err.message));
+  await r.goto('/');
+  await r.getByLabel('Adresse email',{exact:true}).fill(parentEmail);await r.getByLabel('Mot de passe',{exact:true}).fill(parentPassword);
+  await r.getByRole('button',{name:'Se connecter',exact:true}).click();
+  await expect(r.getByText('Votre solde de crédits')).toBeVisible();
+  await r.locator('.side-nav').getByRole('button',{name:'Revendeurs'}).click();
+  await r.getByRole('button',{name:'Nouveau sous-revendeur'}).click();
+  await r.getByLabel('Nom',{exact:true}).fill('Child Shop');
+  await r.getByLabel('Email',{exact:true}).fill('child-'+stamp+'@example.test');
+  await r.getByLabel('Crédits de départ (Go)').fill('10');
+  await r.getByRole('button',{name:'Créer le revendeur'}).click();
+  await expect(r.getByText('Revendeur créé',{exact:true})).toBeVisible();
+  await r.getByLabel('Fermer').click();
+  await r.locator('tr',{hasText:'Child Shop'}).getByRole('button',{name:'Crédits'}).click();
+  await r.getByLabel('Montant (Go)').fill('5');
+  await r.getByRole('button',{name:'Transférer 5 Go'}).click();
+  await expect(r.locator('.drawer .detail-item',{hasText:'Solde'}).first()).toContainText('15.00 Go');
+  await r.locator('.drawer-tab',{hasText:'Réglages'}).click();
+  await r.locator('.drawer').getByLabel('Nom',{exact:true}).fill('Child Shop Renamed');
+  await r.getByRole('button',{name:'Enregistrer le profil'}).click();
+  await expect(r.locator('.drawer-head')).toContainText('Child Shop Renamed');
+  await r.getByLabel('Générer un mot de passe revendeur').click();
+  await r.getByRole('button',{name:'Réinitialiser'}).click();
+  await expect(r.getByText('Nouveau mot de passe :')).toBeVisible();
+  r.once('dialog',d=>void d.accept());
+  await r.getByRole('button',{name:'Supprimer'}).click();
+  await expect(r.locator('tr',{hasText:'Child Shop Renamed'})).toHaveCount(0);
+  await expect(r.locator('.balance-card')).toContainText('40.00 Go'); // 40 - 10 - 5 + 15 refunded on deletion
+  await context.close();
+  expect(errors).toEqual([]);
+});

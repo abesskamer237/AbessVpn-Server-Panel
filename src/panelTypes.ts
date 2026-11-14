@@ -83,3 +83,16 @@ export const csvDownload=(filename:string,rows:(string|number|null|undefined)[][
   const url=URL.createObjectURL(new Blob([data],{type:'text/csv;charset=utf-8'}));
   const a=document.createElement('a');a.href=url;a.download=filename;a.click();URL.revokeObjectURL(url);
 };
+
+export type Plan={
+  id:string;name:string;quotaGb:number;durationDays:number;priceCfa:number;badge?:string;description?:string;
+};
+export type PaymentContact={channel:'MOMO'|'OM';label:string;number:string;holder:string};
+export type Order={
+  id:string;userId:string;planId:string;planName:string;quotaGb:number;amount:number;currency:'XAF';
+  status:'pending'|'submitted'|'paid'|'rejected'|'cancelled';createdAt:string;submittedAt?:string;paidAt?:string;
+  channel?:'MOMO'|'OM';claimedReference?:string;verifiedReference?:string;rejectionReason?:string;invoiceNumber?:string;
+  own?:boolean;customerName?:string;
+};
+export type OrdersPayload={mode:string;enabled:boolean;canConfirm:boolean;contacts:PaymentContact[];orders:Order[]};
+export const money=(n:number|null|undefined)=>new Intl.NumberFormat('fr-FR',{style:'currency',currency:'XAF',maximumFractionDigits:0}).format(Number(n||0));

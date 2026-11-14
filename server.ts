@@ -92,6 +92,9 @@ export interface TransactionLog {
   timestamp: string;
 }
 
+/** Credits are stored in GB with 1e-6 precision to avoid floating point drift. */
+const roundCredits = (value: number) => Math.round(value * 1e6) / 1e6;
+
 function loadTransactions(): TransactionLog[] {
   if (!hasDocument(transactionsFile)) return [];
   try {
@@ -131,6 +134,8 @@ export interface AppUser {
   pricePerGbCfa?: number;
   costPerGbCfa?: number;
   pricePerLicenceCfa?: number;
+  /** Set when an ADMIN/SUPER_ADMIN suspended the account: a parent reseller cannot lift it. */
+  suspendedByAdmin?: boolean;
 }
 
 export interface ClientToken {
@@ -1026,57 +1031,6 @@ export function generateUnifiedToken(): string {
 
 export const DEFAULT_SSH_PAYLOAD = "GET / HTTP/1.1[crlf]FoxNews.com;www.epicgames.com;us.shop.battle.net;unity3d.com;www.icloud.com;www.bing.com;www.samsung.com;store.nintendo.com.br;www.garena.com;n41-06-05.opera-mini.net[crlf]Host: m.batch.com[crlf][crlf]X / HTTP/1.1[crlf]FoxNews.com;www.epicgames.com;us.shop.battle.net;unity3d.com;www.icloud.com;www.bing.com;www.samsung.com;store.nintendo.com.br;www.garena.com;n41-06-05.opera-mini.net[crlf]Host: [host][crlf][crlf]GET /loic HTTP/1.1[crlf]Host: dbl5i9lrmmeui.cloudfront.net[crlf]Backend: crashlyticsreports-pa.googleapis.com[crlf]Upgrade: websocket[crlf]Connection: Upgrade[crlf]User-agent:[ua][crlf][crlf]";
 
-/**
- * Host-level SSH account management is unavailable in the containerized
- * control plane. A dedicated host-side provisioner with a narrow authenticated
- * interface is required. This process must never run sudo useradd/chpasswd or
- * persist plaintext SSH passwords on the host.
- */
-export function createLinuxSshAccount(_username: string, _password: string, _days = 30): boolean {
-  return false;
-}
-
-export function deleteLinuxSshAccount(_username: string): boolean {
-  return false;
-}
-
-export function generateSshConfigJson(token: ClientToken): Record<string, unknown> {
-  const ssh = token.sshConfig;
-  if (!ssh || !ssh.sshHost || !ssh.sshUsername || !ssh.sshPassword) {
-    return {
-      configs: [],
-      error: 'Cette ancienne licence SSH ne contient pas de paramètres provisionnés valides.'
-    };
-  }
-  return {
-    configs: [
-      {
-        name: ssh.remarks || token.plan || '𖤍 ORANGE🍊〆DANNY 𖤍',
-        address: `${ssh.sshHost}:${Number(ssh.sshPort) || 80}`,
-        type: 'SSH',
-        sshConfig: {
-          sshConfigType: ssh.sshConfigType || 'SSH-Payload',
-          remarks: ssh.remarks || token.plan || 'Configuration SSH historique',
-          sshHost: ssh.sshHost,
-          sshPort: Number(ssh.sshPort) || 80,
-          sshUsername: ssh.sshUsername,
-          sshPassword: ssh.sshPassword,
-          payload: ssh.payload || DEFAULT_SSH_PAYLOAD
-        }
-      }
-    ]
-  };
-}
-
-/**
- * Disabled: this Node container is not the Linux SSH host and must not attempt
- * to inspect or kill host processes with sudo. A dedicated SSH provisioner is
- * required before SSH account management can be re-enabled.
- */
-export function enforceSshDeviceLimits(): void {
-  return;
-}
-
 export function probeEndpoint(targetServer: string, sni: string, timeoutMs = 3000): Promise<{ tcp_latency_ms: number; tls_latency_ms: number; latency_ms: number; status: string; error?: string }> {
   return new Promise((resolve) => {
     let host = targetServer.trim();
@@ -1366,13 +1320,6 @@ let activeTunnelConnections = 0;
 let totalBytesTransferred = 0;
 const startTime = Date.now();
 
-// Sessions in memory for token authentication with TTL (24h)
-export interface SessionData {
-  userId: string;
-  role: string;
-  email: string;
-  createdAt: number;
-}
 const securityFile = path.resolve(dataDir, 'security.json');
 const security = new SecurityService(
   () => hasDocument(securityFile) ? readDocument(securityFile) : { mfa: {}, sessions: {} },
@@ -1535,7 +1482,6 @@ async function startServer() {
   });
   app.use(express.urlencoded({extended:false,limit:'64kb'}));
   app.use(express.json({ limit: '2mb' }));
-  app.use(storage.middleware());
 
   // Single-protocol production switch. Keep historical financial and account
   // records intact for audit/reconciliation; retire legacy VLESS profiles,
@@ -1562,6 +1508,9 @@ async function startServer() {
         p.startsWith('/api/v1/token/') ||
         p.startsWith('/api/token/') ||
         p==='/api/v1/auth/token' ||
+        p==='/api/v1/auth/import-link' ||
+        /^\/api\/(v1\/)?membership\//.test(p) ||
+        /^\/api\/(v1\/)?admin\/requests\/[^/]+\/approve$/.test(p) ||
         /^(\/api\/v1\/nodes\/[^/]+\/config)$/.test(p);
       if(retiredPath)return res.status(410).set('Cache-Control','no-store').json({
         error:'Protocole supprimé. ABESS utilise uniquement SSH sur WebSocket TLS (WSS).'
@@ -1570,13 +1519,13 @@ async function startServer() {
     };
     app.use(retired);
   }
+  // Retired paths above answer without opening a database transaction.
+  app.use(storage.middleware());
 
   // Same-origin panel access plus explicit local development or configured origins.
   const allowedOrigins = new Set<string>([
     `https://${vpnDomain}`,
-    'http://localhost:5173',
-    'http://127.0.0.1:5173',
-    ...(!isProduction ? [`http://localhost:${PORT}`, `http://127.0.0.1:${PORT}`] : []),
+    ...(!isProduction ? ['http://localhost:5173', 'http://127.0.0.1:5173', `http://localhost:${PORT}`, `http://127.0.0.1:${PORT}`] : []),
     ...(process.env.CORS_ALLOWED_ORIGINS || '')
       .split(',')
       .map(origin => origin.trim())
@@ -1593,8 +1542,8 @@ async function startServer() {
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Vary', 'Origin');
     }
-    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, Idempotency-Key, X-Claim-Secret');
     if (req.method === 'OPTIONS') {
       res.sendStatus(204);
       return;
@@ -1625,7 +1574,7 @@ async function startServer() {
       if (!a.isActive) return false;
       if (a.expiresAt && new Date(a.expiresAt) < now) return false;
       if (platform !== 'all' && a.targetPlatform !== 'ALL') {
-        if (a.targetPlatform.toLowerCase() !== platform) return false;
+        if (String(a.targetPlatform || '').toLowerCase() !== platform) return false;
       }
       return true;
     }).sort((a, b) => (b.priority || 0) - (a.priority || 0) || new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime());
@@ -1949,7 +1898,7 @@ async function startServer() {
   registerSecurityRoutes(app, {authenticate, security, users:loadUsers, saveUsers, verifyPassword, hashPassword, audit:logAudit, guard:ip=>checkLoginRateLimit(ip).allowed, failure:ip=>recordLoginAttempt(ip,false)});
 
   const commerceFile=path.resolve(dataDir,'commerce.json');
-  registerCommerce(app,{authenticate,limiter:publicApiRateLimiter,read:()=>hasDocument(commerceFile)?readDocument(commerceFile):{orders:[]},write:v=>{writeJsonAtomically(commerceFile,v);},users:loadUsers,saveUsers,plans:loadPlans,audit:logAudit,durable:()=>Boolean(storage.pool)});
+  registerCommerce(app,{authenticate,limiter:publicApiRateLimiter,ledger:logTransaction,read:()=>hasDocument(commerceFile)?readDocument(commerceFile):{orders:[]},write:v=>{writeJsonAtomically(commerceFile,v);},users:loadUsers,saveUsers,plans:loadPlans,audit:logAudit,durable:()=>Boolean(storage.pool)});
 
   const sshFile = path.resolve(dataDir, 'ssh.json');
   const sshControl = process.env.SSH_CONTROL_DIR || path.resolve(dataDir, 'ssh-control');
@@ -1985,7 +1934,14 @@ async function startServer() {
   const nodesFile=path.resolve(dataDir,'nodes.json');
   const fullSnapshot=async()=>({version:3,ssh:readSsh(),auditLogs:loadAuditLogs(),auditEvents:await storage.exportAudit(),masterKeyId:crypto.createHash('sha256').update(process.env.MASTER_SECRET!).digest('hex').slice(0,16),users:loadUsers(),tokens:loadTokens().map(backupClientToken),masterConfig:(()=>{const {secretPassphrase,...config}=loadMasterConfig();return config;})(),protocolConfigs:loadProtocolConfigs(),transactions:loadTransactions(),plans:loadPlans(),requests:loadRequests(),appVersion:loadAppVersionConfig(),announcements:loadAnnouncements(),security:{mfa:security.state().mfa,sessions:{}},commerce:hasDocument(commerceFile)?readDocument(commerceFile):{orders:[]},nodes:hasDocument(nodesFile)?readDocument(nodesFile):[]});
   const restoreSnapshot=async(snapshot:any)=>{
-    if(!snapshot || snapshot.masterKeyId!==crypto.createHash('sha256').update(process.env.MASTER_SECRET!).digest('hex').slice(0,16) || !validRestoredUsers(snapshot.users)||!Array.isArray(snapshot.tokens)||!Array.isArray(snapshot.plans)||!Array.isArray(snapshot.protocolConfigs))throw new Error('Invalid snapshot');
+    const objects=(value:unknown)=>Array.isArray(value)&&value.every(item=>item!==null&&typeof item==='object'&&!Array.isArray(item));
+    const optionalObjects=(value:unknown)=>value===undefined||objects(value);
+    if(!snapshot || snapshot.masterKeyId!==crypto.createHash('sha256').update(process.env.MASTER_SECRET!).digest('hex').slice(0,16) || !validRestoredUsers(snapshot.users)||
+      !objects(snapshot.tokens)||!objects(snapshot.plans)||!objects(snapshot.protocolConfigs)||
+      !snapshot.masterConfig||typeof snapshot.masterConfig!=='object'||
+      !optionalObjects(snapshot.nodes)||!optionalObjects(snapshot.transactions)||!optionalObjects(snapshot.requests)||!optionalObjects(snapshot.announcements)||
+      (snapshot.ssh!==undefined&&(!snapshot.ssh||!objects(snapshot.ssh.accounts)))||
+      (snapshot.commerce!==undefined&&(!snapshot.commerce||!objects(snapshot.commerce.orders))))throw new Error('Invalid snapshot');
     // Keep a verified encrypted pre-restore snapshot; PostgreSQL commits all aggregates together.
     writeJsonAtomically(path.resolve(backupsDir,`pre-restore-${Date.now()}.encrypted.json`),encryptedBackup(await fullSnapshot(),process.env.BACKUP_ENCRYPTION_KEY||process.env.MASTER_SECRET!));
     saveMasterConfig(snapshot.masterConfig);saveProtocolConfigs(snapshot.protocolConfigs);saveUsers(snapshot.users);saveTokens(snapshot.tokens);savePlans(snapshot.plans);
@@ -2015,13 +1971,16 @@ async function startServer() {
       format:'abess-managed-ssh-ws-v1',
       observedAt:new Date().toISOString(),
       accounts:readSsh().accounts.filter(a=>a.managed&&a.nodeId===node.id).map(a=>{
-        const enabled=Boolean(a.wsAccessHash && a.wsAccessKey && a.enabled&&sshOwnerActive(a.resellerId)&&
+        let enabled=Boolean(a.wsAccessHash && a.wsAccessKey && a.enabled&&sshOwnerActive(a.resellerId)&&
           Number.isFinite(Date.parse(a.expiresAt))&&Date.parse(a.expiresAt)>Date.now()&&
           a.usedBytes<a.quotaBytes);
+        // One undecryptable secret must not invalidate the node's whole manifest.
+        let password:string|undefined;
+        if(enabled){try{password=unseal(a.password,process.env.MASTER_SECRET!)}catch{enabled=false}}
         return {id:a.id,username:a.username,expiresAt:a.expiresAt,enabled,
           tokenHash:a.wsAccessHash || '',quotaBytes:a.quotaBytes,
           baselineUsedBytes:a.usedBytes,maxConnections:a.maxConnections,blockedDevices:a.blockedDeviceKeys||[],
-          ...(enabled?{password:unseal(a.password,process.env.MASTER_SECRET!)}:{})};
+          ...(enabled?{password}:{})};
       })
     }),
     nodeSshReport: (node,reports) => {
@@ -2036,11 +1995,11 @@ async function startServer() {
           // Across restarts the local durable upper bound may be larger; never
           // decrease the server-side verified counter.
           a.usedBytes=Math.max(a.usedBytes,report.usedBytes);
-          a.online=report.online;
+          a.online=report.online===undefined?a.online:Math.max(0,Math.min(10,Math.trunc(Number(report.online)||0)));
           a.usageObservedAt=now;
           if(Array.isArray(report.devices))a.devices=report.devices.map((dv:any)=>({
             deviceKey:String(dv.deviceKey),usedBytes:Number(dv.usedBytes||0),upBytes:Number(dv.upBytes||0),downBytes:Number(dv.downBytes||0),
-            firstSeenAt:String(dv.firstSeenAt||''),lastSeenAt:String(dv.lastSeenAt||''),activeSessions:Number(dv.activeSessions||0),
+            firstSeenAt:String(dv.firstSeenAt||''),lastSeenAt:String(dv.lastSeenAt||''),activeSessions:Math.max(0,Math.min(10,Math.trunc(Number(dv.activeSessions)||0))),
             ip:String(dv.ip||'').slice(0,80),userAgent:String(dv.userAgent||'').slice(0,160),name:String(dv.name||'').slice(0,80),brand:String(dv.brand||'').slice(0,80)
           }));
         }
@@ -2194,12 +2153,22 @@ async function startServer() {
       }
       return names;
     };
+    const childrenByParent = new Map<string, string[]>();
+    for (const candidate of resellerUsers) if (candidate.parentId) childrenByParent.set(candidate.parentId, [...(childrenByParent.get(candidate.parentId) || []), candidate.id]);
+    const descendantCache = new Map<string, number>();
+    const countDescendants = (id: string, seen = new Set<string>()): number => {
+      if (descendantCache.has(id)) return descendantCache.get(id)!;
+      if (seen.has(id)) return 0; seen.add(id);
+      const total = (childrenByParent.get(id) || []).reduce((n, child) => n + 1 + countDescendants(child, seen), 0);
+      descendantCache.set(id, total);
+      return total;
+    };
     const resellers = resellerUsers
       .filter(u => !visibleIds || visibleIds.has(u.id))
       .map(({ passwordHash, ...rest }) => ({
         ...rest,
-        subResellersCount: resellerUsers.filter(sub => sub.parentId === rest.id).length,
-        descendantCount: getSubResellerIdsRecursive(rest.id, users).length,
+        subResellersCount: (childrenByParent.get(rest.id) || []).length,
+        descendantCount: countDescendants(rest.id),
         hierarchyDepth: user.role==='RESELLER' ? depthFrom(rest.id,user.id) : depthFrom(rest.id),
         hierarchyPath: pathNames(rest.id)
       }))
@@ -2214,14 +2183,19 @@ async function startServer() {
       return;
     }
 
-    const { email, password, name, initialCredits } = req.body;
+    const { email, password, name, initialCredits } = req.body || {};
     const requestedParentId = typeof req.body?.parentId === 'string' ? req.body.parentId.trim() : '';
-    if (!email || !password || !name) {
-      res.status(400).json({ error: 'Email, mot de passe et nom requis pour le revendeur.' });
+    if (typeof email !== 'string' || typeof password !== 'string' || typeof name !== 'string' ||
+        !/^[^\s@]{1,64}@[^\s@]{1,190}\.[^\s@]{2,}$/.test(email.trim()) || !name.trim() || name.trim().length > 80) {
+      res.status(400).json({ error: 'Nom (80 caractères max.), email valide et mot de passe requis pour le revendeur.' });
+      return;
+    }
+    if (password.length < 12 || password.length > 256) {
+      res.status(400).json({ error: 'Le mot de passe du revendeur doit contenir 12 à 256 caractères.' });
       return;
     }
 
-    const requestedCredits = initialCredits === undefined ? 0 : Number(initialCredits);
+    const requestedCredits = initialCredits === undefined ? 0 : roundCredits(Number(initialCredits));
     if (!Number.isFinite(requestedCredits) || requestedCredits < 0 || requestedCredits > 1000000) {
       res.status(400).json({ error: 'Le crédit initial doit être un nombre fini compris entre 0 et 1000000 Go.' });
       return;
@@ -2229,7 +2203,7 @@ async function startServer() {
 
     const users = loadUsers();
     if (users.some(u => u.email.toLowerCase() === email.toLowerCase().trim())) {
-      res.status(400).json({ error: 'Un compte avec cet email existe déjà.' });
+      res.status(409).json({ error: 'Un compte avec cet email existe déjà.' });
       return;
     }
 
@@ -2238,11 +2212,13 @@ async function startServer() {
       res.status(401).json({ error: 'Utilisateur introuvable.' });
       return;
     }
+    // Top-level resellers hang under the Super Administrator, never under a
+    // delegated ADMIN: suspending that operator must not cut off its resellers.
     const parentAccount = user.role === 'RESELLER'
       ? dbUser
       : requestedParentId
         ? users.find(candidate=>candidate.id===requestedParentId && candidate.role==='RESELLER')
-        : dbUser;
+        : (users.find(candidate => candidate.role === 'SUPER_ADMIN' && candidate.status === 'active') || dbUser);
     if (!parentAccount) {
       res.status(400).json({ error: 'Revendeur parent introuvable.' });
       return;
@@ -2267,7 +2243,7 @@ async function startServer() {
 
       // Deduct credits from parent reseller
       parentCreditBefore = dbUser.credits;
-      dbUser.credits = Math.max(0, dbUser.credits - requestedCredits);
+      dbUser.credits = roundCredits(Math.max(0, dbUser.credits - requestedCredits));
     }
 
     const newReseller: AppUser = {
@@ -2350,11 +2326,12 @@ async function startServer() {
       return;
     }
 
-    const amount = Number(req.body?.amount);
-    if (!Number.isFinite(amount) || amount === 0) {
-      res.status(400).json({ error: 'Montant de crédit numérique non nul requis.' });
+    const amount = roundCredits(Number(req.body?.amount));
+    if (!Number.isFinite(amount) || amount === 0 || Math.abs(amount) > 1000000) {
+      res.status(400).json({ error: 'Montant de crédit non nul requis (1 000 000 Go maximum).' });
       return;
     }
+    const note = typeof req.body?.note === 'string' ? req.body.note.trim().slice(0, 200) : '';
 
     const users = loadUsers();
     const reseller = users.find(u => u.id === req.params.id && u.role === 'RESELLER');
@@ -2384,10 +2361,10 @@ async function startServer() {
         }
 
         const parentPrev = dbUser.credits;
-        dbUser.credits = Math.max(0, dbUser.credits - amount);
+        dbUser.credits = roundCredits(Math.max(0, dbUser.credits - amount));
 
         const childPrev = reseller.credits;
-        reseller.credits += amount;
+        reseller.credits = roundCredits(reseller.credits + amount);
 
         saveUsers(users);
 
@@ -2408,7 +2385,7 @@ async function startServer() {
           amountGb: amount,
           balanceBefore: childPrev,
           balanceAfter: reseller.credits,
-          note: req.body?.note || `Recharge de ${amount} Go reçue de ${dbUser.name}`
+          note: note || `Recharge de ${amount} Go reçue de ${dbUser.name}`
         });
 
         res.json({
@@ -2429,10 +2406,10 @@ async function startServer() {
         }
 
         const childPrev = reseller.credits;
-        reseller.credits -= reclaim;
+        reseller.credits = roundCredits(reseller.credits - reclaim);
 
         const parentPrev = dbUser.credits;
-        dbUser.credits += reclaim;
+        dbUser.credits = roundCredits(dbUser.credits + reclaim);
 
         saveUsers(users);
 
@@ -2467,20 +2444,31 @@ async function startServer() {
       }
     }
 
-    // SUPER_ADMIN
+    // SUPER_ADMIN / ADMIN: credit issuance or withdrawal. Never clamp silently:
+    // the ledger must record exactly the amount that moved.
     const prev = reseller.credits;
-    reseller.credits = Math.max(0, reseller.credits + amount);
+    if (prev + amount < 0) {
+      res.status(400).json({ error: `Le revendeur ne dispose que de ${prev} Go. Impossible de retirer ${Math.abs(amount)} Go.` });
+      return;
+    }
+    if (prev + amount > 1000000) {
+      res.status(400).json({ error: 'Le solde d’un revendeur ne peut pas dépasser 1 000 000 Go.' });
+      return;
+    }
+    reseller.credits = roundCredits(prev + amount);
     saveUsers(users);
 
     logTransaction({
       resellerId: reseller.id,
       resellerName: reseller.name,
-      type: 'CREDIT_ADD',
+      type: amount > 0 ? 'CREDIT_ADD' : 'CREDIT_TRANSFER',
       amountGb: amount,
       balanceBefore: prev,
       balanceAfter: reseller.credits,
-      note: req.body?.note || `Recharge de ${amount} Go par ${user.name}`
+      note: note || (amount > 0 ? `Recharge de ${amount} Go par ${user.name}` : `Retrait de ${Math.abs(amount)} Go par ${user.name}`)
     });
+    logAudit({ actor: user.id, role: user.role, action: 'RESELLER_CREDIT_ADJUSTED',
+      details: JSON.stringify({ resellerId: reseller.id, amountGb: amount, balanceAfter: reseller.credits }) });
 
     res.json({
       success: true,
@@ -2514,11 +2502,65 @@ async function startServer() {
       res.status(403).json({ error: 'Vous ne pouvez modifier le statut que de vos propres sous-revendeurs.' });
       return;
     }
+    if (user.role === 'RESELLER' && status === 'active' && reseller.suspendedByAdmin) {
+      res.status(403).json({ error: 'Ce compte a été suspendu par l’administration ; seule l’administration peut le réactiver.' });
+      return;
+    }
 
     reseller.status = status === 'suspended' ? 'suspended' : 'active';
+    if (reseller.status === 'suspended') reseller.suspendedByAdmin = user.role !== 'RESELLER';
+    else delete reseller.suspendedByAdmin;
     saveUsers(users);
+    logAudit({ actor: user.id, role: user.role, action: reseller.status === 'suspended' ? 'RESELLER_SUSPENDED' : 'RESELLER_REACTIVATED', details: reseller.id });
 
     res.json({ success: true, status: reseller.status });
+  });
+
+  // Edit a sub-reseller's identity or reset its password. Allowed to the
+  // administration and to the direct parent only, like status changes.
+  const manageableReseller = (req: express.Request, res: express.Response) => {
+    const user: AppUser = (req as any).user;
+    const users = loadUsers();
+    const reseller = users.find(u => u.id === req.params.id && u.role === 'RESELLER');
+    if (!reseller) { res.status(404).json({ error: 'Revendeur introuvable.' }); return null; }
+    if (user.role === 'RESELLER' && reseller.parentId !== user.id) {
+      res.status(403).json({ error: 'Vous ne pouvez modifier que vos propres sous-revendeurs.' }); return null;
+    }
+    if (!['SUPER_ADMIN', 'ADMIN', 'RESELLER'].includes(user.role)) { res.sendStatus(403); return null; }
+    return { user, users, reseller };
+  };
+  app.put('/api/v1/admin/resellers/:id/profile', authenticate, (req, res) => {
+    const ctx = manageableReseller(req, res); if (!ctx) return;
+    const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+    const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+    if (!name || name.length > 80 || !/^[^\s@]{1,64}@[^\s@]{1,190}\.[^\s@]{2,}$/.test(email)) {
+      return res.status(400).json({ error: 'Nom (80 caractères max.) et email valide requis.' });
+    }
+    if (ctx.users.some(u => u.id !== ctx.reseller.id && u.email.toLowerCase() === email)) {
+      return res.status(409).json({ error: 'Un compte avec cet email existe déjà.' });
+    }
+    ctx.reseller.name = name; ctx.reseller.email = email;
+    for (const child of ctx.users) if (child.parentId === ctx.reseller.id) child.parentName = name;
+    saveUsers(ctx.users);
+    // Keep the denormalised owner name of the reseller's SSH-WSS customers in sync.
+    const sshState = readSsh(); let renamed = 0;
+    for (const account of sshState.accounts) if (account.resellerId === ctx.reseller.id) { account.resellerName = name; renamed++; }
+    if (renamed) writeJsonAtomically(sshFile, sshState);
+    logAudit({ actor: ctx.user.id, role: ctx.user.role, action: 'RESELLER_PROFILE_UPDATED', details: ctx.reseller.id });
+    const { passwordHash, ...safe } = ctx.reseller;
+    res.json(safe);
+  });
+  app.put('/api/v1/admin/resellers/:id/password', authenticate, (req, res) => {
+    const ctx = manageableReseller(req, res); if (!ctx) return;
+    const password = req.body?.password;
+    if (typeof password !== 'string' || password.length < 12 || password.length > 256) {
+      return res.status(400).json({ error: 'Le mot de passe doit contenir 12 à 256 caractères.' });
+    }
+    ctx.reseller.passwordHash = hashPassword(password);
+    saveUsers(ctx.users);
+    for (const [sessionToken, session] of activeSessions.entries()) if (session.userId === ctx.reseller.id) activeSessions.delete(sessionToken);
+    logAudit({ actor: ctx.user.id, role: ctx.user.role, action: 'RESELLER_PASSWORD_RESET', details: ctx.reseller.id });
+    res.json({ success: true, sessionsRevoked: true });
   });
 
   // Delete a reseller and its full descendant branch. Outstanding credits are
@@ -2556,12 +2598,17 @@ async function startServer() {
     );
 
     let refundedCredits = 0;
+    // Outstanding branch credits always return to the direct parent of the
+    // deleted reseller (whoever performs the deletion), so no credit vanishes.
+    const refundTarget = users.find(candidate => candidate.id === target.parentId);
     if (user.role === 'RESELLER') {
       const dbUser = users.find(candidate => candidate.id === user.id);
       if (!dbUser || dbUser.status !== 'active') {
         res.status(401).json({ error: 'Compte parent introuvable ou suspendu.' });
         return;
       }
+    }
+    {
 
       refundedCredits = branchUsers.reduce((total, branchUser) => {
         const credits = Number(branchUser.credits);
@@ -2575,16 +2622,26 @@ async function startServer() {
         res.status(409).json({ error: 'Le total des crédits de la branche est invalide; suppression annulée.' });
         return;
       }
-      dbUser.credits += refundedCredits;
+      if (refundTarget?.role === 'RESELLER') refundTarget.credits = roundCredits(refundTarget.credits + refundedCredits);
     }
 
     // Persist the account and licence changes as one recoverable operation.
     // Each JSON file is written atomically; if the second write fails, restore
     // the original token store and its Xray projection before returning.
     const filteredUsers = users.filter(candidate => !descendantIds.has(candidate.id));
+    // Keep the branch's SSH-WSS customers manageable: hand them over to the parent.
+    const sshState = readSsh();
+    let reassignedSsh = 0;
+    const heir = refundTarget || users.find(candidate => candidate.role === 'SUPER_ADMIN');
+    for (const account of sshState.accounts) {
+      if (account.resellerId && descendantIds.has(account.resellerId) && heir) {
+        account.resellerId = heir.id; account.resellerName = heir.name; reassignedSsh++;
+      }
+    }
     try {
       saveTokens(updatedTokens);
       saveUsers(filteredUsers);
+      if (reassignedSsh) writeJsonAtomically(sshFile, sshState);
     } catch {
       try {
         saveTokens(branchTokens);
@@ -2612,11 +2669,11 @@ async function startServer() {
       });
     }
 
-    if (user.role === 'RESELLER' && refundedCredits > 0) {
-      const parent = filteredUsers.find(candidate => candidate.id === user.id);
+    if (refundTarget?.role === 'RESELLER' && refundedCredits > 0) {
+      const parent = filteredUsers.find(candidate => candidate.id === refundTarget.id);
       logTransaction({
-        resellerId: user.id,
-        resellerName: user.name,
+        resellerId: refundTarget.id,
+        resellerName: refundTarget.name,
         type: 'RESELLER_DELETE_REFUND',
         amountGb: refundedCredits,
         balanceBefore: Number(parent?.credits || 0) - refundedCredits,
@@ -2626,17 +2683,18 @@ async function startServer() {
     }
 
     logAudit({
-      actor: user.name,
+      actor: user.id,
       role: user.role,
       action: 'RESELLER_BRANCH_DELETE',
-      details: `Suppression de la branche ${target.name}: ${descendantIds.size} compte(s), ${tokensToRevoke.length} licence(s) révoquée(s), ${refundedCredits} Go remboursés.`
+      details: `Suppression de la branche ${target.name}: ${descendantIds.size} compte(s), ${tokensToRevoke.length} licence(s) révoquée(s), ${refundTarget?.role === 'RESELLER' ? refundedCredits : 0} Go remboursés, ${reassignedSsh} client(s) SSH-WSS transféré(s) à ${heir?.name || '—'}.`
     });
 
     res.json({
       success: true,
       deletedCount: descendantIds.size,
       revokedTokenCount: tokensToRevoke.length,
-      refundedCreditsGb: refundedCredits
+      refundedCreditsGb: refundTarget?.role === 'RESELLER' ? refundedCredits : 0,
+      reassignedSshCount: reassignedSsh
     });
   });
 
@@ -3477,7 +3535,7 @@ async function startServer() {
     const actionButtonUrl = req.body?.actionButtonUrl ? String(req.body.actionButtonUrl).trim() : undefined;
     const bannerImageUrl = req.body?.bannerImageUrl ? String(req.body.bannerImageUrl).trim() : undefined;
     const expiresAt = req.body?.expiresAt ? String(req.body.expiresAt).trim() : undefined;
-    const priority = Number(req.body?.priority || 0);
+    const priority = Number.isFinite(Number(req.body?.priority)) ? Math.max(-100, Math.min(100, Math.trunc(Number(req.body.priority)))) : 0;
     const showMode = req.body?.showMode === 'EVERY_LAUNCH' ? 'EVERY_LAUNCH' : 'ONCE_PER_USER';
 
     const newAnnouncement: Announcement = {
@@ -3536,16 +3594,16 @@ async function startServer() {
       ...existing,
       title: req.body?.title !== undefined ? String(req.body.title).trim() : existing.title,
       message: req.body?.message !== undefined ? String(req.body.message).trim() : existing.message,
-      type: req.body?.type || existing.type,
-      targetPlatform: req.body?.targetPlatform || existing.targetPlatform,
+      type: ['INFO', 'WARNING', 'CRITICAL', 'PROMO', 'UPDATE'].includes(req.body?.type) ? req.body.type : existing.type,
+      targetPlatform: ['ALL', 'ANDROID', 'WINDOWS'].includes(req.body?.targetPlatform) ? req.body.targetPlatform : existing.targetPlatform,
       isMandatory: req.body?.isMandatory !== undefined ? Boolean(req.body.isMandatory) : existing.isMandatory,
       dismissible: req.body?.dismissible !== undefined ? Boolean(req.body.dismissible) : existing.dismissible,
       actionButtonText: req.body?.actionButtonText !== undefined ? String(req.body.actionButtonText).trim() : existing.actionButtonText,
       actionButtonUrl: req.body?.actionButtonUrl !== undefined ? String(req.body.actionButtonUrl).trim() : existing.actionButtonUrl,
       bannerImageUrl: req.body?.bannerImageUrl !== undefined ? String(req.body.bannerImageUrl).trim() : existing.bannerImageUrl,
       isActive: req.body?.isActive !== undefined ? Boolean(req.body.isActive) : existing.isActive,
-      priority: req.body?.priority !== undefined ? Number(req.body.priority) : existing.priority,
-      showMode: req.body?.showMode || existing.showMode,
+      priority: Number.isFinite(Number(req.body?.priority)) && req.body?.priority !== undefined && req.body?.priority !== null ? Math.max(-100, Math.min(100, Math.trunc(Number(req.body.priority)))) : existing.priority,
+      showMode: req.body?.showMode === 'EVERY_LAUNCH' || req.body?.showMode === 'ONCE_PER_USER' ? req.body.showMode : existing.showMode,
       expiresAt: req.body?.expiresAt !== undefined ? String(req.body.expiresAt).trim() : existing.expiresAt
     };
 
@@ -4092,8 +4150,8 @@ async function startServer() {
       quotaGb: Number(quotaGb),
       durationDays: Number(durationDays),
       priceCfa: Number(priceCfa || 0),
-      badge: badge ? String(badge).trim() : undefined,
-      description: description ? String(description).trim() : undefined
+      badge: badge ? String(badge).trim().slice(0, 30) : undefined,
+      description: description ? String(description).trim().slice(0, 200) : undefined
     };
     plans.push(newPlan);
     savePlans(plans);
@@ -4133,8 +4191,8 @@ async function startServer() {
     plan.quotaGb = nextQuota;
     plan.durationDays = nextDays;
     plan.priceCfa = nextPrice;
-    if (badge !== undefined) plan.badge = String(badge).trim();
-    if (description !== undefined) plan.description = String(description).trim();
+    if (badge !== undefined) plan.badge = String(badge).trim().slice(0, 30);
+    if (description !== undefined) plan.description = String(description).trim().slice(0, 200);
     savePlans(plans);
     logAudit({
       actor: user.name,
@@ -4167,9 +4225,20 @@ async function startServer() {
   // 9. ONBOARDING & MEMBERSHIP REQUESTS
   // ==========================================
   app.post(['/api/membership/request', '/api/v1/membership/request'], publicApiRateLimiter, (req, res) => {
-    const { firstName, lastName, countryCode, channel, contactDetail, deviceId, deviceModel, deviceOs, planId, paymentMethod, paymentRef } = req.body;
+    const text = (value: unknown, max: number) => typeof value === 'string' ? value.trim().slice(0, max) : '';
+    const body = req.body || {};
+    const firstName = text(body.firstName, 60), lastName = text(body.lastName, 60), contactDetail = text(body.contactDetail, 64);
+    const deviceId = text(body.deviceId, 128), deviceModel = text(body.deviceModel, 80), deviceOs = text(body.deviceOs, 40);
+    const countryCode = text(body.countryCode, 4), channel = body.channel, planId = text(body.planId, 80);
+    const paymentMethods = ['FREE_TRIAL', 'MTN_MOMO', 'ORANGE_MONEY', 'WAVE'] as const;
+    const paymentMethod = paymentMethods.find(method => method === String(body.paymentMethod || '').toUpperCase());
+    const paymentRef = text(body.paymentRef, 100) || undefined;
     if (!firstName || !lastName || !contactDetail) {
       res.status(400).json({ error: 'Prénom, nom et contact requis.' });
+      return;
+    }
+    if (loadRequests().filter(r => r.status === 'PENDING').length >= 2000) {
+      res.status(429).json({ error: 'Trop de demandes en attente. Réessayez plus tard.' });
       return;
     }
     const countries = loadAfricanCountries();
@@ -4403,8 +4472,12 @@ async function startServer() {
       res.status(404).json({ error: 'Demande introuvable.' });
       return;
     }
+    if (reqItem.status !== 'PENDING') {
+      res.status(409).json({ error: 'Seule une demande en attente peut être refusée.' });
+      return;
+    }
     reqItem.status = 'REJECTED';
-    reqItem.rejectionReason = String(req.body?.reason || 'Demande non validée').trim();
+    reqItem.rejectionReason = String(req.body?.reason || 'Demande non validée').trim().slice(0, 300);
     reqItem.processedAt = new Date().toISOString();
     saveRequests(requests);
 
@@ -4559,7 +4632,10 @@ async function startServer() {
       return;
     }
 
-    const configuredPath = loadMasterConfig().path || '/@abess237';
+    // Storage must not be read here (no request transaction exists for upgrade
+    // events): any read would throw and crash the process. Fail closed.
+    let configuredPath = '/@abess237';
+    try { configuredPath = storage.pool ? configuredPath : (loadMasterConfig().path || configuredPath); } catch { /* fail closed */ }
     if (pathname === configuredPath || pathname.startsWith(`${configuredPath}/`)) {
       const body = 'VLESS data plane is not configured on this server.';
       socket.end(
@@ -4643,6 +4719,7 @@ async function startServer() {
   const telegramBot=startTelegramBot({
     encryptedBackup:async()=>encryptedBackup(await fullSnapshot(),process.env.BACKUP_ENCRYPTION_KEY||process.env.MASTER_SECRET!),
     runTransaction: work => storage.transaction(work),
+    legacyVlessRetired: process.env.SSH_WSS_ONLY==='true',
     botToken: tgBotToken,
     adminIds: tgAdminIds,
     vpnDomain,

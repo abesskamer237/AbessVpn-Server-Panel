@@ -1,7 +1,7 @@
 {
-  "name": "react-example",
+  "name": "abessvpn-server-panel",
   "private": true,
-  "version": "0.0.0",
+  "version": "3.0.0",
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
@@ -15,12 +15,12 @@
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1165.0",
-    "@google/genai": "^2.4.0",
+    "@fontsource-variable/geist": "^5.3.0",
+    "@fontsource-variable/geist-mono": "^5.3.0",
     "@tailwindcss/vite": "^4.3.3",
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
     "lucide-react": "^0.546.0",
-    "motion": "^12.23.24",
     "pg": "^8.23.1",
     "qrcode": "^1.5.4",
     "react": "^19.0.1",
@@ -29,9 +29,6 @@
     "tsx": "^4.21.0",
     "vite": "^6.4.5",
     "ws": "^8.22.0"
-  },
-  "optionalDependencies": {
-    "@rolldown/binding-linux-x64-gnu": "^1.2.16"
   },
   "devDependencies": {
     "@playwright/test": "^1.65.0",
@@ -43,9 +40,9 @@
     "@types/react-dom": "^19.3.0",
     "@types/ws": "^8.18.2",
     "@vitejs/plugin-react": "^4.7.0",
-    "autoprefixer": "^10.4.21",
     "esbuild": "^0.28.0",
     "tailwindcss": "^4.3.3",
     "typescript": "^7.0.2"
-  }
+  },
+  "description": "ABESS VPN — panneau commercial et de gestion SSH-WSS"
 }
