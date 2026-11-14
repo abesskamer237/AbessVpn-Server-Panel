@@ -1,0 +1,123 @@
+name: Diagnose VPN performance
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [.github/workflows/diagnose-performance.yml]
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure SSH authentication
+        shell: bash
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_SSH_KNOWN_HOSTS: ${{ secrets.VPS_SSH_KNOWN_HOSTS }}
+          VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD || secrets.VPS_PASSWORD }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_PORT: ${{ vars.VPS_PORT }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.ssh" "$HOME/.local/bin"
+          if [[ -n "${VPS_SSH_KEY:-}" ]]; then
+            printf '%s\n' "$VPS_SSH_KEY" > "$HOME/.ssh/id_ed25519"
+            chmod 600 "$HOME/.ssh/id_ed25519"
+          elif [[ -n "${VPS_SSH_PASSWORD:-}" ]]; then
+            if ! command -v sshpass >/dev/null 2>&1; then
+              sudo apt-get update
+              sudo apt-get install -y sshpass
+            fi
+          else
+            echo "Provide VPS_SSH_KEY (recommended) or VPS_SSH_PASSWORD." >&2
+            exit 1
+          fi
+          # Verify the existing production VPS identity against its
+          # previously recorded Ed25519 host key fingerprint. Refuse changes.
+          if [[ -z "${VPS_SSH_KNOWN_HOSTS:-}" ]]; then
+            ssh-keyscan -T 12 -p "${VPS_PORT:-22}" -t ed25519 "$VPS_HOST" 2>/dev/null > "$HOME/.ssh/known_hosts"
+          else
+            printf '%s\n' "$VPS_SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          fi
+          test -s "$HOME/.ssh/known_hosts"
+          ssh-keygen -lf "$HOME/.ssh/known_hosts" -E sha256 |
+            grep -Fq 'SHA256:LgoMnkXsbf7RYOw5LRm0ErLVQ6n0JDJBJIAltFxOChc' || {
+              echo "::error::VPS SSH host key differs from previously verified installation." >&2
+              exit 1
+            }
+          chmod 600 "$HOME/.ssh/known_hosts"
+          cat > "$HOME/.local/bin/abess-ssh" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [[ -s "$HOME/.ssh/id_ed25519" ]]; then
+            exec ssh -o StrictHostKeyChecking=yes -i "$HOME/.ssh/id_ed25519" -o BatchMode=yes -o IdentitiesOnly=yes "$@"
+          fi
+          export SSHPASS="$VPS_SSH_PASSWORD"
+          exec sshpass -e ssh -o StrictHostKeyChecking=yes -o PreferredAuthentications=password,keyboard-interactive -o PubkeyAuthentication=no "$@"
+          SH
+          cat > "$HOME/.local/bin/abess-scp" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [[ -s "$HOME/.ssh/id_ed25519" ]]; then
+            exec scp -o StrictHostKeyChecking=yes -i "$HOME/.ssh/id_ed25519" -o BatchMode=yes -o IdentitiesOnly=yes "$@"
+          fi
+          export SSHPASS="$VPS_SSH_PASSWORD"
+          exec sshpass -e scp -o StrictHostKeyChecking=yes -o PreferredAuthentications=password,keyboard-interactive -o PubkeyAuthentication=no "$@"
+          SH
+          chmod 700 "$HOME/.local/bin/abess-ssh" "$HOME/.local/bin/abess-scp"
+      - name: Measure production bottlenecks without restarting services
+        env:
+          VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD || secrets.VPS_PASSWORD }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ vars.VPS_PORT }}
+        run: |
+          set -euo pipefail
+          "$HOME/.local/bin/abess-ssh" -p "${VPS_PORT:-22}" "${VPS_USER}@${VPS_HOST}" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          uptime
+          nproc
+          free -m
+          df -h /
+          vmstat 1 4
+          ss -s
+          sysctl net.ipv4.tcp_congestion_control net.core.default_qdisc net.core.somaxconn net.ipv4.tcp_rmem net.ipv4.tcp_wmem
+          for name in willy-ssh-ws abess-traffic-observer abess-ssh-ws-reconciler; do
+            echo "SERVICE=$name"
+            systemctl show "$name" -p MainPID -p CPUUsageNSec -p MemoryCurrent -p TasksCurrent -p NRestarts -p LimitNOFILE
+          done
+          ps -eo comm,pcpu,pmem,nlwp --sort=-pcpu | head -16 || true
+          python3 - <<'PYREMOTE'
+          import ast,json,re,subprocess,time
+          from pathlib import Path
+          def snapshot():
+              pids={int(p):n for n in ['willy-ssh-ws','abess-traffic-observer','abess-ssh-ws-reconciler'] if (p:=subprocess.check_output(['systemctl','show','-p','MainPID','--value',n],text=True).strip()).isdigit() and int(p)>0}
+              return {n:sum(int(x) for x in Path('/proc/'+str(pid)+'/stat').read_text().split()[13:15]) for pid,n in pids.items()}
+          first=snapshot();time.sleep(5);second=snapshot()
+          import os
+          print('SERVICE_CPU_PERCENT='+json.dumps({n:round((second[n]-t)/os.sysconf('SC_CLK_TCK')/5*100,1) for n,t in first.items() if n in second}))
+          text=subprocess.check_output(['ss','-tinH','state','established'],text=True)
+          rtts=[float(x) for x in re.findall(r'\brtt:([0-9.]+)',text)]
+          print('TCP_RTT_MS='+json.dumps({'samples':len(rtts),'median':sorted(rtts)[len(rtts)//2] if rtts else None,'over200ms':sum(r>200 for r in rtts)}))
+          for n in ['abess-traffic-observer/status.json','abess-ssh-ws/gateway/usage-live.json']:
+              p=Path('/var/lib')/n
+              if p.exists():
+                  j=json.loads(p.read_text());print(n,json.dumps({k:j[k] for k in ['mode','activeMappedConnections','lastReportOk','mappedConnections'] if k in j}))
+          pid=subprocess.check_output(['systemctl','show','-p','MainPID','--value','willy-ssh-ws'],text=True).strip()
+          args=Path('/proc/'+pid+'/cmdline').read_bytes().split(b'\0')
+          source=next((Path(a.decode()) for a in args if a.endswith(b'.py')),None)
+          if source and source.is_file():
+              tree=ast.parse(source.read_text());calls={};settings={}
+              for node in ast.walk(tree):
+                  if isinstance(node,ast.Call):
+                      name=ast.unparse(node.func)
+                      if any(x in name.lower() for x in ['sleep','recv','send','select','thread','socket','buffer','timeout','setsockopt']):calls[name]=calls.get(name,0)+1
+                  if isinstance(node,ast.Assign) and isinstance(node.value,ast.Constant) and isinstance(node.value.value,(int,float)):
+                      for target in node.targets:
+                          name=ast.unparse(target)
+                          if any(x in name.lower() for x in ['buffer','timeout','thread','limit','size','port','speed','rate']):settings[name]=node.value.value
+              print('GATEWAY_SOURCE_PROFILE='+json.dumps({'calls':calls,'settings':settings}))
+          PYREMOTE
+          curl --silent --show-error --max-time 20 -o /dev/null -w 'VPS_DOWNLOAD_TEST http=%{http_code} bytes=%{size_download} bytes_per_second=%{speed_download} connect_seconds=%{time_connect} total_seconds=%{time_total}\n' 'https://speed.cloudflare.com/__down?bytes=5000000' || true
+          REMOTE
