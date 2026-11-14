@@ -11,6 +11,7 @@ jobs:
   diagnose:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - name: Configure SSH authentication
         shell: bash
         env:
@@ -67,7 +68,7 @@ jobs:
           exec sshpass -e scp -o StrictHostKeyChecking=yes -o PreferredAuthentications=password,keyboard-interactive -o PubkeyAuthentication=no "$@"
           SH
           chmod 700 "$HOME/.local/bin/abess-ssh" "$HOME/.local/bin/abess-scp"
-      - name: Measure production bottlenecks without restarting services
+      - name: Inspect losses, queues and SSH stability settings
         env:
           VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD || secrets.VPS_PASSWORD }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
@@ -75,50 +76,4 @@ jobs:
           VPS_PORT: ${{ vars.VPS_PORT }}
         run: |
           set -euo pipefail
-          "$HOME/.local/bin/abess-ssh" -p "${VPS_PORT:-22}" "${VPS_USER}@${VPS_HOST}" 'bash -s' <<'REMOTE'
-          set -euo pipefail
-          uptime
-          nproc
-          free -m
-          df -h /
-          vmstat 1 4
-          ss -s
-          sysctl net.ipv4.tcp_congestion_control net.core.default_qdisc net.core.somaxconn net.ipv4.tcp_rmem net.ipv4.tcp_wmem
-          for name in willy-ssh-ws abess-traffic-observer abess-ssh-ws-reconciler; do
-            echo "SERVICE=$name"
-            systemctl show "$name" -p MainPID -p CPUUsageNSec -p MemoryCurrent -p TasksCurrent -p NRestarts -p LimitNOFILE
-          done
-          ps -eo comm,pcpu,pmem,nlwp --sort=-pcpu | head -16 || true
-          python3 - <<'PYREMOTE'
-          import ast,json,re,subprocess,time
-          from pathlib import Path
-          def snapshot():
-              pids={int(p):n for n in ['willy-ssh-ws','abess-traffic-observer','abess-ssh-ws-reconciler'] if (p:=subprocess.check_output(['systemctl','show','-p','MainPID','--value',n],text=True).strip()).isdigit() and int(p)>0}
-              return {n:sum(int(x) for x in Path('/proc/'+str(pid)+'/stat').read_text().split()[13:15]) for pid,n in pids.items()}
-          first=snapshot();time.sleep(5);second=snapshot()
-          import os
-          print('SERVICE_CPU_PERCENT='+json.dumps({n:round((second[n]-t)/os.sysconf('SC_CLK_TCK')/5*100,1) for n,t in first.items() if n in second}))
-          text=subprocess.check_output(['ss','-tinH','state','established'],text=True)
-          rtts=[float(x) for x in re.findall(r'\brtt:([0-9.]+)',text)]
-          print('TCP_RTT_MS='+json.dumps({'samples':len(rtts),'median':sorted(rtts)[len(rtts)//2] if rtts else None,'over200ms':sum(r>200 for r in rtts)}))
-          for n in ['abess-traffic-observer/status.json','abess-ssh-ws/gateway/usage-live.json']:
-              p=Path('/var/lib')/n
-              if p.exists():
-                  j=json.loads(p.read_text());print(n,json.dumps({k:j[k] for k in ['mode','activeMappedConnections','lastReportOk','mappedConnections'] if k in j}))
-          pid=subprocess.check_output(['systemctl','show','-p','MainPID','--value','willy-ssh-ws'],text=True).strip()
-          args=Path('/proc/'+pid+'/cmdline').read_bytes().split(b'\0')
-          source=next((Path(a.decode()) for a in args if a.endswith(b'.py')),None)
-          if source and source.is_file():
-              tree=ast.parse(source.read_text());calls={};settings={}
-              for node in ast.walk(tree):
-                  if isinstance(node,ast.Call):
-                      name=ast.unparse(node.func)
-                      if any(x in name.lower() for x in ['sleep','recv','send','select','thread','socket','buffer','timeout','setsockopt']):calls[name]=calls.get(name,0)+1
-                  if isinstance(node,ast.Assign) and isinstance(node.value,ast.Constant) and isinstance(node.value.value,(int,float)):
-                      for target in node.targets:
-                          name=ast.unparse(target)
-                          if any(x in name.lower() for x in ['buffer','timeout','thread','limit','size','port','speed','rate']):settings[name]=node.value.value
-              print('GATEWAY_SOURCE_PROFILE='+json.dumps({'calls':calls,'settings':settings}))
-          PYREMOTE
-          curl --silent --show-error --max-time 20 -o /dev/null -w 'VPS_DOWNLOAD_TEST http=%{http_code} bytes=%{size_download} bytes_per_second=%{speed_download} connect_seconds=%{time_connect} total_seconds=%{time_total}\n' 'https://speed.cloudflare.com/__down?bytes=5000000' || true
-          REMOTE
+          "$HOME/.local/bin/abess-ssh" -p "${VPS_PORT:-22}" "${VPS_USER}@${VPS_HOST}" 'python3 -' < scripts/diagnose-network-stability.py
