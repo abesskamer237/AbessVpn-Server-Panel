@@ -227,12 +227,17 @@ def apply_socket_samples(samples,now=None):
         if now-float(socket_watermarks[key].get("last",0))>86400:del socket_watermarks[key]
     stats["mappedConnections"]=len(online)
 
+def ssh_socket_command(ports=SSH_PORTS):
+    # Kernel-side filtering avoids enumerating thousands of forwarded sockets.
+    expression="( "+" or ".join("sport = :"+str(p) for p in sorted(ports))+" )"
+    return ["ss","-tinpeH","state","established",expression]
+
 def socket_loop():
     while True:
         try:
             with lock:refresh_policy();users={a["username"]:a["id"] for a in policy_by_hash.values()}
             processes=ssh_process_accounts(users)
-            output=subprocess.check_output(["ss","-tinpeH","state","established"],text=True,timeout=5)
+            output=subprocess.check_output(ssh_socket_command(),text=True,timeout=5)
             with lock:apply_socket_samples(ssh_socket_samples(output,processes))
         except Exception as e:
             stats["lastError"]="ssh-sockets:"+type(e).__name__

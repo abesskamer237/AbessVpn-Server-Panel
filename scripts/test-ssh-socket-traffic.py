@@ -56,7 +56,7 @@ class TrafficTests(unittest.TestCase):
                     client.sendall(b'u'*12345);self.assertEqual(len(server.recv(20000)),12345)
                     server.sendall(b'd'*23456);self.assertEqual(len(client.recv(30000)),23456)
                     time.sleep(.1)
-                    text=subprocess.check_output(['ss','-tinpeH','state','established'],text=True)
+                    text=subprocess.check_output(o.ssh_socket_command({port}),text=True)
                     if 'bytes_received:' not in text:
                         self.skipTest('Host kernel omits TCP byte counters; run this test in Linux Docker.')
                     samples=list(o.ssh_socket_samples(text,{os.getpid():A},{port}))
