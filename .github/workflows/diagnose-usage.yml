@@ -98,4 +98,35 @@ jobs:
             printf '%s ' "$service"
             systemctl is-active "$service" || true
           done
+          python3 - <<'PYREMOTE'
+          import json,re,subprocess
+          from pathlib import Path
+          policy=json.loads(Path('/var/lib/abess-ssh-ws/policy/gateway-policy.json').read_text())
+          users={a['username'] for a in policy['accounts']}
+          out=subprocess.check_output(['ss','-tinpH','state','established'],text=True)
+          lines=out.splitlines(); count=matched=received=sent=0
+          processes={}
+          for proc in Path('/proc').iterdir():
+              if not proc.name.isdigit():continue
+              try:
+                  cmd=(proc/'cmdline').read_bytes().replace(b'\x00',b' ').decode(errors='replace')
+                  comm=(proc/'comm').read_text().strip()
+                  if comm=='sshd' or comm.startswith('sshd-'):
+                      m=re.search(r'sshd(?:-session)?: ([A-Za-z0-9_-]+)(?:@| \[)',cmd)
+                      processes[int(proc.name)]=m.group(1) if m else ''
+              except OSError:pass
+          for i,line in enumerate(lines):
+              pids=[int(p) for p in re.findall(r'pid=(\d+)',line)]
+              if not any(p in processes for p in pids):continue
+              count+=1
+              if any(processes.get(p) in users for p in pids):
+                  matched+=1
+                  metrics=lines[i+1] if i+1<len(lines) else ''
+                  for key,target in [('bytes_received','r'),('bytes_sent','s')]:
+                      m=re.search(key+r':(\d+)',metrics)
+                      if m:
+                          if target=='r':received+=int(m.group(1))
+                          else:sent+=int(m.group(1))
+          print('SSH_SOCKET_DIAGNOSTIC='+json.dumps(dict(sshProcesses=len(processes),identifiedProcesses=sum(u in users for u in processes.values()),sshSockets=count,matchedSockets=matched,receivedBytes=received,sentBytes=sent)))
+          PYREMOTE
           REMOTE
