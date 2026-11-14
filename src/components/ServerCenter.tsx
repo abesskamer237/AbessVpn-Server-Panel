@@ -16,6 +16,10 @@ const uptime=(sec:number)=>{
 };
 
 export function ServerCenter({nodes,ops,audit,busy,request,refresh}:Props){
+  // Xray belongs to the retired VLESS data plane: its readiness is irrelevant in SSH-WSS production.
+  const labels:Record<string,string>={POSTGRES_NOT_CONFIGURED:'PostgreSQL non configuré (mode développement)',OFFSITE_BACKUP_NOT_CONFIGURED:'Sauvegarde hors site (S3) non configurée',BACKUP_OVERDUE:'Aucune sauvegarde récente',LOW_DISK_SPACE:'Espace disque API faible',API_ERRORS:'Erreurs API récentes'};
+  const alertLabels=(ops?.alerts||[]).filter(a=>a!=='XRAY_NOT_READY').map(a=>labels[a]||a.replaceAll('_',' ').toLowerCase());
+  const tone=(v:number)=>v>=90?'var(--danger)':v>=75?'var(--warning)':undefined;
   const [add,setAdd]=useState(false),[name,setName]=useState(''),[host,setHost]=useState('');
   const [created,setCreated]=useState<{id:string,key:string}|null>(null),[error,setError]=useState('');
   const [configure,setConfigure]=useState<(ManagedNode&{sshWsManaged?:boolean})|null>(null);
@@ -57,9 +61,9 @@ export function ServerCenter({nodes,ops,audit,busy,request,refresh}:Props){
         return <section className="card card-pad" key={n.id}>
           <div className="section-head"><div><h2>{n.name}</h2><p>{n.sni||n.host}:{n.port||443}{n.path||'/ssh-ws'}</p></div><span className={'badge '+(!n.sshWsManaged?'badge-warning':n.agentOnline?'badge-success':'badge-danger')}>{!n.sshWsManaged?'À configurer':n.agentOnline?'En ligne':'Hors ligne'}</span></div>
           <div className="server-metrics">
-            <div className="server-metric"><label>CPU</label><strong>{t?(t.cpuPercent.toFixed(1)+' %'):'—'}</strong></div>
-            <div className="server-metric"><label>RAM</label><strong>{t?(mem+' %'):'—'}</strong></div>
-            <div className="server-metric"><label>Disque</label><strong>{t?(disk+' %'):'—'}</strong></div>
+            <div className="server-metric"><label>CPU</label><strong style={{color:t?tone(t.cpuPercent):undefined}}>{t?(t.cpuPercent.toFixed(1)+' %'):'—'}</strong></div>
+            <div className="server-metric"><label>RAM</label><strong style={{color:tone(mem)}}>{t?(mem+' %'):'—'}</strong></div>
+            <div className="server-metric"><label>Disque</label><strong style={{color:tone(disk)}}>{t?(disk+' %'):'—'}</strong></div>
             <div className="server-metric"><label>Uptime</label><strong>{t?uptime(t.uptimeSeconds):'—'}</strong></div>
           </div>
           {t&&<div style={{marginTop:12}}>
@@ -75,19 +79,19 @@ export function ServerCenter({nodes,ops,audit,busy,request,refresh}:Props){
     {!nodes.length&&<div className="card empty-state"><Server size={26}/><strong>Aucun VPS enregistré</strong><span>Ajoute un nœud puis installe l’agent SSH-WSS.</span></div>}
 
     <div className="grid-equal">
-      <section className="card card-pad"><div className="section-head"><div><h2>Santé du contrôle</h2><p>API, PostgreSQL et sauvegardes.</p></div><span className={'badge '+(ops?.ok?'badge-success':'badge-warning')}>{ops?.ok?'Sain':'Attention'}</span></div>
+      <section className="card card-pad"><div className="section-head"><div><h2>Santé du contrôle</h2><p>API, PostgreSQL et sauvegardes.</p></div><span className={'badge '+(!alertLabels.length?'badge-success':'badge-warning')}>{!alertLabels.length?'Sain':'Attention'}</span></div>
         <div className="service-line"><span>Uptime API</span><strong>{ops?.uptimeSeconds?uptime(ops.uptimeSeconds):'—'}</strong></div>
         <div className="service-line"><span>Mémoire processus</span><strong>{ops?.memoryBytes?humanBytes(ops.memoryBytes):'—'}</strong></div>
         <div className="service-line"><span>Sauvegarde hors site</span><strong>{ops?.backup?.offsite?'Confirmée':'Non confirmée'}</strong></div>
-        {!!ops?.alerts?.length&&<div className="notice" style={{marginTop:10}}>{ops.alerts.join(' · ')}</div>}
+        {alertLabels.length>0&&<div className="alert-list" style={{marginTop:6}}>{alertLabels.map(l=><div className="alert-row" key={l}><span className="alert-dot" style={{background:'var(--warning)'}}/><div><p>{l}</p></div></div>)}</div>}
       </section>
       <section className="card card-pad"><div className="section-head"><div><h2>Journal infrastructure</h2><p>Dernières actions sensibles.</p></div></div>
-        <div className="alert-list">{audit.filter(a=>/NODE|BACKUP|RESTORE|ADMIN|SSH/.test(a.action)).slice(0,7).map(a=><div className="alert-row" key={a.id}><span className="alert-dot" style={{background:'var(--info)'}}/><div><p>{a.action.replaceAll('_',' ')}</p><span>{fmtDateTime(a.timestamp)} · {String(a.details||'').slice(0,100)}</span></div></div>)}</div>
+        {!audit.some(a=>/NODE|BACKUP|RESTORE|ADMIN|SSH/.test(a.action))&&<div className="empty-state"><Activity size={20}/><strong>Aucune action récente</strong></div>}<div className="alert-list">{audit.filter(a=>/NODE|BACKUP|RESTORE|ADMIN|SSH/.test(a.action)).slice(0,7).map(a=><div className="alert-row" key={a.id}><span className="alert-dot" style={{background:'var(--info)'}}/><div><p>{a.action.replaceAll('_',' ')}</p><span>{fmtDateTime(a.timestamp)} · {String(a.details||'').slice(0,100)}</span></div></div>)}</div>
       </section>
     </div>
 
     {configure&&<div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)setConfigure(null)}}><form className="modal" onSubmit={e=>void activateNode(e)}>
-      <div className="modal-head"><div><strong>Activer SSH-WSS · {configure.name}</strong><div className="card-subtitle">Associe l’identité SSH du VPS au domaine WSS.</div></div><button type="button" className="icon-button" onClick={()=>setConfigure(null)}><X size={16}/></button></div>
+      <div className="modal-head"><div><strong>Activer SSH-WSS · {configure.name}</strong><div className="card-subtitle">Associe l’identité SSH du VPS au domaine WSS.</div></div><button type="button" className="icon-button ghost" aria-label="Fermer" onClick={()=>setConfigure(null)}><X size={16}/></button></div>
       <div className="modal-body form-grid">
         <label className="field-block" style={{gridColumn:'1/-1'}}><span className="field-label">Empreinte Ed25519 SHA-256</span><input className="field" required placeholder="SHA256:…" value={fingerprint} onChange={e=>setFingerprint(e.target.value)}/></label>
         <label className="field-block"><span className="field-label">SNI / domaine HTTPS</span><input className="field" required value={sni} onChange={e=>setSni(e.target.value)}/></label>
@@ -97,7 +101,7 @@ export function ServerCenter({nodes,ops,audit,busy,request,refresh}:Props){
     </form></div>}
 
     {add&&<div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)setAdd(false)}}><div className="modal">
-      <div className="modal-head"><div><strong>Assistant d’ajout VPS</strong><div className="card-subtitle">Enregistre le nœud et génère sa clé agent une seule fois.</div></div><button className="icon-button" onClick={()=>setAdd(false)}><X size={16}/></button></div>
+      <div className="modal-head"><div><strong>Assistant d’ajout VPS</strong><div className="card-subtitle">Enregistre le nœud et génère sa clé agent une seule fois.</div></div><button className="icon-button ghost" aria-label="Fermer" onClick={()=>setAdd(false)}><X size={16}/></button></div>
       {!created?<form onSubmit={e=>void create(e)}><div className="modal-body form-grid">
         <label className="field-block"><span className="field-label">Nom du serveur</span><input className="field" required value={name} onChange={e=>setName(e.target.value)} placeholder="VPS France 02"/></label>
         <label className="field-block"><span className="field-label">IP ou nom DNS</span><input className="field" required value={host} onChange={e=>setHost(e.target.value)} placeholder="203.0.113.10"/></label>

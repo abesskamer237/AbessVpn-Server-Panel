@@ -218,7 +218,7 @@ export function BillingCenter({currentUser,role,request,onCreditsChanged}:Props)
     </section>
 
     {declare&&<div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)setDeclare(null)}}><form className="modal" onSubmit={e=>void submitDeclaration(e)}>
-      <div className="modal-head"><div><strong>Déclarer le paiement</strong><div className="card-subtitle">{declare.planName} · {money(declare.amount)} · {declare.quotaGb} Go</div></div><button type="button" className="icon-button" aria-label="Fermer" onClick={()=>setDeclare(null)}><X size={16}/></button></div>
+      <div className="modal-head"><div><strong>Déclarer le paiement</strong><div className="card-subtitle">{declare.planName} · {money(declare.amount)} · {declare.quotaGb} Go</div></div><button type="button" className="icon-button ghost" aria-label="Fermer" onClick={()=>setDeclare(null)}><X size={16}/></button></div>
       <div className="modal-body stack">
         <div className="detail-grid">{contacts.map(c=><div className="detail-item" key={c.channel}><label>{c.label}</label><strong>{c.number} · {c.holder}</strong></div>)}</div>
         <p className="card-subtitle">Envoyez exactement <strong>{money(declare.amount)}</strong>, puis saisissez la référence reçue par SMS.</p>
@@ -231,7 +231,7 @@ export function BillingCenter({currentUser,role,request,onCreditsChanged}:Props)
     </form></div>}
 
     {review&&<div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)setReview(null)}}><form className="modal" onSubmit={e=>void confirm(e)}>
-      <div className="modal-head"><div><strong>Vérifier le paiement</strong><div className="card-subtitle">{review.customerName} · {review.planName} · {money(review.amount)}</div></div><button type="button" className="icon-button" aria-label="Fermer" onClick={()=>setReview(null)}><X size={16}/></button></div>
+      <div className="modal-head"><div><strong>Vérifier le paiement</strong><div className="card-subtitle">{review.customerName} · {review.planName} · {money(review.amount)}</div></div><button type="button" className="icon-button ghost" aria-label="Fermer" onClick={()=>setReview(null)}><X size={16}/></button></div>
       <div className="modal-body stack">
         {!data?.canConfirm&&<p className="notice">La confirmation nécessite le stockage PostgreSQL transactionnel.</p>}
         <div className="detail-grid">
@@ -254,7 +254,7 @@ export function BillingCenter({currentUser,role,request,onCreditsChanged}:Props)
     </form></div>}
 
     {planForm&&<div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)setPlanForm(null)}}><form className="modal" onSubmit={e=>void savePlan(e)}>
-      <div className="modal-head"><div><strong>{planForm.id?'Modifier l’offre':'Nouvelle offre'}</strong><div className="card-subtitle">Pack de crédits vendu aux revendeurs.</div></div><button type="button" className="icon-button" aria-label="Fermer" onClick={()=>setPlanForm(null)}><X size={16}/></button></div>
+      <div className="modal-head"><div><strong>{planForm.id?'Modifier l’offre':'Nouvelle offre'}</strong><div className="card-subtitle">Pack de crédits vendu aux revendeurs.</div></div><button type="button" className="icon-button ghost" aria-label="Fermer" onClick={()=>setPlanForm(null)}><X size={16}/></button></div>
       <div className="modal-body form-grid">
         <label className="field-block"><span className="field-label">Nom de l’offre</span><input className="field" required maxLength={80} value={planForm.name||''} onChange={e=>setPlanForm({...planForm,name:e.target.value})}/></label>
         <label className="field-block"><span className="field-label">Prix (XAF)</span><input className="field" type="number" min={0} step={1} required value={planForm.priceCfa??0} onChange={e=>setPlanForm({...planForm,priceCfa:Number(e.target.value)})}/></label>

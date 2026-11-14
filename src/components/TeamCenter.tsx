@@ -26,7 +26,7 @@ export function TeamCenter({operators,busy,request,refresh}:Props){
         <td><button className="btn btn-sm" disabled={busy} onClick={()=>void run(async()=>request('/api/v1/admin/operators/'+o.id+'/status','PUT',{status:o.status==='active'?'suspended':'active'}))}>{o.status==='active'?'Suspendre':'Réactiver'}</button></td></tr>)}</tbody>
     </table></div>{!operators.length&&<div className="empty-state"><UserCog size={24}/><strong>Aucun administrateur délégué</strong><span>Le Super Administrateur reste le seul compte privilégié.</span></div>}</section>
     {open&&<div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)setOpen(false)}}><form className="modal" onSubmit={e=>void create(e)}>
-      <div className="modal-head"><div><strong>Nouvel administrateur</strong><div className="card-subtitle">Accès opérationnel sans privilèges infrastructure.</div></div><button type="button" className="icon-button" onClick={()=>setOpen(false)}><X size={16}/></button></div>
+      <div className="modal-head"><div><strong>Nouvel administrateur</strong><div className="card-subtitle">Accès opérationnel sans privilèges infrastructure.</div></div><button type="button" className="icon-button ghost" aria-label="Fermer" onClick={()=>setOpen(false)}><X size={16}/></button></div>
       <div className="modal-body form-grid">
         <label className="field-block"><span className="field-label">Nom</span><input className="field" required value={name} onChange={e=>setName(e.target.value)}/></label>
         <label className="field-block"><span className="field-label">Email</span><input className="field" type="email" required value={email} onChange={e=>setEmail(e.target.value)}/></label>
