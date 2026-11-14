@@ -1,0 +1,101 @@
+name: Diagnose consumption reporting
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [.github/workflows/diagnose-usage.yml]
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure SSH authentication
+        shell: bash
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_SSH_KNOWN_HOSTS: ${{ secrets.VPS_SSH_KNOWN_HOSTS }}
+          VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD || secrets.VPS_PASSWORD }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_PORT: ${{ vars.VPS_PORT }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.ssh" "$HOME/.local/bin"
+          if [[ -n "${VPS_SSH_KEY:-}" ]]; then
+            printf '%s\n' "$VPS_SSH_KEY" > "$HOME/.ssh/id_ed25519"
+            chmod 600 "$HOME/.ssh/id_ed25519"
+          elif [[ -n "${VPS_SSH_PASSWORD:-}" ]]; then
+            if ! command -v sshpass >/dev/null 2>&1; then
+              sudo apt-get update
+              sudo apt-get install -y sshpass
+            fi
+          else
+            echo "Provide VPS_SSH_KEY (recommended) or VPS_SSH_PASSWORD." >&2
+            exit 1
+          fi
+          # Verify the existing production VPS identity against its
+          # previously recorded Ed25519 host key fingerprint. Refuse changes.
+          if [[ -z "${VPS_SSH_KNOWN_HOSTS:-}" ]]; then
+            ssh-keyscan -T 12 -p "${VPS_PORT:-22}" -t ed25519 "$VPS_HOST" 2>/dev/null > "$HOME/.ssh/known_hosts"
+          else
+            printf '%s\n' "$VPS_SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          fi
+          test -s "$HOME/.ssh/known_hosts"
+          ssh-keygen -lf "$HOME/.ssh/known_hosts" -E sha256 |
+            grep -Fq 'SHA256:LgoMnkXsbf7RYOw5LRm0ErLVQ6n0JDJBJIAltFxOChc' || {
+              echo "::error::VPS SSH host key differs from previously verified installation." >&2
+              exit 1
+            }
+          chmod 600 "$HOME/.ssh/known_hosts"
+          cat > "$HOME/.local/bin/abess-ssh" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [[ -s "$HOME/.ssh/id_ed25519" ]]; then
+            exec ssh -o StrictHostKeyChecking=yes -i "$HOME/.ssh/id_ed25519" -o BatchMode=yes -o IdentitiesOnly=yes "$@"
+          fi
+          export SSHPASS="$VPS_SSH_PASSWORD"
+          exec sshpass -e ssh -o StrictHostKeyChecking=yes -o PreferredAuthentications=password,keyboard-interactive -o PubkeyAuthentication=no "$@"
+          SH
+          cat > "$HOME/.local/bin/abess-scp" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [[ -s "$HOME/.ssh/id_ed25519" ]]; then
+            exec scp -o StrictHostKeyChecking=yes -i "$HOME/.ssh/id_ed25519" -o BatchMode=yes -o IdentitiesOnly=yes "$@"
+          fi
+          export SSHPASS="$VPS_SSH_PASSWORD"
+          exec sshpass -e scp -o StrictHostKeyChecking=yes -o PreferredAuthentications=password,keyboard-interactive -o PubkeyAuthentication=no "$@"
+          SH
+          chmod 700 "$HOME/.local/bin/abess-ssh" "$HOME/.local/bin/abess-scp"
+      - name: Read aggregate usage diagnostics
+        env:
+          VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD || secrets.VPS_PASSWORD }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ vars.VPS_PORT }}
+        run: |
+          set -euo pipefail
+          "$HOME/.local/bin/abess-ssh" -p "${VPS_PORT:-22}" "${VPS_USER}@${VPS_HOST}" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          systemctl list-unit-files --no-pager | awk '/abess.*(traffic|observer|gateway|reconciler)/ {print $1, $2}'
+          ss -ltnp '( sport = :8080 )'
+          python3 - <<'PYREMOTE'
+          import json,time
+          from pathlib import Path
+          for name in ['/var/lib/abess-traffic-observer/status.json','/var/lib/abess-traffic-observer/usage.json','/var/lib/abess-ssh-ws/gateway/usage-live.json','/var/lib/abess-ssh-ws/policy/gateway-policy.json']:
+              p=Path(name)
+              if not p.exists():
+                  print(name, 'MISSING');continue
+              try:
+                  d=json.loads(p.read_text())
+                  accounts=d.get('accounts',[])
+                  vals=list(accounts.values()) if isinstance(accounts,dict) else accounts
+                  safe={k:d[k] for k in ['format','packets','portPayloadBytes','mappedConnections','unmappedUpgrades','lastReportAt','lastReportOk','activeMappedConnections','trackedAccounts'] if k in d}
+                  safe.update(ageSeconds=round(time.time()-p.stat().st_mtime),accounts=len(vals),usedBytes=sum(int(a.get('usedBytes',0)) for a in vals),observedBytes=sum(int(a.get('observedBytes',0)) for a in vals),online=sum(int(a.get('online',0)) for a in vals))
+                  print(name,json.dumps(safe))
+              except Exception as e: print(name,type(e).__name__)
+          PYREMOTE
+          for service in abess-ssh-ws-gateway abess-ssh-ws-reconciler abess-traffic-observer abess-ssh-ws-traffic-observer; do
+            printf '%s ' "$service"
+            systemctl is-active "$service" || true
+          done
+          REMOTE
