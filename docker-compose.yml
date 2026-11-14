@@ -64,6 +64,9 @@ services:
 
   caddy:
     image: caddy:2-alpine
+    sysctls:
+      net.ipv4.tcp_congestion_control: "${VPN_TCP_CONGESTION_CONTROL:-cubic}"
+      net.ipv4.tcp_mtu_probing: "1"
     restart: unless-stopped
     # Permission to connect to the private SSH-WS Unix socket, installed
     # manually on the host. Missing socket keeps only /ssh-ws/* unavailable.

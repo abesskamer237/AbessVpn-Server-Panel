@@ -49,3 +49,14 @@ pour bénéficier des nouveaux délais. Ce changement nettoie les sessions morte
 il ne réduit pas la latence du trajet Orange Cameroun et ne fixe aucun débit
 minimal. La configuration initiale se trouve dans
 `/var/lib/abess-network-tuning/sshd_config.original`.
+
+## TCP du HTTPS public dans Docker
+
+Caddy termine le TLS dans son propre espace réseau. Le script d’optimisation
+vérifie donc aussi les réglages TCP de ce conteneur et les applique avec
+`nsenter`, sans le redémarrer. Le choix est conservé dans la variable non secrète
+`VPN_TCP_CONGESTION_CONTROL` du `.env` et dans les paramètres `sysctls` de Compose
+pour les prochains démarrages. La configuration initiale de cet espace réseau
+est sauvegardée dans `/var/lib/abess-network-tuning/caddy-original.conf`.
+Les sessions publiques déjà ouvertes conservent leur algorithme TCP : reconnecter
+le client pour bénéficier du changement.

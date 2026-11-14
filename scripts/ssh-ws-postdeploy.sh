@@ -174,3 +174,6 @@ echo "ABESS_SSH_WS_NODE_ID=$VPN_NODE_ID"
 if systemctl is-active --quiet willy-ssh-ws.service; then
   bash scripts/install-traffic-observer.sh </dev/null
 fi
+
+# Reapply TCP settings to Caddy's network namespace after container recreation.
+bash scripts/tune-vpn-network.sh </dev/null
