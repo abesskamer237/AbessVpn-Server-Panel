@@ -1,5 +1,5 @@
 name: Deploy ABESS VPN to VPS
-# Production rollout marker: ABESS VPN 3.1 service center and announcements
+# Production rollout marker: ABESS VPN 3.1 validated communication forms
 
 on:
   workflow_dispatch:

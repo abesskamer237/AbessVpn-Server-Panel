@@ -10,6 +10,7 @@ test('announcements: draft, preview, targeted publication and unique acknowledge
   const editor=page.getByRole('dialog',{name:'Nouvelle annonce'});
   await editor.getByLabel('Titre',{exact:true}).fill(title);await editor.getByLabel('Message',{exact:true}).fill('Maintenance annoncée à nos revendeurs.\nLes licences restent conservées.');
   await editor.getByLabel('Demander un accusé de lecture').check();await editor.getByRole('button',{name:'Aperçu',exact:true}).click();await expect(editor.getByRole('heading',{name:title})).toBeVisible();
+  await editor.getByLabel('Libellé du bouton',{exact:true}).fill('Informations');await editor.getByRole('button',{name:'Enregistrer l’annonce'}).click();await expect(editor.getByRole('alert')).toContainText('Renseignez le libellé et le lien');await editor.getByLabel('Lien du bouton',{exact:true}).fill('https://example.test/informations');
   await editor.getByRole('button',{name:'Enregistrer l’annonce'}).click();await expect(editor).not.toBeVisible();
   const row=page.locator('article.announcement-row').filter({has:page.getByRole('heading',{name:title,exact:true})});await expect(row.getByText('Brouillon',{exact:true})).toBeVisible();
   await row.getByRole('button',{name:'Modifier',exact:true}).click();const edit=page.getByRole('dialog',{name:'Modifier l’annonce'});
