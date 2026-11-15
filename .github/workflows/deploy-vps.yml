@@ -174,7 +174,7 @@ jobs:
             POSTGRES_APP_PASSWORD: appDatabasePassword,
             VPN_DOMAIN: hostname,
             SSH_WS_HOST: process.env.VPS_HOST.trim(),
-            SSH_WS_EDGE_HOST: 'dfvnxizhrq0wj.cloudfront.net',
+            SSH_WS_EDGE_HOST: 'd2rje676b1sz0e.cloudfront.net',
             ACME_EMAIL: process.env.ACME_EMAIL || process.env.ADMIN_EMAIL,
             ADMIN_EMAIL: process.env.ADMIN_EMAIL,
             ADMIN_NAME: process.env.ADMIN_NAME || 'ABESS VPN Administrator',

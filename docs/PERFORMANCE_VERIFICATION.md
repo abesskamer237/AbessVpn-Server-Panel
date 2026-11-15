@@ -34,3 +34,11 @@ de chiffrer exactement une régression avant/après les changements.
 
 `scripts/benchmark-ssh-ws.mjs` est l’ancien microbenchmark synthétique local ; ses
 résultats ne doivent pas être présentés comme du débit Internet ou Orange.
+
+Le lancement manuel accepte un `edge_host` facultatif : ce remplacement est testé
+avec l’empreinte SSH du VPS avant d’être persisté dans le panneau et le fichier
+d’environnement, sans redémarrer le relais. Sans ce paramètre, la vérification
+conserve la configuration. Le mode `quick` compare seulement le débit et la
+concurrence ; il n’atteste pas les 180 secondes d’inactivité. Il ajoute une
+comparaison du client brut avec/sans TCP_NODELAY pour isoler l’effet Nagle côté
+client de mesure. Les résultats de stabilité restent ceux du contrôle complet.

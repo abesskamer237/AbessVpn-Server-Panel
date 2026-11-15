@@ -22,6 +22,7 @@ if(process.argv[2]==='--bridge'){
     const stream=createWebSocketStream(ws);ws.on('error',e=>{console.error('PERF_WS_ERROR='+(e.code||/Unexpected server response: (\d+)/.exec(e.message)?.[1]||'handshake'));process.exit(1)});ws.on('close',()=>process.exit(0));stream.on('error',()=>process.exit(1));process.stdin.pipe(stream).pipe(process.stdout);
   }else{
     const socket=tls.connect({host:domain,port,servername:sni,rejectUnauthorized:true});let header=Buffer.alloc(0),ready=false;
+    socket.setNoDelay(kind!=='raw-nagle');
     socket.once('secureConnect',()=>socket.write(`GET ${c.vpnPath} HTTP/1.1\r\nHost: ${domain}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nX-Abess-Device-ID: ${device}\r\nX-Abess-Device-Name: Controle performance\r\n\r\n`));
     socket.setTimeout(10000,()=>socket.destroy());
     socket.on('data',chunk=>{if(ready){if(!process.stdout.write(chunk))socket.pause();return;}header=Buffer.concat([header,chunk]);const end=header.indexOf('\r\n\r\n');if(end<0){if(header.length>8192)socket.destroy();return;}if(!header.toString('latin1',0,end).startsWith('HTTP/1.1 101')){socket.destroy();return;}ready=true;socket.setTimeout(0);if(header.length>end+4)process.stdout.write(header.subarray(end+4));header=null;process.stdin.pipe(socket)});
@@ -65,16 +66,17 @@ if(process.argv[2]==='--bridge'){
   const measurePings=async(s,n)=>{for(let i=0;i<n;i++){check(s);s.latencies.push(await ping(s.echo,s.latencies.length));await sleep(30)}};
   const stop=s=>{s.echo.socket.destroy();s.child.kill('SIGTERM')};
   try{
-    const start=Date.now(),sessions=[];let baseline;
+    const start=Date.now(),sessions=[];let baseline;const quick=process.env.VPN_PERFORMANCE_QUICK==='true';
     const edgeDifferent=credentials.vpnHost!==domain;let edgeSupported=!edgeDifferent;
-    const cases=[['direct','direct','origin'],['originRaw','raw','origin'],['originFramed','framed','origin'],...(edgeDifferent?[['clientEdgeFramed','framed','edge']]:[])];
+    const cases=[['direct','direct','origin'],...(quick?[['rawNagleDiagnostic','raw-nagle','origin']]:[]),['originRaw','raw','origin'],['originFramed','framed','origin'],...(edgeDifferent?[['clientEdgeFramed','framed','edge']]:[])];
     for(const [label,kind,route] of cases){
       let s;try{s=await launch(kind,label,route)}catch(e){if(route!=='edge')throw e;report.cases[label]={connectionFailed:true,error:e.message};console.log('VPN_ROUTE_FAILURE='+JSON.stringify({transport:label,error:e.message}));continue;}
       await measurePings(s,20);const down=[],up=[];
-      for(let round=0;round<3;round++){down.push(await download(s.port,16*1024**2));up.push(await upload(s.port,16*1024**2,new RateLimiter(100)));check(s);}
+      for(let round=0;round<(quick?2:3);round++){down.push(await download(s.port,16*1024**2));up.push(await upload(s.port,16*1024**2,new RateLimiter(100)));check(s);}
       report.cases[label]={downloadMbps:stats(down),uploadMbps:stats(up),roundTripMs:stats(s.latencies),integrityVerified:true};
       console.log('VPN_THROUGHPUT_CASE='+JSON.stringify({transport:label,...report.cases[label]}));
       if(kind==='direct')baseline=s;
+      else if(label==='rawNagleDiagnostic')stop(s);
       else if(label==='clientEdgeFramed'){edgeSupported=true;const old=sessions.find(x=>x.label==='originFramed');if(old){stop(old);sessions.splice(sessions.indexOf(old),1)}sessions.push(s);}
       else sessions.push(s);
     }
@@ -83,15 +85,15 @@ if(process.argv[2]==='--bridge'){
     const loadProbe=(async()=>{while(loading){for(const s of [baseline,...sessions]){try{underLoad[s.label].push(await ping(s.echo,underLoad[s.label].length))}catch(e){loadError=e;loading=false;return}}await sleep(100)}})();
     try{const t=performance.now();const speeds=await Promise.all(parallel.map(s=>download(s.port,8*1024**2)));parallel.forEach(check);loading=false;await loadProbe;if(loadError)throw loadError;report.parallel={connections:4,protocols:['raw','framed'],aggregateDownloadMbps:Number((32*1024**2*8/((performance.now()-t)/1000)/1e6).toFixed(2)),individualMbps:speeds,roundTripUnderLoadMs:Object.fromEntries(Object.entries(underLoad).map(([k,v])=>[k,stats(v)])),integrityVerified:true};console.log('VPN_PARALLEL='+JSON.stringify(report.parallel));}finally{loading=false;await loadProbe;parallel.forEach(stop);stop(baseline)}
     const activeStart=Date.now();let pings=0;
-    while(Date.now()-activeStart<90000){for(const s of sessions){check(s);s.latencies.push(await ping(s.echo,pings++));}if(pings%30===0)await download(sessions[pings%2].port,1024**2);await sleep(1000)}
+    while(!quick&&Date.now()-activeStart<90000){for(const s of sessions){check(s);s.latencies.push(await ping(s.echo,pings++));}if(pings%30===0)await download(sessions[pings%2].port,1024**2);await sleep(1000)}
     console.log('VPN_STABILITY_PROGRESS='+JSON.stringify({activeSeconds:Math.round((Date.now()-activeStart)/1000),unexpectedDisconnects:0}));
     const idleStart=Date.now();
-    while(Date.now()-idleStart<180000){sessions.forEach(check);await sleep(1000)}
+    while(!quick&&Date.now()-idleStart<180000){sessions.forEach(check);await sleep(1000)}
     const idleSeconds=Math.round((Date.now()-idleStart)/1000);
     for(const s of sessions){await measurePings(s,20);await download(s.port,1024**2);check(s);}
-    report.stability={activeSeconds:Math.round((idleStart-activeStart)/1000),applicationIdleSeconds:idleSeconds,unexpectedDisconnects:0,reconnections:0,resumeAfterIdle:true,sessions:sessions.map(s=>({transport:s.label,lifetimeSeconds:Math.round((Date.now()-s.startedAt)/1000),roundTripMs:stats(s.latencies)})),totalSeconds:Math.round((Date.now()-start)/1000)};
+    report.stability={quick,activeSeconds:Math.round((idleStart-activeStart)/1000),applicationIdleSeconds:idleSeconds,unexpectedDisconnects:0,reconnections:0,resumeAfterIdle:quick?null:true,sessions:sessions.map(s=>({transport:s.label,lifetimeSeconds:Math.round((Date.now()-s.startedAt)/1000),roundTripMs:stats(s.latencies)})),totalSeconds:Math.round((Date.now()-start)/1000)};
     report.exportedRouteVerified=edgeSupported;
-    report.meets30Mbps=edgeSupported&&Object.entries(report.cases).filter(([k,v])=>k!=='direct'&&!v.connectionFailed).every(([,v])=>v.downloadMbps.median>=30&&v.uploadMbps.median>=30);
+    report.meets30Mbps=edgeSupported&&Object.entries(report.cases).filter(([k,v])=>!['direct','rawNagleDiagnostic'].includes(k)&&!v.connectionFailed).every(([,v])=>v.downloadMbps.median>=30&&v.uploadMbps.median>=30);
     console.log('VPN_PERFORMANCE_RESULT='+JSON.stringify(report));
     if(process.env.VPN_PERFORMANCE_REPORT)fs.writeFileSync(process.env.VPN_PERFORMANCE_REPORT,JSON.stringify(report,null,2));
   }finally{for(const p of children)if(p.exitCode===null)p.kill('SIGTERM');fs.rmSync(directory,{recursive:true,force:true});}

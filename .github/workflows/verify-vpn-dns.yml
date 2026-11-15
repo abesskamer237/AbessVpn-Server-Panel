@@ -1,4 +1,5 @@
 name: Verify exported VPN endpoint DNS
+# Confirm the endpoint persisted after the verified CloudFront correction.
 on:
   workflow_dispatch:
   push:

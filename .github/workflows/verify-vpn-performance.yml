@@ -1,17 +1,30 @@
 name: Verify VPN speed and stability
-# Verify the operator-provided CloudFront endpoint before persisting its routing.
+# Manual checks are read-only unless an explicit replacement edge is supplied.
 on:
   workflow_dispatch:
+    inputs:
+      edge_host:
+        description: Optional CloudFront endpoint to verify and apply
+        required: false
+        type: string
+      quick:
+        description: Throughput check only; skips the long idle stability phase
+        default: false
+        type: boolean
   push:
     branches: [main]
     paths: [.github/workflows/verify-vpn-performance.yml]
 permissions:
   contents: read
+env:
+  VPN_EDGE_OVERRIDE: ${{ inputs.edge_host || '' }}
+  VPN_PERFORMANCE_QUICK: ${{ (inputs.quick || (github.event_name == 'push' && contains(github.event.head_commit.message, 'quick'))) && 'true' || 'false' }}
 concurrency:
   group: abessvpn-production-deploy
   cancel-in-progress: false
 jobs:
   measure:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, 'verify VPN performance')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -105,13 +118,13 @@ jobs:
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_PORT: ${{ vars.VPS_PORT }}
           VPN_DOMAIN: ${{ vars.VPN_DOMAIN }}
-          VPN_EDGE_OVERRIDE: d2rje676b1sz0e.cloudfront.net
         run: |
           set -euo pipefail
           export ABESS_SSH_COMMAND="$HOME/.local/bin/abess-ssh"
           export VPN_PERFORMANCE_REPORT="$RUNNER_TEMP/abess-vpn-performance-report.json"
           node scripts/verify-vpn-performance.mjs "$RUNNER_TEMP/abess-performance-credentials.json"
       - name: Persist the CloudFront endpoint only after its SSH identity and stability pass
+        if: env.VPN_EDGE_OVERRIDE != '' && env.VPN_PERFORMANCE_QUICK != 'true'
         env:
           VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD || secrets.VPS_PASSWORD }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
@@ -120,11 +133,12 @@ jobs:
         run: |
           set -euo pipefail
           node -e 'const r=require(process.argv[1]);if(!r.exportedRouteVerified||r.stability.unexpectedDisconnects!==0)process.exit(1)' "$RUNNER_TEMP/abess-vpn-performance-report.json"
+          [[ "$VPN_EDGE_OVERRIDE" =~ ^d[a-z0-9]+\.cloudfront\.net$ ]]
           remote_dir="/tmp/abess-performance-${{ github.run_id }}"
-          "$HOME/.local/bin/abess-ssh" -p "${VPS_PORT:-22}" "${VPS_USER}@${VPS_HOST}" "bash -s -- '$remote_dir' '${{ github.run_id }}'" <<'REMOTE'
+          "$HOME/.local/bin/abess-ssh" -p "${VPS_PORT:-22}" "${VPS_USER}@${VPS_HOST}" "bash -s -- '$remote_dir' '${{ github.run_id }}' '$VPN_EDGE_OVERRIDE'" <<'REMOTE'
           set -euo pipefail
           cd "$HOME/abessvpn-server"
-          node "$1/vpn-performance-host.mjs" apply-edge "$2" d2rje676b1sz0e.cloudfront.net </dev/null
+          node "$1/vpn-performance-host.mjs" apply-edge "$2" "$3" </dev/null
           REMOTE
       - name: Collect host health and remove the canary, listener and credentials
         if: always()

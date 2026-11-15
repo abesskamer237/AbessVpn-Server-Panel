@@ -64,7 +64,7 @@ if(mode==='setup'){
     const content=fs.readFileSync(envFile,'utf8');const oldLine=content.split('\n').find(l=>l.startsWith('SSH_WS_EDGE_HOST='))||null;
     fs.mkdirSync('/var/lib/abess-edge-backups',{recursive:true,mode:0o700});fs.writeFileSync('/var/lib/abess-edge-backups/'+run+'.json',JSON.stringify({previousSni:previous.sni,previousEnvLine:oldLine,changedAt:new Date().toISOString()}),{mode:0o600});
     const next=content.split('\n').filter(l=>!l.startsWith('SSH_WS_EDGE_HOST=')).join('\n').trimEnd()+'\nSSH_WS_EDGE_HOST='+JSON.stringify(edge)+'\n';
-    fs.writeFileSync(temp,next,{mode:0o600,flag:'wx'});
+    const fd=fs.openSync(temp,'wx',0o600);try{fs.writeFileSync(fd,next);fs.fsyncSync(fd)}finally{fs.closeSync(fd)}
     const body={enabled:true,fingerprint,sni:edge,port:previous.port,path:previous.path};
     const result=await api(token,'admin/nodes/'+nodeId+'/ssh-ws','PUT',body);assert.equal(result.sshWsSni,edge);updated=true;
     try{fs.renameSync(temp,envFile)}catch(e){await api(token,'admin/nodes/'+nodeId+'/ssh-ws','PUT',{...body,sni:previous.sni});throw e}
