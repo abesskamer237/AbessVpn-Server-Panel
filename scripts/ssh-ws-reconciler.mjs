@@ -145,6 +145,7 @@ function policyAccounts(desired,report) {
       enabled:a.enabled && states.get(a.id)==='active',
       expiresAt:a.expiresAt,
       quotaBytes:a.quotaBytes,baselineUsedBytes:a.baselineUsedBytes,
+      enforcementMode:desired.enforcementMode||'audit',enforcementSince:desired.enforcementSince,
       maxConnections:a.maxConnections,blockedDevices:Array.isArray(a.blockedDevices)?a.blockedDevices:[]
     }));
 }
@@ -229,6 +230,33 @@ async function readUsage(env,store,policyTime) {
   return usage;
 }
 let previousCpuSample=null;
+let previousNetworkSample=null;
+let publicTcpSample={at:0,pid:null,rtts:null};
+function publicTcpDiagnostics(){
+  if(Date.now()-publicTcpSample.at<60000)return publicTcpSample;
+  let pid=null;
+  try{const result=spawnSync('/usr/bin/docker',['inspect','--format','{{.State.Pid}}','abessvpn-server-caddy-1'],{encoding:'utf8',timeout:2000,stdio:['ignore','pipe','ignore']});const value=result.stdout?.trim();if(result.status===0&&/^[1-9][0-9]*$/.test(value))pid=value}catch{}
+  let rtts=null;
+  try{const args=pid?['-t',pid,'-n','ss','-tinH','state','established','( sport = :443 )']:['-tinH','state','established','( sport = :443 )'];const result=spawnSync(pid?'/usr/bin/nsenter':'/usr/bin/ss',args,{encoding:'utf8',timeout:2000,maxBuffer:2*1024*1024,stdio:['ignore','pipe','ignore']});if(result.status===0){const samples=[...result.stdout.matchAll(/\brtt:([0-9.]+)/g)].map(m=>Number(m[1])).filter(Number.isFinite).sort((a,b)=>a-b);if(samples.length)rtts={medianRttMs:samples[Math.floor(samples.length/2)],p95RttMs:samples[Math.floor((samples.length-1)*.95)],rttObservedAt:new Date().toISOString(),rttSamples:samples.length}}}catch{}
+  publicTcpSample={at:Date.now(),pid,rtts};return publicTcpSample;
+}
+async function networkTelemetry(){
+  try{
+    const routes=(await fs.readFile('/proc/net/route','utf8')).trim().split('\n').slice(1).map(l=>l.trim().split(/\s+/));
+    const interfaces=new Set(routes.filter(r=>r[1]==='00000000').map(r=>r[0]));if(!interfaces.size)return undefined;
+    let rx=0,tx=0;
+    for(const line of (await fs.readFile('/proc/net/dev','utf8')).split('\n')){const [name,counters]=line.split(':');if(!counters||!interfaces.has(name.trim()))continue;const n=counters.trim().split(/\s+/).map(Number);rx+=n[0];tx+=n[8]}
+    const publicSample=publicTcpDiagnostics(),scopeId=publicSample.pid||'host';
+    const snmp=(await fs.readFile(publicSample.pid?'/proc/'+publicSample.pid+'/net/snmp':'/proc/net/snmp','utf8')).split('\n');let retrans=0,outSegments=0;
+    for(let i=0;i<snmp.length-1;i++)if(snmp[i].startsWith('Tcp:')){const keys=snmp[i].split(/\s+/),values=snmp[i+1].split(/\s+/);retrans=Number(values[keys.indexOf('RetransSegs')])||0;outSegments=Number(values[keys.indexOf('OutSegs')])||0;break}
+    let cpuPressurePercent;
+    try{const psi=await fs.readFile('/proc/pressure/cpu','utf8');const match=/some avg10=([0-9.]+)/.exec(psi);if(match)cpuPressurePercent=Number(match[1])}catch{}
+    const now=Date.now(),previous=previousNetworkSample;previousNetworkSample={at:now,rx,tx,retrans,outSegments,scopeId};
+    const dt=previous?(now-previous.at)/1000:0;
+    return {...publicSample.rtts,tcpStatsScope:publicSample.pid?'public-tls':'host',tcpCongestionControl:(await fs.readFile('/proc/sys/net/ipv4/tcp_congestion_control','utf8')).trim(),cpuPressurePercent,
+      ...(previous&&dt>0?{rxBytesPerSecond:Math.round(Math.max(0,rx-previous.rx)/dt),txBytesPerSecond:Math.round(Math.max(0,tx-previous.tx)/dt),...(previous.scopeId===scopeId?{retransmitsPerSecond:Number((Math.max(0,retrans-previous.retrans)/dt).toFixed(2)),retransmitPercent:Number((Math.max(0,retrans-previous.retrans)/Math.max(1,outSegments-previous.outSegments)*100).toFixed(2))}:{})}:{})};
+  }catch{return undefined}
+}
 async function hostTelemetry() {
   let diskTotalBytes=0,diskFreeBytes=0,cpuPercent=0;
   try {
@@ -255,6 +283,8 @@ async function hostTelemetry() {
   };
   return {
     observedAt:new Date().toISOString(),
+    network:await networkTelemetry(),
+    sessionGuard:await (async()=>{try{const s=JSON.parse(await fs.readFile('/var/lib/abess-session-guard/status.json','utf8'));if(s.format!=='abess-session-guard-v1'||Date.now()-Date.parse(s.observedAt)>30000)return undefined;return {observedAt:s.observedAt,healthy:s.healthy,mode:s.mode,observedSessions:s.observedSessions||0,overLimitAccounts:s.overLimitAccounts||0,deniedTotal:s.deniedTotal||0}}catch{return undefined}})(),
     uptimeSeconds:Math.max(0,Math.floor(os.uptime())),
     cpuPercent,
     load1:Number(os.loadavg()[0].toFixed(2)),

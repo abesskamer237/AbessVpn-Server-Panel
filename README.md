@@ -15,6 +15,10 @@ Backend Node/Express, panneau React et bot Telegram pour vendre et administrer d
 
 PostgreSQL transactionnel en production ; sauvegardes AES-GCM avec copie S3 optionnelle ; métriques et alertes. Aucune passerelle de paiement automatique : un crédit n’est jamais ajouté sans vérification humaine. Détails de la dernière revue : [AUDIT.md](AUDIT.md).
 
+## Centre de service 3.1
+
+Annonces ciblées et programmées, notifications du site et association Telegram, tickets de support, portail client `/client`, historique de consommation, supervision réseau et capacité multi-VPS. [Fonctionnement, limites et configuration](docs/SERVICE_CENTER.md). Les paiements restent manuels et l’e-mail reste à configurer.
+
 ## Développement
 
 Node.js 22.21+ et npm. Utiliser une base PostgreSQL jetable pour les tests de stockage.

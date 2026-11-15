@@ -24,6 +24,9 @@ import type {
 } from './server.js';
 
 export interface TelegramBotContext {
+  onBotReady?:(username:string)=>void;
+  claimNotifications?:(token:string,chatId:string)=>boolean;
+  stopNotifications?:(chatId:string)=>void;
   encryptedBackup: () => Promise<unknown>;
   runTransaction: <T>(work: () => Promise<T>) => Promise<T>;
   /** True when the server runs SSH-WSS only: VLESS voucher features are retired. */
@@ -1394,6 +1397,13 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
 
     if (!userId) return;
 
+    if(msg.chat.type==='private'&&chatId===userId&&/^\/start notify_[a-f0-9]{48}$/.test(text)&&ctx.claimNotifications){
+      const ok=ctx.claimNotifications(text.slice('/start notify_'.length),String(chatId));
+      await sendMessage(chatId,ok?'✅ Notifications associées à votre compte ABESS VPN. Activez-les dans les préférences du site.':'Code invalide ou expiré. Générez un nouveau lien depuis le site.');
+      return;
+    }
+    if(msg.chat.type==='private'&&chatId===userId&&text==='/stopnotifications'&&ctx.stopNotifications){ctx.stopNotifications(String(chatId));await sendMessage(chatId,'Notifications désactivées pour ce compte Telegram.');return;}
+
     // Shared-password Telegram enrollment is retired. Configure the allowlist
     // through TELEGRAM_ADMIN_IDS in the server environment instead.
     if (text === '/login' || text.startsWith('/login ')) {
@@ -1808,6 +1818,7 @@ export function startTelegramBot(ctx: TelegramBotContext): { stop: () => void } 
     .then((data: any) => {
       if (data.ok && data.result) {
         botUsername = data.result.username || 'AbessVpnBot';
+        if(data.result.username)ctx.onBotReady?.(data.result.username);
         console.log(`[TelegramBot] ✅ Bot Telegram Commercial connecté sous @${botUsername} !`);
         console.log(`[TelegramBot] Administrateurs enregistrés : ${authorizedAdmins.size} chat ID(s).`);
         pollUpdates().catch(console.error);

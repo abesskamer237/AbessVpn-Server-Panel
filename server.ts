@@ -13,6 +13,9 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import QRCode from 'qrcode';
 import { Operations, registerOperations, encryptedBackup, uploadBackup, type VpnNode } from './modules/operations.js';
+import {claimTelegram,queueDelivery,enqueueAlerts,deliverTelegram,type DeliveryJob} from './modules/notification-delivery.js';
+import { registerServiceCenter, emptyService, emptyUsage, recordUsage, validServiceState, validUsageHistory, fleetRows, chooseNode, type ServiceState, type UsageHistory, type PortalSessions } from './modules/service-center.js';
+import { registerAnnouncements, type Notice, type NoticeReceipts } from './modules/announcements.js';
 import { registerCommerce } from './modules/commerce.js';
 import { registerSsh, type SshState } from './modules/ssh.js';
 import { singBoxConfig, mihomoConfig } from './modules/subscriptions.js';
@@ -269,24 +272,7 @@ export function saveAppVersionConfig(config: AppVersionConfig): void {
 // ==========================================
 // ANNOUNCEMENTS & BROADCASTING SYSTEM
 // ==========================================
-export interface Announcement {
-  id: string;
-  title: string;
-  message: string;
-  type: 'INFO' | 'WARNING' | 'CRITICAL' | 'PROMO' | 'UPDATE';
-  targetPlatform: 'ALL' | 'ANDROID' | 'WINDOWS';
-  isMandatory: boolean;
-  dismissible: boolean;
-  actionButtonText?: string;
-  actionButtonUrl?: string;
-  bannerImageUrl?: string;
-  publishedAt: string;
-  expiresAt?: string;
-  isActive: boolean;
-  priority: number;
-  showMode: 'EVERY_LAUNCH' | 'ONCE_PER_USER';
-  createdBy?: string;
-}
+export interface Announcement extends Notice {}
 
 export function loadAnnouncements(): Announcement[] {
   if (hasDocument(announcementsFile)) {
@@ -301,8 +287,8 @@ export function loadAnnouncements(): Announcement[] {
   const defaultAnnouncements: Announcement[] = [
     {
       id: 'ann-welcome-01',
-      title: '🛡️ Bienvenue sur AbessVpn v2.1.0',
-      message: 'Bienvenue sur ABESS VPN. Les licences VLESS sont disponibles sur les profils réellement activés par votre administrateur. Rejoignez le canal officiel pour les dernières actualités !',
+      title: '🛡️ Bienvenue sur ABESS VPN',
+      message: 'Bienvenue sur ABESS VPN. Retrouvez vos licences SSH-WSS et les informations de votre revendeur.',
       type: 'INFO',
       targetPlatform: 'ALL',
       isMandatory: false,
@@ -1563,29 +1549,6 @@ async function startServer() {
     });
   });
 
-  // Public Announcements endpoint for Mobile App and Desktop Software
-  app.get(['/api/v1/announcements/active', '/api/v1/app/announcements'], (req, res) => {
-    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
-    const platform = String(req.query.platform || 'all').toLowerCase();
-    const all = loadAnnouncements();
-    const now = new Date();
-
-    const active = all.filter(a => {
-      if (!a.isActive) return false;
-      if (a.expiresAt && new Date(a.expiresAt) < now) return false;
-      if (platform !== 'all' && a.targetPlatform !== 'ALL') {
-        if (String(a.targetPlatform || '').toLowerCase() !== platform) return false;
-      }
-      return true;
-    }).sort((a, b) => (b.priority || 0) - (a.priority || 0) || new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime());
-
-    res.json({
-      ok: true,
-      count: active.length,
-      announcements: active
-    });
-  });
-
   // Public health check used by the mobile client before token operations.
   app.get('/api/v1/ping', (_req, res) => {
     res.setHeader('Cache-Control', 'no-store');
@@ -1895,6 +1858,10 @@ async function startServer() {
     });
   });
 
+  const receiptsFile=path.resolve(dataDir,'announcement-receipts.json');
+  registerAnnouncements(app,{authenticate,limiter:publicApiRateLimiter,read:loadAnnouncements,write:saveAnnouncements,
+    receipts:()=>hasDocument(receiptsFile)?readDocument(receiptsFile):{},saveReceipts:v=>{writeJsonAtomically(receiptsFile,v)},users:loadUsers,audit:logAudit});
+
   registerSecurityRoutes(app, {authenticate, security, users:loadUsers, saveUsers, verifyPassword, hashPassword, audit:logAudit, guard:ip=>checkLoginRateLimit(ip).allowed, failure:ip=>recordLoginAttempt(ip,false)});
 
   const commerceFile=path.resolve(dataDir,'commerce.json');
@@ -1903,6 +1870,12 @@ async function startServer() {
   const sshFile = path.resolve(dataDir, 'ssh.json');
   const sshControl = process.env.SSH_CONTROL_DIR || path.resolve(dataDir, 'ssh-control');
   const readSsh = (): SshState => hasDocument(sshFile) ? readDocument(sshFile) : { accounts: [] };
+  const serviceFile=path.resolve(dataDir,'service-center.json'),usageFile=path.resolve(dataDir,'usage-history.json'),portalFile=path.resolve(dataDir,'portal-sessions.json');
+  const readService=():ServiceState=>hasDocument(serviceFile)?{...emptyService(),...readDocument(serviceFile)}:emptyService();
+  const readUsage=():UsageHistory=>hasDocument(usageFile)?readDocument(usageFile):emptyUsage();
+  const saveService=(v:ServiceState)=>{writeJsonAtomically(serviceFile,v)};
+  const saveUsage=(v:UsageHistory)=>{writeJsonAtomically(usageFile,v)};
+
   const sshOwnerActive = (ownerId?: string) => {
     if (!ownerId) return true; // Retain legacy administrator-owned imports.
     const users = loadUsers(); const visited = new Set<string>();
@@ -1915,7 +1888,9 @@ async function startServer() {
     }
     return true;
   };
-  registerSsh(app, { authenticate, read: readSsh, write: state => { writeJsonAtomically(sshFile, state); },
+  registerSsh(app, { authenticate, read: readSsh,
+    selectNode:()=>chooseNode(readExternalNodes(),readSsh().accounts,readService()),
+    admitNode:id=>{const row=fleetRows(readExternalNodes(),readSsh().accounts,readService()).find(n=>n.id===id);return Boolean(row?.acceptNew&&row.available>0)}, write: state => { writeJsonAtomically(sshFile, state); },
     key: process.env.MASTER_SECRET!, nodes: readExternalNodes, audit: logAudit, users: loadUsers,
     ownerActive: sshOwnerActive,
     canManage: (actor, ownerId) => canManageToken(actor, ownerId, loadUsers()),
@@ -1932,7 +1907,14 @@ async function startServer() {
       return true;
     } });
   const nodesFile=path.resolve(dataDir,'nodes.json');
-  const fullSnapshot=async()=>({version:3,ssh:readSsh(),auditLogs:loadAuditLogs(),auditEvents:await storage.exportAudit(),masterKeyId:crypto.createHash('sha256').update(process.env.MASTER_SECRET!).digest('hex').slice(0,16),users:loadUsers(),tokens:loadTokens().map(backupClientToken),masterConfig:(()=>{const {secretPassphrase,...config}=loadMasterConfig();return config;})(),protocolConfigs:loadProtocolConfigs(),transactions:loadTransactions(),plans:loadPlans(),requests:loadRequests(),appVersion:loadAppVersionConfig(),announcements:loadAnnouncements(),security:{mfa:security.state().mfa,sessions:{}},commerce:hasDocument(commerceFile)?readDocument(commerceFile):{orders:[]},nodes:hasDocument(nodesFile)?readDocument(nodesFile):[]});
+  let verifiedBotUsername:string|undefined;
+  const deliveryStatus=(actor:{id:string})=>({telegram:Boolean(process.env.TELEGRAM_BOT_TOKEN&&verifiedBotUsername&&readService().telegramLinks?.[actor.id]),email:false,telegramBotAvailable:Boolean(process.env.TELEGRAM_BOT_TOKEN&&verifiedBotUsername)});
+  const serviceCenter=registerServiceCenter(app,{authenticate,limiter:publicApiRateLimiter,read:readService,write:saveService,usage:readUsage,saveUsage,
+    ssh:readSsh,saveSsh:v=>{writeJsonAtomically(sshFile,v)},nodes:readExternalNodes,users:loadUsers,
+    canManage:(actor,owner)=>{const users=loadUsers(),u=users.find(u=>u.id===actor.id);return Boolean(u&&canManageToken(u,owner,users))},ownerActive:sshOwnerActive,key:process.env.MASTER_SECRET!,audit:logAudit,
+    sessions:()=>hasDocument(portalFile)?readDocument(portalFile):{},saveSessions:v=>{writeJsonAtomically(portalFile,v)},announcements:loadAnnouncements,receipts:()=>hasDocument(receiptsFile)?readDocument(receiptsFile):{},saveReceipts:v=>{writeJsonAtomically(receiptsFile,v)},
+    guard:ip=>checkLoginRateLimit(ip).allowed,failure:ip=>recordLoginAttempt(ip,false),deliveryStatus,botUsername:()=>verifiedBotUsername,queueTest:(actor,channel)=>{const state=readService(),id=queueDelivery(state,actor.id,channel,'Test ABESS VPN','Vos notifications sont configurées.');saveService(state);return id},afterCommit:fn=>storage.afterCommit(fn)});
+  const fullSnapshot=async()=>({version:4,serviceCenter:readService(),usageHistory:readUsage(),announcementReceipts:hasDocument(receiptsFile)?readDocument(receiptsFile):{},ssh:readSsh(),auditLogs:loadAuditLogs(),auditEvents:await storage.exportAudit(),masterKeyId:crypto.createHash('sha256').update(process.env.MASTER_SECRET!).digest('hex').slice(0,16),users:loadUsers(),tokens:loadTokens().map(backupClientToken),masterConfig:(()=>{const {secretPassphrase,...config}=loadMasterConfig();return config;})(),protocolConfigs:loadProtocolConfigs(),transactions:loadTransactions(),plans:loadPlans(),requests:loadRequests(),appVersion:loadAppVersionConfig(),announcements:loadAnnouncements(),security:{mfa:security.state().mfa,sessions:{}},commerce:hasDocument(commerceFile)?readDocument(commerceFile):{orders:[]},nodes:hasDocument(nodesFile)?readDocument(nodesFile):[]});
   const restoreSnapshot=async(snapshot:any)=>{
     const objects=(value:unknown)=>Array.isArray(value)&&value.every(item=>item!==null&&typeof item==='object'&&!Array.isArray(item));
     const optionalObjects=(value:unknown)=>value===undefined||objects(value);
@@ -1941,7 +1923,10 @@ async function startServer() {
       !snapshot.masterConfig||typeof snapshot.masterConfig!=='object'||
       !optionalObjects(snapshot.nodes)||!optionalObjects(snapshot.transactions)||!optionalObjects(snapshot.requests)||!optionalObjects(snapshot.announcements)||
       (snapshot.ssh!==undefined&&(!snapshot.ssh||!objects(snapshot.ssh.accounts)))||
-      (snapshot.commerce!==undefined&&(!snapshot.commerce||!objects(snapshot.commerce.orders))))throw new Error('Invalid snapshot');
+      (snapshot.commerce!==undefined&&(!snapshot.commerce||!objects(snapshot.commerce.orders)))||
+      (snapshot.serviceCenter!==undefined&&!validServiceState(snapshot.serviceCenter))||
+      (snapshot.usageHistory!==undefined&&!validUsageHistory(snapshot.usageHistory))||
+      (snapshot.announcementReceipts!==undefined&&(!snapshot.announcementReceipts||typeof snapshot.announcementReceipts!=='object'||Array.isArray(snapshot.announcementReceipts))))throw new Error('Invalid snapshot');
     // Keep a verified encrypted pre-restore snapshot; PostgreSQL commits all aggregates together.
     writeJsonAtomically(path.resolve(backupsDir,`pre-restore-${Date.now()}.encrypted.json`),encryptedBackup(await fullSnapshot(),process.env.BACKUP_ENCRYPTION_KEY||process.env.MASTER_SECRET!));
     saveMasterConfig(snapshot.masterConfig);saveProtocolConfigs(snapshot.protocolConfigs);saveUsers(snapshot.users);saveTokens(snapshot.tokens);savePlans(snapshot.plans);
@@ -1949,6 +1934,8 @@ async function startServer() {
     if(Array.isArray(snapshot.transactions))writeJsonAtomically(transactionsFile,snapshot.transactions);
     if(snapshot.appVersion)saveAppVersionConfig(snapshot.appVersion);
     if(Array.isArray(snapshot.announcements))saveAnnouncements(snapshot.announcements);
+    writeJsonAtomically(receiptsFile,snapshot.announcementReceipts||{});
+    saveService({...snapshot.serviceCenter||emptyService(),migrations:{},telegramClaims:{},deliveryJobs:(snapshot.serviceCenter?.deliveryJobs||[]).map((j:any)=>({...j,status:['PENDING','SENDING'].includes(j.status)?'FAILED':j.status,error:['PENDING','SENDING'].includes(j.status)?'Envoi annulé après restauration.':j.error}))});saveUsage(snapshot.usageHistory||emptyUsage());writeJsonAtomically(portalFile,{});
     if(snapshot.commerce)writeJsonAtomically(commerceFile,snapshot.commerce);
     writeJsonAtomically(sshFile, snapshot.ssh || { accounts: [] });
     if(Array.isArray(snapshot.nodes))writeJsonAtomically(nodesFile,snapshot.nodes);
@@ -1969,6 +1956,8 @@ async function startServer() {
       })) }),
     nodeSshDesired: node => ({
       format:'abess-managed-ssh-ws-v1',
+      enforcementMode:readService().fleet[node.id]?.enforcementMode||'audit',
+      enforcementSince:readService().fleet[node.id]?.enforcementSince,
       observedAt:new Date().toISOString(),
       accounts:readSsh().accounts.filter(a=>a.managed&&a.nodeId===node.id).map(a=>{
         let enabled=Boolean(a.wsAccessHash && a.wsAccessKey && a.enabled&&sshOwnerActive(a.resellerId)&&
@@ -1983,8 +1972,9 @@ async function startServer() {
           ...(enabled?{password}:{})};
       })
     }),
+    nodeTelemetry:(nodeId,t)=>{const history=readUsage(),bucket=new Date(Math.floor(Date.parse(t.observedAt)/300000)*300000).toISOString();history.nodes[bucket]||={};if(!history.nodes[bucket][nodeId]){history.nodes[bucket][nodeId]=t;const cutoff=Date.now()-7*86400000;for(const date of Object.keys(history.nodes))if(Date.parse(date)<cutoff)delete history.nodes[date];saveUsage(history)}},
     nodeSshReport: (node,reports) => {
-      const state=readSsh();
+      const state=readSsh(),history=readUsage();
       let changed=false;
       const now=new Date().toISOString();
       for(const report of reports){
@@ -1995,8 +1985,9 @@ async function startServer() {
           // Across restarts the local durable upper bound may be larger; never
           // decrease the server-side verified counter.
           a.usedBytes=Math.max(a.usedBytes,report.usedBytes);
-          a.online=report.online===undefined?a.online:Math.max(0,Math.min(10,Math.trunc(Number(report.online)||0)));
+          a.online=report.online===undefined?a.online:Math.max(0,Math.min(5000,Math.trunc(Number(report.online)||0)));
           a.usageObservedAt=now;
+          recordUsage(history,a,now);
           if(Array.isArray(report.devices))a.devices=report.devices.map((dv:any)=>({
             deviceKey:String(dv.deviceKey),usedBytes:Number(dv.usedBytes||0),upBytes:Number(dv.upBytes||0),downBytes:Number(dv.downBytes||0),
             firstSeenAt:String(dv.firstSeenAt||''),lastSeenAt:String(dv.lastSeenAt||''),activeSessions:Math.max(0,Math.min(10,Math.trunc(Number(dv.activeSessions)||0))),
@@ -2009,7 +2000,7 @@ async function startServer() {
         a.lastAppliedAt=now;
         changed=true;
       }
-      if(changed)writeJsonAtomically(sshFile,state);
+      if(changed){writeJsonAtomically(sshFile,state);saveUsage(history);}
     },
     nodeUsage: (node, snapshot) => {
       const counters = new Map<string, number>(snapshot.stat.map((item: any) => [item.name, Number(item.value)]));
@@ -2048,6 +2039,7 @@ async function startServer() {
         account.usedBytes += sample.usedBytes - old;
         account.online = sample.online || 0;
         account.usageObservedAt = snapshot.observedAt;
+        const history=readUsage();recordUsage(history,account,snapshot.observedAt);saveUsage(history);
         next[counterKey] = sample.usedBytes;
       }
       node.generation = snapshot.generation;
@@ -3495,138 +3487,6 @@ async function startServer() {
   });
 
   // ==========================================
-  // ANNOUNCEMENTS MANAGEMENT (ADMIN)
-  // ==========================================
-  app.get('/api/v1/admin/announcements', authenticate, (req, res) => {
-    const user: AppUser = (req as any).user;
-    if (user.role !== 'SUPER_ADMIN') {
-      res.status(403).json({ error: 'Accès réservé au Super Administrateur.' });
-      return;
-    }
-    const announcements = loadAnnouncements();
-    res.json({ ok: true, announcements });
-  });
-
-  app.post('/api/v1/admin/announcements', authenticate, (req, res) => {
-    const user: AppUser = (req as any).user;
-    if (user.role !== 'SUPER_ADMIN') {
-      res.status(403).json({ error: 'Accès réservé au Super Administrateur.' });
-      return;
-    }
-
-    const title = String(req.body?.title || '').trim();
-    const message = String(req.body?.message || '').trim();
-    if (!title || !message) {
-      res.status(400).json({ error: 'Titre et message requis pour publier une annonce.' });
-      return;
-    }
-
-    const type = ['INFO', 'WARNING', 'CRITICAL', 'PROMO', 'UPDATE'].includes(req.body?.type)
-      ? req.body.type
-      : 'INFO';
-
-    const targetPlatform = ['ALL', 'ANDROID', 'WINDOWS'].includes(req.body?.targetPlatform)
-      ? req.body.targetPlatform
-      : 'ALL';
-
-    const isMandatory = Boolean(req.body?.isMandatory);
-    const dismissible = req.body?.dismissible !== undefined ? Boolean(req.body?.dismissible) : !isMandatory;
-    const actionButtonText = req.body?.actionButtonText ? String(req.body.actionButtonText).trim() : undefined;
-    const actionButtonUrl = req.body?.actionButtonUrl ? String(req.body.actionButtonUrl).trim() : undefined;
-    const bannerImageUrl = req.body?.bannerImageUrl ? String(req.body.bannerImageUrl).trim() : undefined;
-    const expiresAt = req.body?.expiresAt ? String(req.body.expiresAt).trim() : undefined;
-    const priority = Number.isFinite(Number(req.body?.priority)) ? Math.max(-100, Math.min(100, Math.trunc(Number(req.body.priority)))) : 0;
-    const showMode = req.body?.showMode === 'EVERY_LAUNCH' ? 'EVERY_LAUNCH' : 'ONCE_PER_USER';
-
-    const newAnnouncement: Announcement = {
-      id: `ann-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-      title,
-      message,
-      type,
-      targetPlatform,
-      isMandatory,
-      dismissible,
-      actionButtonText,
-      actionButtonUrl,
-      bannerImageUrl,
-      publishedAt: new Date().toISOString(),
-      expiresAt,
-      isActive: true,
-      priority,
-      showMode,
-      createdBy: user.name || user.id
-    };
-
-    const announcements = loadAnnouncements();
-    announcements.unshift(newAnnouncement);
-    saveAnnouncements(announcements);
-
-    logTransaction({
-      resellerId: user.id,
-      resellerName: user.name,
-      type: 'ANNOUNCEMENT_PUBLISH',
-      amountGb: 0,
-      balanceBefore: 0,
-      balanceAfter: 0,
-      note: `Publication annonce "${title}" [${type}] pour ${targetPlatform}`
-    });
-
-    res.json({ ok: true, announcement: newAnnouncement });
-  });
-
-  app.put('/api/v1/admin/announcements/:id', authenticate, (req, res) => {
-    const user: AppUser = (req as any).user;
-    if (user.role !== 'SUPER_ADMIN') {
-      res.status(403).json({ error: 'Accès réservé au Super Administrateur.' });
-      return;
-    }
-
-    const { id } = req.params;
-    const announcements = loadAnnouncements();
-    const idx = announcements.findIndex(a => a.id === id);
-    if (idx === -1) {
-      res.status(404).json({ error: 'Annonce introuvable.' });
-      return;
-    }
-
-    const existing = announcements[idx];
-    announcements[idx] = {
-      ...existing,
-      title: req.body?.title !== undefined ? String(req.body.title).trim() : existing.title,
-      message: req.body?.message !== undefined ? String(req.body.message).trim() : existing.message,
-      type: ['INFO', 'WARNING', 'CRITICAL', 'PROMO', 'UPDATE'].includes(req.body?.type) ? req.body.type : existing.type,
-      targetPlatform: ['ALL', 'ANDROID', 'WINDOWS'].includes(req.body?.targetPlatform) ? req.body.targetPlatform : existing.targetPlatform,
-      isMandatory: req.body?.isMandatory !== undefined ? Boolean(req.body.isMandatory) : existing.isMandatory,
-      dismissible: req.body?.dismissible !== undefined ? Boolean(req.body.dismissible) : existing.dismissible,
-      actionButtonText: req.body?.actionButtonText !== undefined ? String(req.body.actionButtonText).trim() : existing.actionButtonText,
-      actionButtonUrl: req.body?.actionButtonUrl !== undefined ? String(req.body.actionButtonUrl).trim() : existing.actionButtonUrl,
-      bannerImageUrl: req.body?.bannerImageUrl !== undefined ? String(req.body.bannerImageUrl).trim() : existing.bannerImageUrl,
-      isActive: req.body?.isActive !== undefined ? Boolean(req.body.isActive) : existing.isActive,
-      priority: Number.isFinite(Number(req.body?.priority)) && req.body?.priority !== undefined && req.body?.priority !== null ? Math.max(-100, Math.min(100, Math.trunc(Number(req.body.priority)))) : existing.priority,
-      showMode: req.body?.showMode === 'EVERY_LAUNCH' || req.body?.showMode === 'ONCE_PER_USER' ? req.body.showMode : existing.showMode,
-      expiresAt: req.body?.expiresAt !== undefined ? String(req.body.expiresAt).trim() : existing.expiresAt
-    };
-
-    saveAnnouncements(announcements);
-    res.json({ ok: true, announcement: announcements[idx] });
-  });
-
-  app.delete('/api/v1/admin/announcements/:id', authenticate, (req, res) => {
-    const user: AppUser = (req as any).user;
-    if (user.role !== 'SUPER_ADMIN') {
-      res.status(403).json({ error: 'Accès réservé au Super Administrateur.' });
-      return;
-    }
-
-    const { id } = req.params;
-    let announcements = loadAnnouncements();
-    announcements = announcements.filter(a => a.id !== id);
-    saveAnnouncements(announcements);
-
-    res.json({ ok: true });
-  });
-
-  // ==========================================
   // SERVER AUTOMATED UPDATE & HEALTH
   // ==========================================
   app.get('/api/v1/admin/system/update-status', authenticate, async (req, res) => {
@@ -4717,6 +4577,9 @@ async function startServer() {
   const tgBotToken = process.env.TELEGRAM_BOT_TOKEN?.trim();
   const tgAdminIds = process.env.TELEGRAM_ADMIN_IDS?.split(',').map(s => s.trim()).filter(Boolean);
   const telegramBot=startTelegramBot({
+    onBotReady:username=>{verifiedBotUsername=username},
+    claimNotifications:(token,chatId)=>{const s=readService(),ok=claimTelegram(s,token,chatId,loadUsers());if(ok)saveService(s);return ok},
+    stopNotifications:chatId=>{const s=readService();for(const [id,link] of Object.entries(s.telegramLinks||{}))if(link.chatId===chatId){delete s.telegramLinks![id];if(s.preferences[id])s.preferences[id].telegram=false}saveService(s)},
     encryptedBackup:async()=>encryptedBackup(await fullSnapshot(),process.env.BACKUP_ENCRYPTION_KEY||process.env.MASTER_SECRET!),
     runTransaction: work => storage.transaction(work),
     legacyVlessRetired: process.env.SSH_WSS_ONLY==='true',
@@ -4753,11 +4616,20 @@ async function startServer() {
     backupsDir,
     startTime
   });
+  let deliveringNotifications=false;
+  const notificationTimer=setInterval(()=>{if(deliveringNotifications)return;deliveringNotifications=true;void (async()=>{
+    const jobs=await storage.transaction(()=>{serviceCenter.refreshNotifications();const s=readService();enqueueAlerts(s,id=>deliveryStatus({id}));const now=Date.now(),jobs=(s.deliveryJobs||[]).filter(j=>(j.status==='PENDING'||(j.status==='SENDING'&&now-Date.parse(j.updatedAt)>120000))&&j.nextAttempt<=now).slice(0,10);for(const j of jobs){j.status='SENDING';j.updatedAt=new Date().toISOString();j.attempts++}saveService(s);return structuredClone(jobs)});
+    for(const job of jobs){let error:string|undefined;
+      try{const target=await storage.transaction(()=>{const s=readService(),user=loadUsers().find(u=>u.id===job.userId&&u.status==='active');return user&&(!job.notificationId||s.preferences[user.id]?.telegram)&&s.telegramLinks?.[user.id]?.chatId});if(job.channel!=='telegram'||!target||!process.env.TELEGRAM_BOT_TOKEN)throw Error('Canal indisponible.');await deliverTelegram(process.env.TELEGRAM_BOT_TOKEN,target,job.title,job.message)}catch{error='Échec de livraison ; vérifiez l’association du canal.'}
+      await storage.transaction(()=>{const s=readService(),row=s.deliveryJobs?.find(j=>j.id===job.id);if(!row)return;row.updatedAt=new Date().toISOString();row.error=error;row.status=error?(row.attempts>=3?'FAILED':'PENDING'):'DELIVERED';row.nextAttempt=Date.now()+row.attempts*60000;saveService(s)});
+    }
+  })().catch(()=>console.error('[NOTIFICATIONS] Delivery postponed.')).finally(()=>{deliveringNotifications=false});},15000);
+  notificationTimer.unref();
   let shuttingDown=false;
   const shutdown=()=>{
     if(shuttingDown)return;shuttingDown=true;
     if(xrayReconcileTimer)clearInterval(xrayReconcileTimer);
-    clearInterval(autoBackupTimer);clearInterval(operationsTimer);
+    clearInterval(autoBackupTimer);clearInterval(operationsTimer);clearInterval(notificationTimer);
     telegramBot?.stop();
     server.closeIdleConnections();
     server.close(()=>{void storage.pool?.end().finally(()=>process.exit(0));if(!storage.pool)process.exit(0);});

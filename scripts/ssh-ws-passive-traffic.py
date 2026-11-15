@@ -263,7 +263,7 @@ def report_loop():
                     aid=str(a["id"])
                     rec=records.setdefault(aid,{"anchorBaseline":int(a.get("baselineUsedBytes",0) or 0),"observedBytes":0,"upBytes":0,"downBytes":0,"anchorSet":True})
                     used=int(rec.get("anchorBaseline",0))+int(rec.get("observedBytes",0))
-                    reports.append({"id":aid,"state":state_by_id.get(aid,"blocked"),"usedBytes":used,"online":min(10,online.get(aid,0))})
+                    reports.append({"id":aid,"state":state_by_id.get(aid,"blocked"),"usedBytes":used,"online":min(5000,online.get(aid,0))})
                 atomic_json(STORE,{"format":"abess-passive-traffic-v1","updatedAt":time.time(),"accounts":records,"sockets":socket_watermarks})
             node_id,key=node_identity()
             body=json.dumps({"reports":reports}).encode()

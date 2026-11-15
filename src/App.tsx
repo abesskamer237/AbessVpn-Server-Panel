@@ -1,5 +1,11 @@
 import {useEffect,useMemo,useState,type FormEvent} from 'react';
 import {Bell,ChartNoAxesCombined,ChevronRight,CreditCard,Eye,EyeOff,FileSearch,History,KeyRound,LogOut,Menu,Moon,PanelLeftClose,PanelLeftOpen,Plus,ReceiptText,RefreshCw,Search,Server,Shield,Sun,UserCog,Users,Wallet} from 'lucide-react';
+import CustomerPortal from './components/CustomerPortal';
+import {UsageCenter} from './components/UsageCenter';
+import {SupportCenter} from './components/SupportCenter';
+import {NotificationsCenter} from './components/NotificationsCenter';
+import {FleetCenter} from './components/FleetCenter';
+import {AnnouncementsCenter,AnnouncementBanner} from './components/AnnouncementsCenter';
 import {AuditCenter} from './components/AuditCenter';
 import {BillingCenter} from './components/BillingCenter';
 import {CommandPalette,type Command} from './components/CommandPalette';
@@ -13,19 +19,19 @@ import {TransactionsCenter} from './components/TransactionsCenter';
 import type {AuditEvent,ManagedNode,Operator,OpsHealth,Reseller,Role,SshInventory,Transaction,User} from './panelTypes';
 import {accountStatus,fmtDate} from './panelTypes';
 
-type Tab='dashboard'|'clients'|'resellers'|'billing'|'transactions'|'servers'|'audit'|'security'|'team';
-const superOnly:Tab[]=['servers','audit','team'];
+type Tab='dashboard'|'clients'|'resellers'|'billing'|'transactions'|'servers'|'audit'|'security'|'team'|'announcements'|'usage'|'support'|'notifications'|'fleet';
+const superOnly:Tab[]=['servers','audit','team','fleet'];
 type RawNode={
   id:string;name:string;host:string;enabled:boolean;sshWsManaged?:boolean;sshWsAgentSeenAt?:string;
   sshWsSni?:string;sshWsPort?:number;sshWsPath?:string;sshWsHost?:ManagedNode['hostTelemetry'];
 };
 const titles:Record<Tab,string>={
   dashboard:'Tableau de bord',clients:'Clients',resellers:'Revendeurs',billing:'Facturation',transactions:'Transactions',
-  servers:'Serveurs',audit:'Journal d’audit',security:'Sécurité',team:'Équipe'
+  servers:'Serveurs',audit:'Journal d’audit',security:'Sécurité',team:'Équipe',announcements:'Annonces',usage:'Consommation & réseau',support:'Support',notifications:'Notifications',fleet:'Parc & migrations'
 };
 const sections:Record<Tab,string>={
   dashboard:'Pilotage',clients:'Commerce',resellers:'Commerce',billing:'Commerce',transactions:'Commerce',
-  servers:'Infrastructure',audit:'Administration',security:'Compte',team:'Administration'
+  servers:'Infrastructure',audit:'Administration',security:'Compte',team:'Administration',announcements:'Communication',usage:'Pilotage',support:'Communication',notifications:'Communication',fleet:'Infrastructure'
 };
 const roleLabel:Record<Role,string>={SUPER_ADMIN:'Super Admin',ADMIN:'Administrateur',RESELLER:'Revendeur'};
 
@@ -35,7 +41,9 @@ const store=(key:string,value:string)=>{try{localStorage.setItem(key,value)}catc
 
 function Logo(){return <div className="brand-mark"><img src="/favicon.svg" alt=""/></div>}
 
-export default function App(){
+export default function Entry(){return window.location.pathname==='/client'?<CustomerPortal/>:<App/>}
+
+function App(){
   const [user,setUser]=useState<User|null>(null),[checked,setChecked]=useState(false);
   const [email,setEmail]=useState(''),[password,setPassword]=useState(''),[code,setCode]=useState(''),[showPassword,setShowPassword]=useState(false);
   const [mfa,setMfa]=useState(false),[authError,setAuthError]=useState('');
@@ -47,6 +55,7 @@ export default function App(){
   const [resellers,setResellers]=useState<Reseller[]>([]),[transactions,setTransactions]=useState<Transaction[]>([]);
   const [inventory,setInventory]=useState<SshInventory|null>(null),[nodes,setNodes]=useState<RawNode[]>([]);
   const [ops,setOps]=useState<OpsHealth|null>(null),[audit,setAudit]=useState<AuditEvent[]>([]),[operators,setOperators]=useState<Operator[]>([]);
+  const [siteNotifications,setSiteNotifications]=useState<any[]>([]);
   const [lastSync,setLastSync]=useState<Date|null>(null);
 
   async function request(url:string,method='GET',body?:unknown,extraHeaders?:Record<string,string>){
@@ -56,6 +65,7 @@ export default function App(){
       if(response.status===401&&!url.startsWith('/api/v1/auth/login')){setUser(null);setAuthError('Votre session a expiré. Reconnectez-vous.')}
       throw new Error(data.error||httpMessage(response.status));
     }
+    if(url.includes('/announcements/')&&url.endsWith('/receipt')&&method==='POST')window.dispatchEvent(new CustomEvent('abess-announcement-receipt',{detail:{id:url.split('/').at(-2),action:(body as any)?.action}}));
     return data;
   }
   useEffect(()=>{
@@ -76,16 +86,16 @@ export default function App(){
   }
   async function logout(){
     try{await request('/api/v1/auth/logout','POST',{})}catch{/* already signed out */}
-    setUser(null);setTab('dashboard');setInventory(null);setResellers([]);setTransactions([]);setNodes([]);setOps(null);setAudit([]);setOperators([]);
+    setUser(null);setTab('dashboard');setInventory(null);setResellers([]);setTransactions([]);setNodes([]);setOps(null);setAudit([]);setOperators([]);setSiteNotifications([]);
   }
   async function refresh(){
     if(!user)return;
     setLoading(true);setNotice('');
     try{
-      const [r,t,ssh,me]=await Promise.all([
-        request('/api/v1/admin/resellers'),request('/api/v1/admin/transactions'),request('/api/v1/admin/ssh'),request('/api/v1/auth/me')
+      const [r,t,ssh,me,inbox]=await Promise.all([
+        request('/api/v1/admin/resellers'),request('/api/v1/admin/transactions'),request('/api/v1/admin/ssh'),request('/api/v1/auth/me'),request('/api/v1/notifications')
       ]);
-      setResellers(r);setTransactions(t);setInventory(ssh);setUser(me);setLastSync(new Date());
+      setResellers(r);setTransactions(t);setInventory(ssh);setUser(me);setSiteNotifications(inbox.notifications||[]);setLastSync(new Date());
       if(me.role==='SUPER_ADMIN'){
         const [rawNodes,health,logs,team]=await Promise.all([
           request('/api/v1/admin/nodes'),request('/api/v1/admin/operations'),request('/api/v1/admin/audit-logs'),request('/api/v1/admin/operators')
@@ -120,8 +130,9 @@ export default function App(){
       if(st.key==='error')list.push({tone:'danger',title:'Erreur de création VPS',detail:a.label,tab:'clients'});
     }
     if(ops?.alerts?.includes('BACKUP_OVERDUE'))list.push({tone:'warning',title:'Sauvegarde en retard',detail:'Vérifie la stratégie de sauvegarde',tab:'servers'});
+    for(const n of siteNotifications.filter(n=>!n.readAt))if(!list.some(x=>x.title===n.title))list.push({tone:n.kind==='NODE'?'danger':'info',title:n.title,detail:n.message,tab:n.kind==='ANNOUNCEMENT'?'announcements':'notifications'});
     return list.slice(0,20);
-  },[inventory,ops]);
+  },[inventory,ops,siteNotifications]);
 
   function go(next:string){
     const target=next as Tab;
@@ -132,8 +143,8 @@ export default function App(){
 
   const commands=useMemo<Command[]>(()=>{
     if(!user)return [];
-    const pages:[Tab,typeof Users][]=[['dashboard',ChartNoAxesCombined],['clients',Users],['resellers',CreditCard],['billing',ReceiptText],['transactions',History],
-      ...(user.role==='SUPER_ADMIN'?[['servers',Server],['audit',FileSearch],['team',UserCog]] as [Tab,typeof Users][]:[]),['security',Shield]];
+    const pages:[Tab,typeof Users][]=[['dashboard',ChartNoAxesCombined],['clients',Users],['resellers',CreditCard],['billing',ReceiptText],['transactions',History],['usage',History],['support',Users],['announcements',Bell],['notifications',Bell],
+      ...(user.role==='SUPER_ADMIN'?[['servers',Server],['fleet',Server],['audit',FileSearch],['team',UserCog]] as [Tab,typeof Users][]:[]),['security',Shield]];
     return [
       ...pages.map(([id,icon])=>({id:'nav-'+id,group:'Navigation',label:titles[id],icon,keywords:sections[id],run:()=>go(id)})),
       {id:'act-client',group:'Actions',label:'Créer un client SSH-WSS',icon:Plus,keywords:'nouveau licence',run:newClient},
@@ -173,11 +184,12 @@ export default function App(){
         {mfa&&<label className="field-block"><span className="field-label">Code de double authentification</span><input className="field mono" inputMode="numeric" autoComplete="one-time-code" required value={code} onChange={e=>setCode(e.target.value)} placeholder="123 456"/></label>}
         <button className="btn btn-primary" style={{width:'100%',marginTop:4}} disabled={busy}>{busy?'Connexion…':'Se connecter'}</button>
       </form>
+      <p className="table-secondary" style={{marginTop:20}}>Vous avez une licence VPN ? <a href="/client">Accéder à l’espace client</a></p>
     </div></main>
   </div>;
 
   const nav:{group:string;items:{id:Tab;label:string;icon:typeof Users;badge?:number;alert?:boolean}[]}[]=[
-    {group:'Pilotage',items:[{id:'dashboard',label:'Tableau de bord',icon:ChartNoAxesCombined}]},
+    {group:'Pilotage',items:[{id:'dashboard',label:'Tableau de bord',icon:ChartNoAxesCombined},{id:'usage',label:'Consommation & réseau',icon:History}]},
     {group:'Commerce',items:[
       {id:'clients',label:'Clients',icon:Users,badge:(inventory?.accounts||[]).filter(a=>a.managed).length},
       {id:'resellers',label:'Revendeurs',icon:CreditCard,badge:resellers.length||undefined},
@@ -185,10 +197,12 @@ export default function App(){
       {id:'transactions',label:'Transactions',icon:History},
     ]},
     ...(user.role==='SUPER_ADMIN'?[{group:'Administration',items:[
+      {id:'fleet' as Tab,label:'Parc & migrations',icon:Server},
       {id:'servers' as Tab,label:'Serveurs',icon:Server,badge:(inventory?.managedNodes||[]).filter(n=>!n.agentOnline).length||undefined,alert:true},
       {id:'audit' as Tab,label:'Journal d’audit',icon:FileSearch},
       {id:'team' as Tab,label:'Équipe',icon:UserCog},
     ]}]:[]),
+    {group:'Communication',items:[{id:'announcements',label:'Annonces',icon:Bell},{id:'notifications',label:'Notifications',icon:Bell},{id:'support',label:'Support',icon:Users}]},
     {group:'Compte',items:[{id:'security',label:'Sécurité',icon:Shield}]},
   ];
   const people=new Map<string,string>([[user.id,user.name],...resellers.map(r=>[r.id,r.name] as [string,string]),...operators.map(o=>[o.id,o.name] as [string,string])]);
@@ -201,12 +215,12 @@ export default function App(){
     {mobileOpen&&<div className="drawer-backdrop" style={{zIndex:35}} onClick={()=>setMobileOpen(false)}/>}
     <aside className={'sidebar '+(mobileOpen?'mobile-open':'')}>
       <div className="brand-lockup"><Logo/><div><div className="brand-title">ABESS VPN</div><div className="brand-subtitle">SSH-WSS ONLY</div></div></div>
-      {nav.map(section=><div key={section.group}>
+      <div className="sidebar-navigation">{nav.map(section=><div key={section.group}>
         <div className="nav-section-label">{section.group}</div>
         <nav className="side-nav">{section.items.map(item=><button key={item.id} title={collapsed?item.label:undefined} aria-current={tab===item.id?'page':undefined} className={'nav-button '+(tab===item.id?'active':'')} onClick={()=>go(item.id)}>
           <item.icon size={16}/><span className="nav-text">{item.label}</span>{item.badge!==undefined&&<span className={'nav-badge'+(item.alert?' alert':'')}>{item.badge}</span>}
         </button>)}</nav>
-      </div>)}
+      </div>)}</div>
       <div className="sidebar-footer">
         <div className="user-mini"><div className="avatar">{user.name.slice(0,1).toUpperCase()}</div><div><strong>{user.name}</strong><span>{roleLabel[user.role]}{user.role==='RESELLER'?' · '+Number(user.credits||0).toFixed(2)+' Go':''}</span></div></div>
         <div className="sidebar-actions">
@@ -230,6 +244,7 @@ export default function App(){
           <div className="notification-trigger"><button className="icon-button" aria-label="Notifications" onClick={()=>setNotificationsOpen(v=>!v)}><Bell size={15}/>{notifications.length>0&&<span className="notification-count">{notifications.length}</span>}</button>
             {notificationsOpen&&<div className="notification-popover"><div className="np-head"><h2>Notifications</h2><span className="badge badge-neutral plain">{notifications.length}</span></div>
               <div className="alert-list">{notifications.length?notifications.map((n,i)=><button key={i} className="alert-row" onClick={()=>go(n.tab)}><span className="alert-dot" style={{background:n.tone==='danger'?'var(--danger)':n.tone==='warning'?'var(--warning)':'var(--info)'}}/><div><p>{n.title}</p><span>{n.detail}</span></div><ChevronRight size={14} color="var(--muted)"/></button>):<div className="empty-state"><Bell size={20}/><strong>Tout est calme</strong><span>Aucun élément à surveiller.</span></div>}</div>
+              <button className="btn" style={{margin:12}} onClick={()=>go('notifications')}>Ouvrir le centre de notifications</button>
             </div>}
           </div>
           <button className="btn btn-primary topbar-cta" onClick={newClient}><Plus size={14}/><span>Nouveau client</span></button>
@@ -238,6 +253,12 @@ export default function App(){
 
       <main className="main-content">
         {notice&&<p className="notice" role="alert" style={{marginBottom:12}}>{notice}</p>}
+        <AnnouncementBanner key={user.id} request={request} onOpen={()=>go('announcements')}/>
+        {tab==='usage'&&<UsageCenter request={request} superAdmin={user.role==='SUPER_ADMIN'}/>}
+        {tab==='support'&&<SupportCenter request={request} user={user} accounts={inventory?.accounts||[]}/>}
+        {tab==='notifications'&&<NotificationsCenter request={request}/>}
+        {tab==='fleet'&&user.role==='SUPER_ADMIN'&&<FleetCenter request={request} accounts={inventory?.accounts||[]} refresh={refresh}/>}
+        {tab==='announcements'&&<AnnouncementsCenter user={user} request={request}/>}
         {tab==='dashboard'&&<Dashboard inventory={inventory} transactions={transactions} resellers={resellers} audit={audit} ops={ops} role={user.role} user={user} onNavigate={go} onCreateClient={newClient}/>}
         {tab==='clients'&&<SshCenter inventory={inventory} resellers={resellers} role={user.role} audit={audit} currentUser={user} request={request} refresh={refresh} createSignal={createSignal} openClient={openClient}/>}
         {tab==='resellers'&&<ResellerCenter resellers={resellers} accounts={(inventory?.accounts||[]).filter(a=>a.managed)} transactions={transactions} busy={busy} currentUser={user} request={request} refresh={refresh} onOpenClient={id=>{go('clients');setOpenClient({id,n:Date.now()})}}/>}

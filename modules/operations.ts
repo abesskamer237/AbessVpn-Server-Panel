@@ -79,6 +79,8 @@ export interface VpnNode {
     freeMemoryBytes: number;
     diskTotalBytes: number;
     diskFreeBytes: number;
+    sessionGuard?:{observedAt:string;healthy:boolean;mode:string;observedSessions:number;overLimitAccounts:number;deniedTotal:number};
+    network?:{medianRttMs?:number;p95RttMs?:number;rttObservedAt?:string;rttSamples?:number;tcpStatsScope?:string;retransmitPercent?:number;rxBytesPerSecond?:number;txBytesPerSecond?:number;retransmitsPerSecond?:number;cpuPressurePercent?:number;tcpCongestionControl?:string};
     services: {sshd: boolean; gateway: boolean; reconciler: boolean};
   };
 }
@@ -182,6 +184,7 @@ export function registerOperations(
     nodeConfig: (node: VpnNode) => unknown;
     nodeUsage: (node: VpnNode, snapshot: any) => void;
     nodeSshDesired: (node: VpnNode) => unknown;
+    nodeTelemetry?: (nodeId:string,telemetry:NonNullable<VpnNode['sshWsHost']>)=>void;
     nodeSshReport: (node: VpnNode, reports: Array<{id: string; state: string; usedBytes?: number; online?: number; devices?: Array<{deviceKey:string;usedBytes:number;upBytes:number;downBytes:number;firstSeenAt?:string;lastSeenAt?:string;activeSessions?:number;ip?:string;userAgent?:string;name?:string;brand?:string}>}>) => void;
   },
 ) {
@@ -413,8 +416,20 @@ export function registerOperations(
         Number(telemetry.diskFreeBytes)>Number(telemetry.diskTotalBytes)){
         return res.sendStatus(400);
       }
+      let network:NonNullable<VpnNode['sshWsHost']>['network'];
+      if(telemetry.network!==undefined){
+        const value=telemetry.network;
+        if(!value||typeof value!=='object'||(value.rttObservedAt!==undefined&&!Number.isFinite(Date.parse(value.rttObservedAt)))||(value.tcpStatsScope!==undefined&&!['public-tls','host'].includes(value.tcpStatsScope))||['rxBytesPerSecond','txBytesPerSecond','retransmitsPerSecond','cpuPressurePercent','medianRttMs','p95RttMs','rttSamples','retransmitPercent'].some(k=>value[k]!==undefined&&(!Number.isFinite(value[k])||value[k]<0||value[k]>1e15))||value.cpuPressurePercent>100||(value.tcpCongestionControl!==undefined&&(typeof value.tcpCongestionControl!=='string'||!/^[a-z0-9_-]{1,32}$/.test(value.tcpCongestionControl))))return res.sendStatus(400);
+        network=Object.fromEntries(['rxBytesPerSecond','txBytesPerSecond','retransmitsPerSecond','cpuPressurePercent','tcpCongestionControl','medianRttMs','p95RttMs','rttObservedAt','rttSamples','tcpStatsScope','retransmitPercent'].filter(k=>value[k]!==undefined).map(k=>[k,value[k]]));
+      }
+      let sessionGuard:NonNullable<VpnNode['sshWsHost']>['sessionGuard'];
+      if(telemetry.sessionGuard!==undefined){
+        const s=telemetry.sessionGuard,age=Date.now()-Date.parse(s?.observedAt||'');
+        if(!s||!Number.isFinite(age)||age>60000||age< -5000||typeof s.healthy!=='boolean'||!['audit','enforce-new'].includes(s.mode)||['observedSessions','overLimitAccounts','deniedTotal'].some(k=>!Number.isSafeInteger(s[k])||s[k]<0||s[k]>1e12))return res.sendStatus(400);
+        sessionGuard={observedAt:s.observedAt,healthy:s.healthy,mode:s.mode,observedSessions:s.observedSessions,overLimitAccounts:s.overLimitAccounts,deniedTotal:s.deniedTotal};
+      }
       safeTelemetry={
-        observedAt,
+        observedAt,network,sessionGuard,
         uptimeSeconds:Math.floor(Number(telemetry.uptimeSeconds)),
         cpuPercent:Math.max(0,Math.min(100,Number(telemetry.cpuPercent))),
         load1:Number(telemetry.load1),
@@ -429,7 +444,7 @@ export function registerOperations(
     const nodes=d.readNodes(), current=nodes.find(n=>n.id===node.id);
     if (current) {
       current.sshWsAgentSeenAt=new Date().toISOString();
-      if(safeTelemetry)current.sshWsHost=safeTelemetry;
+      if(safeTelemetry){current.sshWsHost=safeTelemetry;d.nodeTelemetry?.(node.id,safeTelemetry)}
       d.saveNodes(nodes);
     }
     return res.set('Cache-Control','no-store').json({ok:true});

@@ -1,5 +1,5 @@
 name: Deploy ABESS VPN to VPS
-# Production rollout marker: ABESS VPN v3 with gateway-specific readiness checks
+# Production rollout marker: ABESS VPN 3.1 service center and announcements
 
 on:
   workflow_dispatch:
@@ -40,6 +40,17 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Verify announcements, customer sessions, support and commercial isolation
+        run: node --import tsx scripts/test-service-center.mjs
+
+      - name: Verify service center persistence with PostgreSQL
+        env:
+          TEST_DATABASE_URL: postgresql://abess:ci-only-disposable-postgres-password@127.0.0.1:5432/abess_test
+        run: node --import tsx scripts/test-service-center.mjs
+
+      - name: Verify progressive session enforcement
+        run: python3 scripts/test-ssh-session-guard.py
 
       - name: Security regression tests
         run: node --import tsx scripts/test-security.mjs
@@ -452,6 +463,7 @@ jobs:
           for service in abess-ssh-ws-sshd abess-ssh-ws-gateway abess-ssh-ws-reconciler; do
             systemctl is-active --quiet "$service" || exit 1
           done
+          dc exec -T --interactive=false api node --import tsx /app/scripts/verify-panel-features.mjs
           echo 'Managed SSH-WSS host services refreshed and healthy.'
           REMOTE
 

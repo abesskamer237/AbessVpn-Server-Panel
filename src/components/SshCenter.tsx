@@ -44,7 +44,7 @@ export function SshCenter({inventory,resellers,role,audit,currentUser,request,re
   const [createOpen,setCreateOpen]=useState(false),[selectedId,setSelectedId]=useState(''),[tab,setTab]=useState<DrawerTab>('overview');
   const [working,setWorking]=useState(false),[error,setError]=useState(''),[toast,setToast]=useState('');
   const [label,setLabel]=useState(''),[username,setUsername]=useState('abv_'),[usernameTouched,setUsernameTouched]=useState(false),[password,setPassword]=useState(''),[showNewPassword,setShowNewPassword]=useState(false);
-  const [days,setDays]=useState(30),[quotaGb,setQuotaGb]=useState(10),[maxConnections,setMaxConnections]=useState(1),[nodeId,setNodeId]=useState(''),[resellerId,setResellerId]=useState('');
+  const [days,setDays]=useState(30),[quotaGb,setQuotaGb]=useState(10),[maxConnections,setMaxConnections]=useState(1),[nodeId,setNodeId]=useState('auto'),[resellerId,setResellerId]=useState('');
   const [renewGb,setRenewGb]=useState(5),[renewDays,setRenewDays]=useState(30);
   const [editLabel,setEditLabel]=useState(''),[editConnections,setEditConnections]=useState(1),[newSshPassword,setNewSshPassword]=useState(''),[transferTo,setTransferTo]=useState('');
   const [config,setConfig]=useState<ExportData|null>(null),[showSecret,setShowSecret]=useState(false);
@@ -61,6 +61,7 @@ export function SshCenter({inventory,resellers,role,audit,currentUser,request,re
   useEffect(()=>{
     if(!inventory?.managedNodes?.length)return;
     setNodeId(current=>{
+      if(current==='auto')return current;
       if(inventory.managedNodes.some(n=>n.id===current&&n.agentOnline))return current;
       const counts=new Map<string,number>();
       for(const a of accounts)counts.set(a.nodeId,(counts.get(a.nodeId)||0)+1);
@@ -257,7 +258,7 @@ export function SshCenter({inventory,resellers,role,audit,currentUser,request,re
             <div className="input-group"><input className="field mono" type={showNewPassword?'text':'password'} required minLength={8} maxLength={96} pattern="[A-Za-z0-9@#$%&*+=._\-]{8,96}" autoComplete="new-password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="8 caractères minimum"/>
               <button type="button" className="icon-button" title="Afficher" aria-label="Afficher le mot de passe SSH" onClick={()=>setShowNewPassword(v=>!v)}>{showNewPassword?<EyeOff size={14}/>:<Eye size={14}/>}</button>
               <button type="button" className="icon-button" title="Générer" aria-label="Générer un mot de passe" onClick={()=>{setPassword(generatePassword());setShowNewPassword(true)}}><Wand2 size={14}/></button></div></label>
-          <label className="field-block"><span className="field-label">Serveur</span><select className="select" required value={nodeId} onChange={e=>setNodeId(e.target.value)}>{inventory?.managedNodes.map(n=><option key={n.id} value={n.id} disabled={!n.agentOnline}>{n.name} · {n.agentOnline?'en ligne':'hors ligne'}</option>)}</select>{!onlineNodes.length&&<span className="field-help" style={{color:'var(--warning)'}}>Aucun VPS en ligne pour le moment.</span>}</label>
+          <label className="field-block"><span className="field-label">Serveur</span><select className="select" required value={nodeId} onChange={e=>setNodeId(e.target.value)}><option value="auto">Automatique · serveur le moins rempli</option>{inventory?.managedNodes.map(n=><option key={n.id} value={n.id} disabled={!n.agentOnline}>{n.name} · {n.agentOnline?'en ligne':'hors ligne'}</option>)}</select>{!onlineNodes.length&&<span className="field-help" style={{color:'var(--warning)'}}>Aucun VPS en ligne pour le moment.</span>}</label>
           <label className="field-block"><span className="field-label">Durée</span><select className="select" value={days} onChange={e=>setDays(Number(e.target.value))}>{[7,14,30,60,90,180,365].map(d=><option key={d} value={d}>{d} jours</option>)}</select></label>
           <label className="field-block"><span className="field-label">Quota (Go)</span><input className="field num" type="number" min=".01" step=".01" required value={quotaGb} onChange={e=>setQuotaGb(Number(e.target.value))}/></label>
           <label className="field-block"><span className="field-label">Sessions simultanées</span><input className="field num" type="number" min="1" max="10" required value={maxConnections} onChange={e=>setMaxConnections(Number(e.target.value))}/></label>
@@ -268,7 +269,7 @@ export function SshCenter({inventory,resellers,role,audit,currentUser,request,re
           <div className="detail-item"><label>Solde après création</label><strong className="num" style={{color:payerCredits-quotaGb<0?'var(--danger)':undefined}}>{(payerCredits-quotaGb).toFixed(2)} Go</strong></div>
         </div>}
       </div>
-      <div className="modal-foot"><button type="button" className="btn" onClick={()=>setCreateOpen(false)}>Annuler</button><button className="btn btn-primary" disabled={working||!inventory?.managedNodes.some(n=>n.id===nodeId&&n.agentOnline)||(showsBalance&&payerCredits<quotaGb)||takenUsernames.has(username)}>{working?'Création…':'Créer la licence'}</button></div>
+      <div className="modal-foot"><button type="button" className="btn" onClick={()=>setCreateOpen(false)}>Annuler</button><button className="btn btn-primary" disabled={working||(nodeId==='auto'?!onlineNodes.length:!inventory?.managedNodes.some(n=>n.id===nodeId&&n.agentOnline))||(showsBalance&&payerCredits<quotaGb)||takenUsernames.has(username)}>{working?'Création…':'Créer la licence'}</button></div>
     </form></div>}
 
     {selected&&<><div className="drawer-backdrop" onClick={()=>setSelectedId('')}/><aside className="drawer" aria-label={'Fiche '+selected.label}>

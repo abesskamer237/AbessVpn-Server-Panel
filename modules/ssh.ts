@@ -46,6 +46,7 @@ export function registerSsh(app:Express,d:{
   users:()=>User[]; canManage:(actor:any, ownerId:string)=>boolean;
   ownerActive:(ownerId?:string)=>boolean;
   charge:(payerId:string, quotaGb:number, id:string, renewal:boolean)=>boolean;
+  selectNode?:()=>string|undefined;admitNode?:(id:string)=>boolean;
 }) {
   const admin:RequestHandler=(req,res,next)=>{if(!['SUPER_ADMIN','ADMIN'].includes((req as any).user.role))return res.sendStatus(403);next();};
   // Generic VPN heartbeats and the managed SSH-WS reconciler report via
@@ -120,7 +121,7 @@ export function registerSsh(app:Express,d:{
   // host-side reconciler. Never run useradd/chpasswd on the panel host.
   app.post('/api/v1/admin/ssh/managed',d.authenticate,(req,res)=>{
     const actor=(req as any).user;
-    const nodeId=String(req.body?.nodeId||'');
+    const nodeId=String(req.body?.nodeId==='auto'?d.selectNode?.():req.body?.nodeId||'');
     const node=d.nodes().find(n=>n.id===nodeId&&n.enabled&&n.sshWsManaged&&n.sshWsFingerprint);
     if(!node)return res.status(409).json({error:'Activez SSH-WS sur un VPS via le Super Administrateur.'});
     const ownerId=['SUPER_ADMIN','ADMIN'].includes(actor.role)?String(req.body?.resellerId||actor.id):actor.id;
@@ -136,6 +137,7 @@ export function registerSsh(app:Express,d:{
       !Number.isFinite(quotaGb)||quotaGb<0.01||quotaGb>100000||
       !Number.isInteger(maxConnections)||maxConnections<1||maxConnections>10)
       return res.status(400).json({error:'Nom client, utilisateur, mot de passe, durée ou quota incorrect.'});
+    if(d.admitNode&&!d.admitNode(node.id))return res.status(409).json({error:'Serveur complet ou fermé aux nouvelles ventes.'});
     const state=d.read();
     if(state.accounts.length>=5000||state.accounts.filter(a=>a.nodeId===node.id&&a.managed).length>=2000)
       return res.status(409).json({error:'Capacité maximale atteinte.'});
@@ -261,23 +263,28 @@ export function registerSsh(app:Express,d:{
     if(!a.connection||req.body?.transport!==a.connection.transport)return res.sendStatus(400);
     // 409, not 5xx: a 5xx would roll back the request and be reported as a storage failure.
     if(!active(a))return res.status(409).json({error:'Licence inactive : vérifiez expiration, quota, suspension ou serveur hors ligne.'});
+    d.audit({action:'SSH_CREDENTIALS_EXPORTED',actor:actor.id,role:actor.role,details:a.id});
+    res.set('Cache-Control','no-store').json(exportSshAccount(a,d.nodes().find(n=>n.id===a.nodeId),d.key));
+  });
+}
+
+export function exportSshAccount(a:SshAccount,node:VpnNode|undefined,key:string){
+  if(!a.connection)throw Error('Configuration indisponible.');
     const {hasPayload,...storedConnection}=a.connection;
     if(a.managed && (!a.wsAccessKey || !a.wsAccessHash))
-      return res.status(409).json({error:'La licence SSH-WS doit être régénérée avec un secret WebSocket personnel.'});
-    const node=a.managed?d.nodes().find(n=>n.id===a.nodeId):undefined;
+      throw Error('La licence SSH-WS doit être régénérée avec un secret WebSocket personnel.');
     const edgeHost=a.managed?(node?.sshWsSni||storedConnection.sni||storedConnection.host):storedConnection.host;
     // Managed licences follow the node's current policy (host key and path) so a
     // node update never leaves exported clients with a stale pinned fingerprint.
     const connection={...storedConnection,host:edgeHost,sni:a.managed?edgeHost:storedConnection.sni,port:a.managed?(node?.sshWsPort||storedConnection.port):storedConnection.port,
       fingerprint:a.managed?(node?.sshWsFingerprint||storedConnection.fingerprint):storedConnection.fingerprint,
       path:a.managed?(node?.sshWsPath||storedConnection.path):storedConnection.path};
-    const clientPath=a.managed ? `${connection.path}/${unseal(a.wsAccessKey!,d.key)}` : connection.path;
+    const clientPath=a.managed ? `${connection.path}/${unseal(a.wsAccessKey!,key)}` : connection.path;
     const managedPayload=a.managed
       ? `GET ${clientPath} HTTP/1.1[crlf]Host: ${edgeHost}[crlf]Upgrade: websocket[crlf]Connection: Upgrade[crlf]Sec-WebSocket-Version: 13[crlf][crlf]`
       : null;
-    d.audit({action:'SSH_CREDENTIALS_EXPORTED',actor:actor.id,role:actor.role,details:a.id});
-    res.set('Cache-Control','no-store').json({format:'abess-ssh-v1',protocol:'ssh',...connection,path:clientPath,username:a.username,password:unseal(a.password,d.key),
-      payload:managedPayload||(a.payload?unseal(a.payload,d.key):a.connection.wire==='http-upgrade'?sshPayload(a.connection.tls?(a.connection.sni||a.connection.host):a.connection.host,a.connection.port,a.connection.path):null),
-      websocket:true,expiresAt:a.expiresAt,quotaGb:a.quotaBytes/1024**3,usedGb:a.usageObservedAt?a.usedBytes/1024**3:null,trafficVerified:Boolean(a.usageObservedAt)});
-  });
+
+  return {format:'abess-ssh-v1',protocol:'ssh',...connection,path:clientPath,username:a.username,password:unseal(a.password,key),
+      payload:managedPayload||(a.payload?unseal(a.payload,key):a.connection.wire==='http-upgrade'?sshPayload(a.connection.tls?(a.connection.sni||a.connection.host):a.connection.host,a.connection.port,a.connection.path):null),
+      websocket:true,expiresAt:a.expiresAt,quotaGb:a.quotaBytes/1024**3,usedGb:a.usageObservedAt?a.usedBytes/1024**3:null,trafficVerified:Boolean(a.usageObservedAt)};
 }

@@ -40,6 +40,17 @@ jobs:
         run: node scripts/rotate-master-secret.mjs --self-test
 
 
+      - name: Verify announcements, customer sessions, support and commercial isolation
+        run: node --import tsx scripts/test-service-center.mjs
+
+      - name: Verify service center persistence with PostgreSQL
+        env:
+          TEST_DATABASE_URL: postgresql://abess:ci-only-disposable-postgres-password@127.0.0.1:5432/abess_test
+        run: node --import tsx scripts/test-service-center.mjs
+
+      - name: Verify progressive session enforcement
+        run: python3 scripts/test-ssh-session-guard.py
+
       - name: Security regression tests
         run: node --import tsx scripts/test-security.mjs
 

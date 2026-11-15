@@ -3,6 +3,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { DocumentStore } from "../modules/store.ts";
 import { unseal } from "../modules/security.ts";
+import {emptyService,emptyUsage,validServiceState,validUsageHistory} from "../modules/service-center.ts";
 import { encryptedBackup } from "../modules/operations.ts";
 if (!process.argv.includes("--maintenance-confirmed"))
   throw new Error("Stop the API first, then pass --maintenance-confirmed.");
@@ -20,7 +21,7 @@ if (envelope.format !== "abess-backup-v1")
   throw new Error("Unsupported backup");
 const snapshot = unseal(envelope.sealed, key);
 if (
-  snapshot.version !== 3 ||
+  ![3,4].includes(snapshot.version) ||
   snapshot.masterKeyId !==
     crypto.createHash("sha256").update(master).digest("hex").slice(0, 16)
 )
@@ -35,6 +36,10 @@ if (
   !Array.isArray(snapshot.protocolConfigs)
 )
   throw new Error("Invalid backup structure");
+if ((snapshot.serviceCenter!==undefined&&!validServiceState(snapshot.serviceCenter))||
+    (snapshot.usageHistory!==undefined&&!validUsageHistory(snapshot.usageHistory))||
+    (snapshot.announcementReceipts!==undefined&&(!snapshot.announcementReceipts||typeof snapshot.announcementReceipts!=='object'||Array.isArray(snapshot.announcementReceipts))))
+  throw new Error("Invalid service-center backup structure");
 const directory = process.env.DATA_DIR || path.resolve("data");
 fs.mkdirSync(directory, { recursive: true });
 const store = new DocumentStore(directory, process.env.DATABASE_URL);
@@ -49,6 +54,10 @@ try {
       "transactions",
       "app-version",
       "announcements",
+      "announcement-receipts",
+      "service-center",
+      "usage-history",
+      "portal-sessions",
       "plans",
       "requests",
       "audit-logs",
@@ -73,7 +82,10 @@ try {
       JSON.stringify(
         encryptedBackup(
           {
-            version: 3,
+            version: 4,
+            serviceCenter: previous["service-center"] || emptyService(),
+            usageHistory: previous["usage-history"] || emptyUsage(),
+            announcementReceipts: previous["announcement-receipts"] || {},
             masterKeyId: snapshot.masterKeyId,
             users: previous.users || [],
             tokens: previous.tokens || [],
@@ -104,6 +116,10 @@ try {
       transactions: snapshot.transactions || [],
       "app-version": snapshot.appVersion,
       announcements: snapshot.announcements || [],
+      "announcement-receipts": snapshot.announcementReceipts || {},
+      "usage-history": snapshot.usageHistory || emptyUsage(),
+      "service-center": {...snapshot.serviceCenter||emptyService(),migrations:{},telegramClaims:{},deliveryJobs:(snapshot.serviceCenter?.deliveryJobs||[]).map(j=>({...j,status:['PENDING','SENDING'].includes(j.status)?'FAILED':j.status,error:['PENDING','SENDING'].includes(j.status)?'Envoi annulé après restauration.':j.error}))},
+      "portal-sessions": {},
       security: { mfa: snapshot.security?.mfa || {}, sessions: {} },
       commerce: snapshot.commerce || { orders: [] },
       ssh: snapshot.ssh || { accounts: [] },
@@ -122,7 +138,7 @@ try {
     });
   });
   console.log(
-    "Encrypted backup restored transactionally. Sessions revoked. Restart API and verify Xray before reopening access.",
+    "Encrypted backup restored transactionally. Sessions revoked. Restart API and verify SSH-WSS before reopening access.",
   );
 } finally {
   await store.pool.end();

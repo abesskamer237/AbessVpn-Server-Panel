@@ -177,3 +177,6 @@ fi
 
 # Reapply TCP settings to Caddy's network namespace after container recreation.
 bash scripts/tune-vpn-network.sh </dev/null
+
+# Session policies default to audit; enabling limits never drops old tunnels.
+bash scripts/install-session-guard.sh </dev/null
