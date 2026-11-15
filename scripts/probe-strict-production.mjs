@@ -37,7 +37,7 @@ if(process.argv[2]==='--stdio-bridge'){
   const script=fileURLToPath(import.meta.url),directory=fs.mkdtempSync(path.join(os.tmpdir(),'abess-strict-probe-'));
   const children=[];let token,account,echo;
   const dockerArgs=['compose','exec','-T','--interactive=false','api','node','--import','tsx','/app/scripts/strict-probe-session.mjs'];
-  async function call(route,method='GET',body){const r=await fetch('http://127.0.0.1:3000/api/v1/'+route,{method,headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},...(body===undefined?{}:{body:JSON.stringify(body)}),signal:AbortSignal.timeout(8000)});const value=r.status===204?null:await r.json();if(!r.ok)throw Error('Canary API '+method+' '+route+' failed HTTP '+r.status);return value;}
+  async function call(route,method='GET',body){const r=await fetch('http://127.0.0.1:3000/api/v1/'+route,{method,headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},...(body===undefined?{}:{body:JSON.stringify(body)}),signal:AbortSignal.timeout(8000)});if(!r.ok)throw Error('Canary API '+method+' '+route+' failed HTTP '+r.status);return r.status===204?null:r.json();}
   async function wait(fn,label){for(let i=0;i<80;i++){const result=await fn();if(result)return result;await delay(500);}throw Error('Canary timeout: '+label);}
   const passwd=crypto.randomBytes(18).toString('hex'),username='abv_check_'+crypto.randomBytes(5).toString('hex');
   const device='probe-'+crypto.randomBytes(8).toString('hex');
@@ -53,7 +53,7 @@ if(process.argv[2]==='--stdio-bridge'){
   try{
     token=JSON.parse(execFileSync('docker',[...dockerArgs,'create'],{encoding:'utf8',timeout:15000})).token;
     const bootstrap=JSON.parse(fs.readFileSync('/etc/abess-ssh-ws/node-bootstrap.json','utf8'));
-    account=await call('admin/ssh/managed','POST',{nodeId:bootstrap.id,label:'[Test automatique quotas]',username,password:passwd,days:1,quotaGb:0.01,maxConnections:1});
+    account=await call('admin/ssh/managed','POST',{nodeId:bootstrap.id,label:'[Test automatique quotas]',username,password:passwd,days:30,quotaGb:0.01,maxConnections:1});
     await wait(async()=>{const inventory=await call('admin/ssh');return inventory.accounts.find(a=>a.id===account.id&&a.provisionState==='active')},'canary provisioning');
     echo=net.createServer(s=>{s.on('error',()=>{});s.pipe(s)});await new Promise(r=>echo.listen(0,'127.0.0.1',r));
     const port=await freePort(),first=launch(port,echo.address().port,true);
@@ -61,6 +61,7 @@ if(process.argv[2]==='--stdio-bridge'){
     const extra=launch(await freePort(),echo.address().port);await wait(()=>extra.exitCode!==null||extra.signalCode!==null,'extra session rejection');
     assert(first.exitCode===null&&first.signalCode===null);assert.equal(localUsage().online,1);
     const key=localUsage().devices[0].deviceKey;
+    await wait(async()=>{const devices=await call(`admin/ssh/accounts/${account.id}/devices`);return devices.some(d=>d.deviceKey===key)},'device telemetry persistence');
     await call(`admin/ssh/accounts/${account.id}/devices/${key}`,'PUT',{blocked:true,name:'Controle des limites'});
     await wait(()=>first.exitCode!==null||first.signalCode!==null,'device suspension');
     await call(`admin/ssh/accounts/${account.id}/devices/${key}`,'PUT',{blocked:false});

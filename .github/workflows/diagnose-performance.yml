@@ -1,5 +1,5 @@
 name: Diagnose VPN performance
-# Verify raw upgrade compatibility with and without WebSocket key headers.
+# Verify strict public SSH quotas and device synchronization after deployment.
 on:
   workflow_dispatch:
   push:
@@ -108,3 +108,23 @@ jobs:
         run: |
           set -euo pipefail
           "$HOME/.local/bin/abess-ssh" -p "${VPS_PORT:-22}" "${VPS_USER}@${VPS_HOST}" 'python3 -' < scripts/diagnose-raw-transport.py
+      - name: Verify public hard limits with a temporary administrator-owned canary
+        env:
+          VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD || secrets.VPS_PASSWORD }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ vars.VPS_PORT }}
+          VPN_DOMAIN: ${{ vars.VPN_DOMAIN }}
+        run: |
+          set -euo pipefail
+          [[ "$VPN_DOMAIN" =~ ^[A-Za-z0-9.-]+$ ]]
+          remote_dir="/tmp/abess-strict-check-${{ github.run_id }}"
+          "$HOME/.local/bin/abess-ssh" -p "${VPS_PORT:-22}" "${VPS_USER}@${VPS_HOST}" "install -d -m 700 '$remote_dir'"
+          "$HOME/.local/bin/abess-scp" -P "${VPS_PORT:-22}" scripts/probe-strict-production.mjs "${VPS_USER}@${VPS_HOST}:$remote_dir/"
+          "$HOME/.local/bin/abess-ssh" -p "${VPS_PORT:-22}" "${VPS_USER}@${VPS_HOST}" "bash -s -- '$remote_dir' '$VPN_DOMAIN'" <<'REMOTE'
+          set -euo pipefail
+          trap 'rm -rf "$1"' EXIT
+          cd "$HOME/abessvpn-server"
+          test -f /var/lib/abess-raw-meter/enabled
+          node "$1/probe-strict-production.mjs" "$2" </dev/null
+          REMOTE
