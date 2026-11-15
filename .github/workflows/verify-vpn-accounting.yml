@@ -1,0 +1,153 @@
+name: Verify real VPN consumption
+# Synthetic administrator-owned accounts only; never modifies customer quotas.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [.github/workflows/verify-vpn-accounting.yml]
+  workflow_run:
+    workflows: [Deploy ABESS VPN to VPS]
+    branches: [main]
+    types: [completed]
+permissions:
+  contents: read
+concurrency:
+  group: abessvpn-production-deploy
+  cancel-in-progress: false
+jobs:
+  measure:
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && contains(github.event.head_commit.message, 'verify VPN consumption')) || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+      - name: Validate the bounded accounting test harness
+        run: |
+          npm ci
+          node scripts/test-vpn-performance.mjs
+          node --check scripts/vpn-performance-host.mjs
+          node --check scripts/verify-vpn-accounting.mjs
+      - name: Configure SSH authentication
+        shell: bash
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_SSH_KNOWN_HOSTS: ${{ secrets.VPS_SSH_KNOWN_HOSTS }}
+          VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD || secrets.VPS_PASSWORD }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_PORT: ${{ vars.VPS_PORT }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.ssh" "$HOME/.local/bin"
+          if [[ -n "${VPS_SSH_KEY:-}" ]]; then
+            printf '%s\n' "$VPS_SSH_KEY" > "$HOME/.ssh/id_ed25519"
+            chmod 600 "$HOME/.ssh/id_ed25519"
+          elif [[ -n "${VPS_SSH_PASSWORD:-}" ]]; then
+            if ! command -v sshpass >/dev/null 2>&1; then
+              sudo apt-get update
+              sudo apt-get install -y sshpass
+            fi
+          else
+            echo "Provide VPS_SSH_KEY (recommended) or VPS_SSH_PASSWORD." >&2
+            exit 1
+          fi
+          # Verify the existing production VPS identity against its
+          # previously recorded Ed25519 host key fingerprint. Refuse changes.
+          if [[ -z "${VPS_SSH_KNOWN_HOSTS:-}" ]]; then
+            ssh-keyscan -T 12 -p "${VPS_PORT:-22}" -t ed25519 "$VPS_HOST" 2>/dev/null > "$HOME/.ssh/known_hosts"
+          else
+            printf '%s\n' "$VPS_SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          fi
+          test -s "$HOME/.ssh/known_hosts"
+          ssh-keygen -lf "$HOME/.ssh/known_hosts" -E sha256 |
+            grep -Fq 'SHA256:LgoMnkXsbf7RYOw5LRm0ErLVQ6n0JDJBJIAltFxOChc' || {
+              echo "::error::VPS SSH host key differs from previously verified installation." >&2
+              exit 1
+            }
+          chmod 600 "$HOME/.ssh/known_hosts"
+          cat > "$HOME/.local/bin/abess-ssh" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [[ -s "$HOME/.ssh/id_ed25519" ]]; then
+            exec ssh -o StrictHostKeyChecking=yes -i "$HOME/.ssh/id_ed25519" -o BatchMode=yes -o IdentitiesOnly=yes "$@"
+          fi
+          export SSHPASS="$VPS_SSH_PASSWORD"
+          exec sshpass -e ssh -o StrictHostKeyChecking=yes -o PreferredAuthentications=password,keyboard-interactive -o PubkeyAuthentication=no "$@"
+          SH
+          cat > "$HOME/.local/bin/abess-scp" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [[ -s "$HOME/.ssh/id_ed25519" ]]; then
+            exec scp -o StrictHostKeyChecking=yes -i "$HOME/.ssh/id_ed25519" -o BatchMode=yes -o IdentitiesOnly=yes "$@"
+          fi
+          export SSHPASS="$VPS_SSH_PASSWORD"
+          exec sshpass -e scp -o StrictHostKeyChecking=yes -o PreferredAuthentications=password,keyboard-interactive -o PubkeyAuthentication=no "$@"
+          SH
+          chmod 700 "$HOME/.local/bin/abess-ssh" "$HOME/.local/bin/abess-scp"
+      - name: Start a temporary private endpoint and an isolated VPN canary
+        env:
+          VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD || secrets.VPS_PASSWORD }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ vars.VPS_PORT }}
+        run: |
+          set -euo pipefail
+          umask 077
+          remote_dir="/tmp/abess-accounting-${{ github.run_id }}"
+          "$HOME/.local/bin/abess-ssh" -p "${VPS_PORT:-22}" "${VPS_USER}@${VPS_HOST}" "install -d -m 700 '$remote_dir'"
+          "$HOME/.local/bin/abess-scp" -P "${VPS_PORT:-22}" scripts/vpn-performance-host.mjs scripts/vpn-performance-common.mjs scripts/probe-strict-production.mjs "${VPS_USER}@${VPS_HOST}:$remote_dir/"
+          "$HOME/.local/bin/abess-ssh" -p "${VPS_PORT:-22}" "${VPS_USER}@${VPS_HOST}" "bash -s -- '$remote_dir' '${{ github.run_id }}'" > "$RUNNER_TEMP/abess-performance-credentials.json" <<'REMOTE'
+          set -euo pipefail
+          cd "$HOME/abessvpn-server"
+          node "$1/vpn-performance-host.mjs" setup "$2" </dev/null
+          REMOTE
+      - name: Compare actual raw and CloudFront bytes with licence, device, API and daily history
+        env:
+          VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD || secrets.VPS_PASSWORD }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ vars.VPS_PORT }}
+          VPN_DOMAIN: ${{ vars.VPN_DOMAIN }}
+        run: |
+          set -euo pipefail
+          export ABESS_SSH_COMMAND="$HOME/.local/bin/abess-ssh"
+          node scripts/verify-vpn-accounting.mjs "$RUNNER_TEMP/abess-performance-credentials.json"
+      - name: Verify the production hard quota and device suspension
+        env:
+          VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD || secrets.VPS_PASSWORD }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ vars.VPS_PORT }}
+          VPN_DOMAIN: ${{ vars.VPN_DOMAIN }}
+        run: |
+          set -euo pipefail
+          [[ "$VPN_DOMAIN" =~ ^[A-Za-z0-9.-]+$ ]]
+          remote_dir="/tmp/abess-accounting-${{ github.run_id }}"
+          "$HOME/.local/bin/abess-ssh" -p "${VPS_PORT:-22}" "${VPS_USER}@${VPS_HOST}" "bash -s -- '$remote_dir' '$VPN_DOMAIN'" <<'REMOTE'
+          set -euo pipefail
+          cd "$HOME/abessvpn-server"
+          node "$1/probe-strict-production.mjs" "$2" </dev/null
+          REMOTE
+      - name: Collect host health and remove the canary, listener and credentials
+        if: always()
+        env:
+          VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD || secrets.VPS_PASSWORD }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ vars.VPS_PORT }}
+        run: |
+          set -euo pipefail
+          cleanup_status=0
+          remote_dir="/tmp/abess-accounting-${{ github.run_id }}"
+          if [[ -x "$HOME/.local/bin/abess-ssh" ]]; then
+            "$HOME/.local/bin/abess-ssh" -p "${VPS_PORT:-22}" "${VPS_USER}@${VPS_HOST}" "bash -s -- '$remote_dir' '${{ github.run_id }}'" <<'REMOTE' || cleanup_status=$?
+          set -euo pipefail
+          trap 'rm -rf "$1"' EXIT
+          cd "$HOME/abessvpn-server"
+          if [[ -f "$1/vpn-performance-host.mjs" ]]; then node "$1/vpn-performance-host.mjs" cleanup "$2" </dev/null; fi
+          REMOTE
+          fi
+          rm -f "$RUNNER_TEMP/abess-performance-credentials.json"
+          exit "$cleanup_status"

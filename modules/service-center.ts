@@ -14,7 +14,7 @@ export const emptyUsage=():UsageHistory=>({counters:{},days:{},nodes:{}});
 export function recordUsage(history:UsageHistory,account:SshAccount,now=new Date().toISOString()){
   const bytes=account.usedBytes;if(!Number.isSafeInteger(bytes)||bytes<0||!Number.isFinite(Date.parse(now)))return;
   const old=history.counters[account.id];
-  if(old&&(Date.parse(now)<Date.parse(old.observedAt)||bytes<=old.bytes))return;
+  if(old&&(Date.parse(now)<Date.parse(old.observedAt)||bytes<old.bytes))return;
   // First observation establishes a baseline; do not invent historical usage.
   const delta=old?Math.max(0,bytes-old.bytes):0;
   history.counters[account.id]={bytes:Math.max(bytes,old?.bytes||0),observedAt:now,baselineAt:old?.baselineAt||now};

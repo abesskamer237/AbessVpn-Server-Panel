@@ -38,9 +38,9 @@ export function ResellerCenter({resellers,accounts,transactions,busy,currentUser
     const branchIds=new Set<string>([r.id]);const pending=[r.id];
     while(pending.length){const parent=pending.pop()!;for(const child of resellers)if(child.parentId===parent&&!branchIds.has(child.id)){branchIds.add(child.id);pending.push(child.id)}}
     const branch=accounts.filter(a=>a.resellerId&&branchIds.has(a.resellerId)&&a.managed);
-    const soldGb=mine.reduce((n,a)=>n+bytesToGb(a.quotaBytes),0);
+    const soldGb=mine.reduce((n,a)=>n+a.quotaBytes,0)/1024**3;
     const revenue=soldGb*(r.pricePerGbCfa||0)+mine.length*(r.pricePerLicenceCfa||0);
-    return {...r,clients:mine.length,branchClients:branch.length,active:mine.filter(a=>a.effectiveEnabled).length,soldGb,usedGb:mine.reduce((n,a)=>n+bytesToGb(a.usedBytes),0),revenue,margin:revenue-soldGb*(r.costPerGbCfa||0)};
+    return {...r,clients:mine.length,branchClients:branch.length,active:mine.filter(a=>a.effectiveEnabled).length,soldGb,usedGb:mine.reduce((n,a)=>n+(a.usedBytes||0),0)/1024**3,revenue,margin:revenue-soldGb*(r.costPerGbCfa||0)};
   }),[resellers,accounts]);
 
   const filtered=useMemo(()=>rows.filter(r=>{

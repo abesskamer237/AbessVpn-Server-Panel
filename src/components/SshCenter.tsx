@@ -1,7 +1,7 @@
 import {useEffect,useMemo,useState,type FormEvent} from 'react';
 import {ArrowRightLeft,Ban,CalendarClock,Check,Copy,Download,Eye,EyeOff,KeyRound,MessageCircle,MonitorSmartphone,MoreHorizontal,Pause,Play,Plus,Printer,RefreshCw,Search,ShieldAlert,Smartphone,Trash2,Users,Wand2,Wifi,Wrench,X} from 'lucide-react';
 import type {AuditEvent,Reseller,Role,SshAccount,SshInventory,User} from '../panelTypes';
-import {accountStatus,bytesToGb,csvDownload,fmtDate,fmtDateTime,percent} from '../panelTypes';
+import {accountStatus,bytesToGb,csvDownload,fmtDate,fmtDateTime,percent,humanTraffic} from '../panelTypes';
 
 type Props={
   inventory:SshInventory|null;resellers:Reseller[];role:Role;audit:AuditEvent[];currentUser:User;
@@ -18,7 +18,7 @@ type DrawerTab='overview'|'config'|'devices'|'history';
 
 const badge=(tone:string)=>'badge badge-'+tone;
 const gb=(n:number|null|undefined)=>bytesToGb(n).toLocaleString('fr-FR',{maximumFractionDigits:2});
-const traffic=(n:number)=>{const units=['octets','Ko','Mo','Go','To'];let value=Math.max(0,n||0),i=0;while(value>=1024&&i<units.length-1){value/=1024;i++}return value.toLocaleString('fr-FR',{maximumFractionDigits:2})+' '+units[i]};
+
 const PASSWORD_CHARS='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789@#%+=._-';
 function generatePassword(length=14){
   const values=crypto.getRandomValues(new Uint32Array(length));
@@ -155,7 +155,7 @@ export function SshCenter({inventory,resellers,role,audit,currentUser,request,re
   }
   const exportRows=(rows:SshAccount[])=>csvDownload('abess-clients.csv',[
     ['Client','Utilisateur','Revendeur','Serveur','État','Quota Go','Utilisé Go','Sessions','Expiration','Création'],
-    ...rows.map(a=>[a.label,a.username,a.resellerName||'Administration',nodeName(a.nodeId),accountStatus(a).label,bytesToGb(a.quotaBytes),bytesToGb(a.usedBytes),String(a.online||0)+'/'+a.maxConnections,a.expiresAt,a.createdAt])
+    ...rows.map(a=>[a.label,a.username,a.resellerName||'Administration',nodeName(a.nodeId),accountStatus(a).label,bytesToGb(a.quotaBytes),a.usedBytes==null?'Non mesuré':a.usedBytes/1024**3,String(a.online??'—')+'/'+a.maxConnections,a.expiresAt,a.createdAt])
   ]);
   const events=selected?[...audit.filter(e=>String(e.details||'').includes(selected.id)),
     {id:'created-'+selected.id,timestamp:selected.createdAt,action:'SSH_CREATED',details:'Licence créée'} as AuditEvent]
@@ -219,7 +219,7 @@ export function SshCenter({inventory,resellers,role,audit,currentUser,request,re
           <td onClick={e=>e.stopPropagation()}><input type="checkbox" aria-label={'Sélectionner '+a.label} checked={checked.has(a.id)} onChange={()=>setChecked(v=>{const n=new Set(v);if(n.has(a.id))n.delete(a.id);else n.add(a.id);return n})}/></td>
           <td><div style={{display:'flex',alignItems:'center',gap:9}}><div className="avatar" style={{width:26,height:26,fontSize:11}}>{a.label.slice(0,1).toUpperCase()}</div><div><div className="table-primary">{a.label}</div><div className="table-secondary mono">{a.username}</div></div></div></td>
           <td><span className={badge(st.tone)}>{st.label}</span></td>
-          <td style={{minWidth:150}}><div className="num" style={{fontSize:12}}>{gb(a.usedBytes)} <span className="table-secondary">/ {gb(a.quotaBytes)} Go</span></div><div className={'progress '+(p>=100?'danger':p>=85?'warning':'')}><span style={{width:p+'%'}}/></div></td>
+          <td style={{minWidth:150}}><div className="num" style={{fontSize:12}}>{humanTraffic(a.usedBytes)} <span className="table-secondary">/ {gb(a.quotaBytes)} Go</span></div><div className={'progress '+(p>=100?'danger':p>=85?'warning':'')}><span style={{width:p+'%'}}/></div></td>
           <td className="num">{a.online??'—'} <span className="table-secondary">/ {a.maxConnections}</span></td>
           <td><div className="num">{fmtDate(a.expiresAt)}{hint&&<span className={'badge plain '+(hint==='expiré'?'badge-neutral':'badge-warning')} style={{marginLeft:6,height:18}}>{hint}</span>}</div><div className="table-secondary">{nodeName(a.nodeId)}</div></td>
           <td className="table-secondary" style={{color:'var(--text-2)'}}>{a.resellerName||'Administration'}</td>
@@ -233,7 +233,7 @@ export function SshCenter({inventory,resellers,role,audit,currentUser,request,re
 
       <div className="mobile-client-list" style={{padding:10}}>{filtered.map(a=>{const st=accountStatus(a);return <article className="mobile-client-card" key={a.id} onClick={()=>{setSelectedId(a.id);setTab('overview')}}>
         <div className="mobile-client-head"><div><strong>{a.label}</strong><div className="table-secondary mono">{a.username}</div></div><span className={badge(st.tone)}>{st.label}</span></div>
-        <div className="mobile-client-stats"><div className="mobile-client-stat"><span>Quota</span>{gb(a.usedBytes)} / {gb(a.quotaBytes)} Go</div><div className="mobile-client-stat"><span>Sessions</span>{a.online??'—'} / {a.maxConnections}</div><div className="mobile-client-stat"><span>Expiration</span>{fmtDate(a.expiresAt)}</div><div className="mobile-client-stat"><span>Revendeur</span>{a.resellerName||'Admin'}</div></div>
+        <div className="mobile-client-stats"><div className="mobile-client-stat"><span>Quota</span>{humanTraffic(a.usedBytes)} / {gb(a.quotaBytes)} Go</div><div className="mobile-client-stat"><span>Sessions</span>{a.online??'—'} / {a.maxConnections}</div><div className="mobile-client-stat"><span>Expiration</span>{fmtDate(a.expiresAt)}</div><div className="mobile-client-stat"><span>Revendeur</span>{a.resellerName||'Admin'}</div></div>
       </article>})}</div>
       {!filtered.length&&<div className="empty-state"><Wifi size={22}/><strong>Aucun client pour ce filtre</strong><span>Créez une licence ou modifiez les filtres.</span></div>}
     </section>
@@ -285,7 +285,7 @@ export function SshCenter({inventory,resellers,role,audit,currentUser,request,re
 
         {tab==='overview'&&<>
           <div className="detail-grid">
-            <div className="detail-item"><label>Consommation</label><strong className="num">{gb(selected.usedBytes)} / {gb(selected.quotaBytes)} Go</strong><div className="progress"><span style={{width:percent(selected.usedBytes,selected.quotaBytes)+'%'}}/></div></div>
+            <div className="detail-item"><label>Consommation</label><strong className="num">{humanTraffic(selected.usedBytes)} / {gb(selected.quotaBytes)} Go</strong><div className="progress"><span style={{width:percent(selected.usedBytes,selected.quotaBytes)+'%'}}/></div></div>
             <div className="detail-item"><label>Sessions</label><strong className="num">{selected.online??'—'} / {selected.maxConnections}</strong></div>
             <div className="detail-item"><label>Expiration</label><strong>{fmtDate(selected.expiresAt)} {expiryHint(selected)&&<span className="table-secondary">({expiryHint(selected)})</span>}</strong></div>
             <div className="detail-item"><label>Création</label><strong>{fmtDate(selected.createdAt)}</strong></div>
@@ -344,7 +344,7 @@ export function SshCenter({inventory,resellers,role,audit,currentUser,request,re
           :<div className="alert-list">{devices.map(dv=><div className="alert-row" key={dv.deviceKey}>
             <div className="avatar" style={{width:28,height:28,color:dv.blocked?'var(--danger)':'var(--accent)'}}>{dv.blocked?<Ban size={13}/>:<Smartphone size={13}/>}</div>
             <div><p>{[dv.brand,dv.name].filter(Boolean).join(' ')||(dv.identityKind==='declared'?'Appareil déclaré ':'Session SSH ')+dv.deviceKey.slice(0,6)}{(dv.activeSessions||0)>0&&<span className="badge badge-success" style={{marginLeft:6,height:18}}>en ligne</span>}</p>
-              <span>{dv.ip||'IP inconnue'} · Total {traffic(dv.usedBytes)} · Envoi {traffic(dv.upBytes)} · Réception {traffic(dv.downBytes)} · {dv.activeSessions||0} session(s) · vu {fmtDateTime(dv.lastSeenAt)}</span><div className="input-group" style={{marginTop:6}}><input className="field" aria-label={'Nom de '+dv.deviceKey.slice(0,6)} maxLength={80} placeholder="Nom personnalisé" value={deviceNames[dv.deviceKey]??dv.name??''} onChange={e=>setDeviceNames({...deviceNames,[dv.deviceKey]:e.target.value})}/><button className="btn btn-sm" disabled={working||!deviceNames[dv.deviceKey]?.trim()||deviceNames[dv.deviceKey].trim()===dv.name} onClick={()=>void run(async()=>{const name=deviceNames[dv.deviceKey].trim();await request('/api/v1/admin/ssh/accounts/'+selected.id+'/devices/'+dv.deviceKey,'PUT',{name});setDevices(list=>list?.map(x=>x.deviceKey===dv.deviceKey?{...x,name}:x)||null);return 'Nom enregistré.'})}>Nommer</button></div></div>
+              <span>{dv.ip||'IP inconnue'} · Total {humanTraffic(dv.usedBytes)} · Envoi {humanTraffic(dv.upBytes)} · Réception {humanTraffic(dv.downBytes)} · {dv.activeSessions||0} session(s) · vu {fmtDateTime(dv.lastSeenAt)}</span><div className="input-group" style={{marginTop:6}}><input className="field" aria-label={'Nom de '+dv.deviceKey.slice(0,6)} maxLength={80} placeholder="Nom personnalisé" value={deviceNames[dv.deviceKey]??dv.name??''} onChange={e=>setDeviceNames({...deviceNames,[dv.deviceKey]:e.target.value})}/><button className="btn btn-sm" disabled={working||!deviceNames[dv.deviceKey]?.trim()||deviceNames[dv.deviceKey].trim()===dv.name} onClick={()=>void run(async()=>{const name=deviceNames[dv.deviceKey].trim();await request('/api/v1/admin/ssh/accounts/'+selected.id+'/devices/'+dv.deviceKey,'PUT',{name});setDevices(list=>list?.map(x=>x.deviceKey===dv.deviceKey?{...x,name}:x)||null);return 'Nom enregistré.'})}>Nommer</button></div></div>
             <button className={'btn btn-sm'+(dv.blocked?'':' btn-danger')} disabled={working} onClick={()=>void run(async()=>{await request('/api/v1/admin/ssh/accounts/'+selected.id+'/devices/'+dv.deviceKey,'PUT',{blocked:!dv.blocked});setDevices(list=>list?.map(x=>x.deviceKey===dv.deviceKey?{...x,blocked:!dv.blocked}:x)||null);return dv.blocked?'Identifiant réautorisé.':'Suspension demandée au relais.'})}>{dv.blocked?'Réautoriser':'Suspendre'}</button>
           </div>)}</div>}
         </div></section>}

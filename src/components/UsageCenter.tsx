@@ -1,8 +1,8 @@
 import {useEffect,useState} from 'react';
 import {Activity,Download,RefreshCw} from 'lucide-react';
-import {fmtDateTime,csvDownload} from '../panelTypes';
+import {fmtDateTime,csvDownload,humanTraffic} from '../panelTypes';
 type Request=(u:string,m?:string,b?:unknown)=>Promise<any>;
-export const humanTraffic=(bytes:number|null|undefined)=>bytes==null?'Non mesuré':bytes>=1024**3?(bytes/1024**3).toLocaleString('fr-FR',{maximumFractionDigits:2})+' Go':bytes>=1024**2?(bytes/1024**2).toLocaleString('fr-FR',{maximumFractionDigits:1})+' Mo':bytes>=1024?(bytes/1024).toLocaleString('fr-FR',{maximumFractionDigits:1})+' Ko':bytes+' octets';
+export {humanTraffic} from '../panelTypes';
 export function UsageBars({days}:{days:{day:string;bytes:number}[]}){
   if(!days.length)return <p className="empty-state">L’historique commence à la première mesure reçue. Aucune donnée historique n’est inventée.</p>;
   const max=Math.max(1,...days.map(d=>d.bytes));

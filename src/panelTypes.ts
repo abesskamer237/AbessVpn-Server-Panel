@@ -60,6 +60,13 @@ export type OpsHealth={
   memoryBytes?:number;loadAverage?:number[];backup?:{at:string;offsite:boolean;error?:string}|null;
 };
 
+/** Binary units match the quota ledger; unknown measurements stay unknown. */
+export const humanTraffic=(bytes:number|null|undefined)=>{
+  if(bytes==null||!Number.isFinite(bytes)||bytes<0)return 'Non mesuré';
+  const units=['octets','Ko','Mo','Go','To'];let value=bytes,i=0;
+  while(value>=1024&&i<units.length-1){value/=1024;i++}
+  return value.toLocaleString('fr-FR',{maximumFractionDigits:2})+' '+units[i];
+};
 export const bytesToGb=(n:number|null|undefined)=>Number((Number(n||0)/1024**3).toFixed(2));
 export const fmtGb=(n:number|null|undefined)=>bytesToGb(n).toLocaleString('fr-FR',{maximumFractionDigits:2})+' Go';
 export const fmtDate=(value?:string)=>value?new Date(value).toLocaleDateString('fr-FR'):'—';

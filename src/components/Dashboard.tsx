@@ -1,6 +1,6 @@
 import {Activity,ArrowRight,CalendarClock,CreditCard,History,Plus,Radio,ReceiptText,Server,UserPlus,Users,Wallet,Wifi} from 'lucide-react';
 import type {AuditEvent,OpsHealth,Reseller,Role,SshInventory,Transaction,User} from '../panelTypes';
-import {accountStatus,bytesToGb,fmtDateTime,money,percent} from '../panelTypes';
+import {accountStatus,bytesToGb,fmtDateTime,money,percent,humanTraffic} from '../panelTypes';
 
 type Props={
   inventory:SshInventory|null;transactions:Transaction[];resellers:Reseller[];audit:AuditEvent[];
@@ -44,6 +44,7 @@ export function Dashboard({inventory,transactions,resellers,audit,ops,role,user,
   const active=count('active'),expiring=count('expiring');
   const sessions=accounts.reduce((n,a)=>n+(a.online||0),0);
   const capacity=accounts.reduce((n,a)=>n+a.maxConnections,0);
+  const measured=accounts.filter(a=>a.usedBytes!=null);
   const used=accounts.reduce((n,a)=>n+(a.usedBytes||0),0);
   const quota=accounts.reduce((n,a)=>n+a.quotaBytes,0);
   const now=new Date(),monthStart=new Date(now.getFullYear(),now.getMonth(),1).getTime();
@@ -115,7 +116,7 @@ export function Dashboard({inventory,transactions,resellers,audit,ops,role,user,
       <div className="metric-card"><div className="metric-label"><Users size={13}/>Clients actifs</div><div className="metric-value">{active}{(last7||prev7)>0&&<span className={'metric-trend '+(trend>=0?'up':'down')}>{trend>=0?'+':''}{trend}%</span>}</div><div className="metric-foot">{accounts.length} licences · +{monthly} ce mois</div></div>
       <div className="metric-card"><div className="metric-label"><CalendarClock size={13}/>À renouveler</div><div className="metric-value">{expiring}</div><div className="metric-foot">Expiration sous 3 jours</div></div>
       <div className="metric-card"><div className="metric-label"><Wifi size={13}/>Sessions en ligne</div><div className="metric-value">{sessions}<span className="table-secondary" style={{fontSize:13,marginLeft:4}}>/ {capacity}</span></div><div className="metric-foot">{onlineNodes}/{nodes.length} VPS connectés</div></div>
-      <div className="metric-card"><div className="metric-label"><Activity size={13}/>Trafic consommé</div><div className="metric-value">{compact(bytesToGb(used))} Go</div><div className="metric-foot">{percent(used,quota)} % de {compact(bytesToGb(quota))} Go alloués</div></div>
+      <div className="metric-card"><div className="metric-label"><Activity size={13}/>Trafic consommé</div><div className="metric-value">{humanTraffic(measured.length?used:null)}</div><div className="metric-foot">{percent(used,quota)} % de {compact(bytesToGb(quota))} Go alloués · {measured.length}/{accounts.length} mesurées</div></div>
     </div>
 
     <div className="bento">

@@ -54,6 +54,21 @@ if(mode==='setup'){
     const config=await api(token,`admin/ssh/accounts/${account.id}/config`,'POST',{transport:'wss'});
     process.stdout.write(JSON.stringify({username,password,port,hostKey,vpnHost:config.host,vpnSni:config.sni,vpnPort:config.port,vpnPath:config.path}));
   }catch(e){try{await cleanup()}catch{}throw e}finally{if(token)revoke(token)}
+}else if(mode==='snapshot'){
+  // Scope strictly to this run's synthetic account; no customer data or secrets.
+  const state=JSON.parse(fs.readFileSync(stateFile,'utf8'));let token;
+  try{
+    token=auth();const inv=await api(token,'admin/ssh');
+    const account=inv.accounts.find(a=>a.id===state.accountId);assert(account);
+    const devices=await api(token,'admin/ssh/accounts/'+state.accountId+'/devices');
+    const history=await api(token,'admin/usage-history?days=7');
+    const own=history.accounts.find(a=>a.id===state.accountId);
+    const usage=JSON.parse(fs.readFileSync('/var/lib/abess-raw-meter/usage-live.json','utf8'));
+    const local=usage.accounts.find(a=>a.id===state.accountId);assert(local);
+    const durable=JSON.parse(fs.readFileSync('/var/lib/abess-raw-meter/usage.json.accounts/'+state.accountId+'.json','utf8'));
+    const view=d=>({deviceKey:d.deviceKey,usedBytes:d.usedBytes,upBytes:d.upBytes,downBytes:d.downBytes,activeSessions:d.activeSessions});
+    process.stdout.write(JSON.stringify({local:{usedBytes:local.usedBytes,online:local.online,devices:local.devices.map(view)},durableBytes:durable.usedBytes,api:{usedBytes:account.usedBytes,online:account.online,usageObservedAt:account.usageObservedAt,devices:devices.map(view)},history:{bytes:own?.bytes,days:own?.days,baselineAt:own?.baselineAt},observedAt:usage.observedAt,service:service()}));
+  }finally{if(token)revoke(token)}
 }else if(mode==='apply-edge'){
   const edge=String(process.argv[4]||'').toLowerCase();assert(/^d[a-z0-9]+\.cloudfront\.net$/.test(edge));
   const baseline=service();let token,previous,updated=false;const envFile=path.join(process.cwd(),'.env'),temp=envFile+'.edge-'+run;

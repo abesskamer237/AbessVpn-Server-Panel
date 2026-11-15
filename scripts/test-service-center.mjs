@@ -58,7 +58,7 @@ try{
   assert.equal((await api('/api/v1/admin/announcements/'+pub.id,{method:'DELETE'})).status,409);
   ok(await api('/api/v1/admin/announcements/'+pub.id,{method:'PUT',body:{status:'ARCHIVED',isActive:false}}));ok(await api('/api/v1/admin/announcements/'+pub.id,{method:'DELETE'}),204);
   const duplicate=ok(await api('/api/v1/admin/announcements/'+draft.id+'/duplicate',{method:'POST',body:{}}),201).announcement;assert.equal(duplicate.status,'DRAFT');assert.notEqual(duplicate.id,draft.id);
-  const history=emptyUsage();recordUsage(history,account,'2026-11-15T00:00:00Z');recordUsage(history,{...account,usedBytes:800},'2026-11-15T01:00:00Z');recordUsage(history,{...account,usedBytes:800},'2026-11-15T01:00:01Z');recordUsage(history,{...account,usedBytes:750},'2026-11-15T02:00:00Z');assert.equal(history.days['2026-11-15'][id].bytes,300);
+  const history=emptyUsage();recordUsage(history,account,'2026-11-15T00:00:00Z');recordUsage(history,{...account,usedBytes:800},'2026-11-15T01:00:00Z');recordUsage(history,{...account,usedBytes:800},'2026-11-15T01:00:01Z');assert.equal(history.counters[id].observedAt,'2026-11-15T01:00:01Z');assert.equal(history.days['2026-11-15'][id].samples,2);recordUsage(history,{...account,usedBytes:750},'2026-11-15T02:00:00Z');assert.equal(history.days['2026-11-15'][id].bytes,300);
   recordUsage(history,{...account,usedBytes:900},'2026-11-16T00:00:00Z');assert.equal(history.days['2026-11-16'][id].bytes,100);
   await store.transaction(()=>set('usage-history',history));
   const own=ok(await api('/api/v1/admin/usage-history',{actor:'reseller-a'}));assert.equal(own.accounts.length,1);assert.equal(ok(await api('/api/v1/admin/usage-history',{actor:'reseller-b'})).accounts.length,0);

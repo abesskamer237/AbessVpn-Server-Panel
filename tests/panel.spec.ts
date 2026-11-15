@@ -8,6 +8,22 @@ async function login(page:Page){
   await expect(page.getByRole('heading',{level:1,name:'Vue d’ensemble'})).toBeVisible();
 }
 
+test('small measured consumption stays visible and missing measurements never become zero',async({page})=>{
+  await page.route('**/api/v1/admin/ssh',async route=>{
+    const response=await route.fetch(),inventory=await response.json();
+    const common={managed:true,nodeId:'test-display',provisionState:'active',enabled:true,expiresAt:new Date(Date.now()+7*86400000).toISOString(),quotaBytes:1024**3,maxConnections:1,effectiveEnabled:true,createdAt:new Date().toISOString()};
+    inventory.accounts=[{...common,id:'measured-display',username:'abv_measured',label:'Mesure exacte',usedBytes:1024,online:0,trafficVerified:true},{...common,id:'unknown-display',username:'abv_unknown',label:'Mesure absente',usedBytes:null,online:null,trafficVerified:false}];
+    await route.fulfill({response,json:inventory});
+  });
+  await login(page);
+  await expect(page.locator('.metric-card').filter({hasText:'Trafic consommé'})).toContainText('1 Ko');
+  await page.locator('.sidebar-navigation').getByRole('button',{name:/^Clients(?:\s|$)/}).click();
+  await expect(page.getByRole('row').filter({hasText:'Mesure exacte'})).toContainText('1 Ko');
+  await expect(page.getByRole('row').filter({hasText:'Mesure absente'})).toContainText('Non mesuré');
+  await page.getByRole('row').filter({hasText:'Mesure exacte'}).click();
+  await expect(page.locator('.detail-item').filter({has:page.locator('label').getByText('Consommation',{exact:true})})).toContainText('1 Ko');
+});
+
 test('professional panel authenticates with HttpOnly cookie and logs out',async({page,request})=>{
   const errors:string[]=[];page.on('pageerror',err=>errors.push(err.message));
   await login(page);
