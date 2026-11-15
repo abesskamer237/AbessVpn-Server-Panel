@@ -18,12 +18,15 @@ def sessions_snapshot(ports=(22,2222)):
     for line in out.splitlines():
         inode=re.search(r'\bino:(\d+)',line)
         if not inode:continue
+        columns=line.split();offset=0 if columns[0].isdigit() else 1
+        if len(columns)<offset+4:continue
+        peer=columns[offset+3]
         for pid in re.findall(r'pid=(\d+)',line):
             try:process=read_process(int(pid))
             except (OSError,KeyError,StopIteration,ValueError):continue
             if process:
                 key=inode.group(1)+':'+str(process['startTicks'])+':'+process['username']
-                sessions[key]={**process,'key':key};break
+                sessions[key]={**process,'key':key,'peer':peer};break
     return list(sessions.values())
 
 def planned_actions(policy,sessions,now=None):
@@ -36,10 +39,13 @@ def planned_actions(policy,sessions,now=None):
     for a in policy['accounts']:
         if not ACCOUNT.fullmatch(str(a.get('id',''))) or not USER.fullmatch(str(a.get('username',''))):raise ValueError('Invalid account')
         limit=a.get('maxConnections')
-        if not isinstance(limit,int) or isinstance(limit,bool) or not 1<=limit<=10:raise ValueError('Invalid session limit')
+        if not isinstance(limit,int) or isinstance(limit,bool) or not 1<=limit<=1000:raise ValueError('Invalid session limit')
         mine=sorted((s for s in sessions if s['username']==a['username']),key=lambda s:(s['startedAt'],s['pid']))
         if len(mine)>limit:over+=1
         mode=a.get('enforcementMode','audit');active_modes.add(mode)
+        if mode=='enforce-all':
+            actions.extend({**s,'accountId':a['id']} for s in (mine[limit:] if a.get('enabled') else mine))
+            continue
         if mode!='enforce-new' or not a.get('enabled'):continue
         since=datetime.fromisoformat(a['enforcementSince'].replace('Z','+00:00')).timestamp()
         if since>now+5:raise ValueError('Future activation')
@@ -48,7 +54,7 @@ def planned_actions(policy,sessions,now=None):
         new=[s for s in mine if s['startedAt']>since]
         keep=max(0,limit-len(grandfather))
         actions.extend({**s,'accountId':a['id']} for s in new[keep:])
-    return actions,over,('enforce-new' if 'enforce-new' in active_modes else 'audit')
+    return actions,over,('enforce-all' if 'enforce-all' in active_modes else 'enforce-new' if 'enforce-new' in active_modes else 'audit')
 
 def terminate_session(item,reader=read_process,killer=os.kill):
     # Recheck identity and process start time immediately before signalling.
@@ -71,10 +77,26 @@ def main():
     while True:
         try:
             policy=json.loads(POLICY.read_text());sessions=sessions_snapshot();actions,over,mode=planned_actions(policy,sessions)
+            strict=False
+            if Path('/var/lib/abess-raw-meter/enabled').exists():
+                mode='enforce-all'
+                # The synchronous relay owns admission/quotas for registered
+                # sockets. This guard only removes legacy/unmetered leftovers.
+                actions=[]
+                admitted=set()
+                try:
+                    report=json.loads(Path('/var/lib/abess-raw-meter/admitted.json').read_text())
+                    status=json.loads(Path('/var/lib/abess-raw-meter/status.json').read_text())
+                    fresh=time.time()-datetime.fromisoformat(report['observedAt'].replace('Z','+00:00')).timestamp()<5
+                    strict=fresh and status.get('ok') is True
+                    if fresh:admitted=set(report['peers'])
+                except (OSError,ValueError,KeyError):pass
+                selected={a['key'] for a in actions}
+                actions.extend(s for s in sessions if s.get('peer') not in admitted and s['key'] not in selected)
             for item in actions:
                 if terminate_session(item) and item['key'] not in denied:denied.add(item['key']);total+=1
             if len(denied)>20000:denied={a['key'] for a in actions}
-            atomic_status({'format':'abess-session-guard-v1','observedAt':datetime.now(timezone.utc).isoformat(),'mode':mode,'observedSessions':len(sessions),'overLimitAccounts':over,'deniedTotal':total,'healthy':True})
+            atomic_status({'format':'abess-session-guard-v1','observedAt':datetime.now(timezone.utc).isoformat(),'mode':mode,'strictBytes':strict,'observedSessions':len(sessions),'overLimitAccounts':over,'deniedTotal':total,'healthy':True})
         except Exception as e:
             atomic_status({'format':'abess-session-guard-v1','observedAt':datetime.now(timezone.utc).isoformat(),'mode':'audit','deniedTotal':total,'healthy':False,'error':type(e).__name__})
         time.sleep(2)

@@ -1,4 +1,4 @@
-# Centre de service ABESS VPN 3.1
+# Centre de service ABESS VPN 3.2
 
 ## Communications
 
@@ -93,7 +93,7 @@ mail n’est simulé ni déclaré livré. Les paiements MTN MoMo / Orange Money 
 ## Capacité et migrations
 
 **Parc & migrations** permet de fixer la capacité d’un VPS, de fermer les nouvelles
-ventes et de contrôler le mode des limites de sessions. Le choix « Automatique »
+ventes avec des limites de sessions obligatoires. Le choix « Automatique »
 à la création utilise le serveur admissible le moins rempli proportionnellement
 à sa capacité. Les vérifications de capacité et le débit de crédits sont effectués
 dans la même transaction.
@@ -108,20 +108,48 @@ promis, ni migration forcée depuis un serveur dont l’arrêt n’est pas confi
 
 ## Limites réelles des connexions
 
-La passerelle RFC6455 native applique déjà les quotas et les admissions. Sur le
-chemin brut existant, l’observateur remonte les vrais compteurs ; le rapprochement
-verrouille les comptes dont le quota ou la durée est épuisé. Le nouveau service
-`abess-session-guard` vérifie les sockets SSH authentifiés, l’identité système,
-le groupe géré et l’heure de création des processus.
+Le chemin public HTTP 101 → SSH brut utilise désormais `abess-raw-meter`.
+Le hook PAM **account** associe la connexion au compte Linux authentifié avant
+que SSH confirme la connexion. Le relais admet atomiquement au maximum la limite
+choisie, de **1 à 1000 sessions par licence**. Le compte administrateur et les
+utilisateurs hors du groupe géré conservent leur chaîne PAM habituelle. Un accès
+SSH direct avec les identifiants d’une licence gérée ne contourne pas le relais.
 
-Le mode initial des anciens serveurs reste **Observation**, pour ne pas casser des
-usages mobiles existants. Le Super Admin peut activer « Refuser les nouvelles
-sessions excédentaires » dans Parc & migrations. Les sessions antérieures à cette
-activation sont préservées et consomment de la capacité ; les nouvelles sessions
-au-delà de la limite sont fermées. Le contrôleur ne signale aucun processus root,
-ni un PID réutilisé, ni un utilisateur hors du groupe géré. Une politique périmée
-n’autorise aucune fermeture. L’interface distingue la politique demandée de la
-présence réellement confirmée du contrôleur.
+Chaque octet du flux SSH après admission, montant et descendant, est réservé sur
+disque avant transmission. Le total partagé entre toutes les sessions ne dépasse
+pas le quota. Une interruption brutale peut facturer au maximum une réservation
+inutilisée de 1 Mio ; elle ne remet jamais le quota à zéro. La fermeture propre
+restitue la réservation inutilisée. Les échanges SSH préalables à l’authentification
+ne sont pas du trafic VPN facturé et sont bornés à 64 Kio et trente secondes.
+Les anciens cumuls constituent le point de départ ; l’observateur passif cesse de
+facturer pour éviter le double comptage. L’agent remonte le journal du relais.
+
+Une réduction de limite ferme les sessions excédentaires ; une suspension,
+expiration ou politique périmée ferme les flux concernés. Le contrôle strict est
+obligatoire, même lorsqu’une ancienne sauvegarde contient le mode « Observation ».
+Le garde secondaire vérifie l’identité, le groupe et la date de création du
+processus, et ferme les anciennes connexions gérées non admises par le relais.
+Il ne signale jamais un processus root ou un utilisateur hors du groupe géré.
+
+L’onglet **Appareils** affiche le nom reçu ou personnalisé, le trafic montant,
+descendant et total, les sessions actives et la dernière activité. Les clients
+peuvent transmettre `X-Abess-Device-ID`, `X-Abess-Device-Name` et
+`X-Abess-Device-Brand`. Un identifiant déclaré permet de retrouver et suspendre
+ce même identifiant après reconnexion ; il n’est pas une preuve matérielle et
+peut être changé par le client. Sans identifiant, chaque connexion est une
+**session SSH distincte** ; sa suspension ferme cette session, et non toutes les
+futures connexions d’un téléphone non identifiable. Renommer n’invente ni modèle
+ni marque. Pour retirer tout accès malgré un identifiant changeant, suspendre la
+licence ou changer son mot de passe. Les contrôles sont soumis aux droits du
+propriétaire de la licence et sont audités.
+
+Le déploiement prépare le relais avant le changement d’amont Caddy, conserve
+une sauvegarde de `/etc/pam.d/sshd`, puis active le hook géré sans redémarrer le
+SSH administrateur. `scripts/test-ssh-raw-live.py` vérifie avec un vrai OpenSSH
+et PAM le refus avant authentification, l’impossibilité d’un contournement direct,
+le maintien de l’accès root, la suspension/réactivation et le quota exact après
+redémarrage. Le service de transport historique reste installé pour restauration,
+mais les licences gérées doivent passer par le relais contrôlé.
 
 ## Données et validation
 

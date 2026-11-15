@@ -10,7 +10,7 @@ export type HostTelemetry={
   totalMemoryBytes:number;freeMemoryBytes:number;
   diskTotalBytes:number;diskFreeBytes:number;
   network?:{medianRttMs?:number;p95RttMs?:number;rttObservedAt?:string;rttSamples?:number;tcpStatsScope?:string;retransmitPercent?:number;rxBytesPerSecond?:number;txBytesPerSecond?:number;retransmitsPerSecond?:number;cpuPressurePercent?:number;tcpCongestionControl?:string};
-  sessionGuard?:{observedAt:string;healthy:boolean;mode:string;observedSessions:number;overLimitAccounts:number;deniedTotal:number};
+  sessionGuard?:{observedAt:string;healthy:boolean;mode:string;strictBytes?:boolean;observedSessions:number;overLimitAccounts:number;deniedTotal:number};
   services:{sshd:boolean;gateway:boolean;reconciler:boolean};
 };
 

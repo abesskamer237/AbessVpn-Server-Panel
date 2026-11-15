@@ -3,6 +3,12 @@
 set -euo pipefail
 [[ "$EUID" -eq 0 ]] || { echo 'Root required' >&2; exit 1; }
 source_dir="$(cd "$(dirname "$0")" && pwd)"
+if [[ -f /var/lib/abess-raw-meter/enabled ]]; then
+  systemctl stop abess-traffic-observer.service 2>/dev/null || true
+  curl --fail --silent --show-error --max-time 5 http://172.18.0.1:8081/healthz | python3 -c 'import json,sys; j=json.load(sys.stdin); assert j["ok"] and j["strict"]'
+  echo 'TRAFFIC_ACCOUNTING=strict-inline passive_billing_disabled=true'
+  exit 0
+fi
 python3 "$source_dir/test-ssh-socket-traffic.py"
 before="$(systemctl show -p MainPID --value willy-ssh-ws.service)"
 [[ "$before" =~ ^[1-9][0-9]*$ ]] || { echo 'Existing forwarding service is not running' >&2; exit 1; }

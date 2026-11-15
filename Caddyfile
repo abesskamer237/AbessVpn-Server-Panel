@@ -8,7 +8,7 @@
     header Upgrade *websocket*
   }
   handle @ws {
-    reverse_proxy 172.18.0.1:8080
+    reverse_proxy 172.18.0.1:8081
   }
   handle {
     redir https://{$VPN_DOMAIN}{uri} permanent
@@ -20,7 +20,7 @@
     header Upgrade *websocket*
   }
   handle @ws {
-    reverse_proxy 172.18.0.1:8080
+    reverse_proxy 172.18.0.1:8081
   }
   handle {
     encode zstd gzip

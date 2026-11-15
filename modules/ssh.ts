@@ -17,7 +17,8 @@ export interface SshAccount {
   resellerId?: string; resellerName?: string; renewalIds?: string[]; renewalRequests?: Record<string,{gb:number;days:number}>;
   usageObservedAt?: string;
   blockedDeviceKeys?: string[];
-  devices?: Array<{deviceKey:string;usedBytes:number;upBytes:number;downBytes:number;firstSeenAt?:string;lastSeenAt?:string;activeSessions?:number;ip?:string;userAgent?:string;name?:string;brand?:string}>;
+  deviceLabels?: Record<string,string>;
+  devices?: Array<{deviceKey:string;usedBytes:number;upBytes:number;downBytes:number;firstSeenAt?:string;lastSeenAt?:string;activeSessions?:number;ip?:string;userAgent?:string;name?:string;brand?:string;identityKind?:'session'|'declared'}>;
   online?: number; password: string; payload?: string;
   quotaBytes: number; usedBytes: number; maxConnections: number;
   expiresAt: string; enabled: boolean; createdAt: string;
@@ -27,7 +28,7 @@ export interface SshState { accounts: SshAccount[];
    * Linux user bound to the old account id, so they must never be reused. */
   retiredUsernames?: string[] }
 export function safeSshAccount(a: SshAccount) {
-  const {password, payload, salt, verifier, wsAccessKey, wsAccessHash, renewalIds, renewalRequests, ...safe} = a;
+  const {password, payload, salt, verifier, wsAccessKey, wsAccessHash, renewalIds, renewalRequests, devices, deviceLabels, blockedDeviceKeys, ...safe} = a;
   return {...safe,trafficVerified:Boolean(a.usageObservedAt),usedBytes:a.usageObservedAt?a.usedBytes:null,online:a.usageObservedAt?a.online??null:null};
 }
 export function sshPayload(host: string, port = 80, pathname = '/ws-ssh') {
@@ -102,7 +103,7 @@ export function registerSsh(app:Express,d:{
     const owner=d.users().find(u=>u.id===ownerId&&u.status==='active');
     if(!owner||!d.ownerActive(ownerId)||!/^[a-z][a-z0-9_-]{2,31}$/.test(username)||label.length>80||
       !Number.isInteger(days)||days<1||days>366||!Number.isFinite(quotaGb)||quotaGb<0.01||quotaGb>100000||
-      !Number.isInteger(maxConnections)||maxConnections<1||maxConnections>10)return res.status(400).json({error:'Client, durée, quota ou connexions invalides.'});
+      !Number.isInteger(maxConnections)||maxConnections<1||maxConnections>1000)return res.status(400).json({error:'Client, durée, quota ou connexions invalides.'});
     const state=d.read();
     if(state.accounts.length>=5000||state.accounts.some(a=>a.username===username&&a.connection?.host.toLowerCase()===config.host.toLowerCase()))return res.status(409).json({error:'Utilisateur déjà présent ou capacité atteinte.'});
     const payload=config.payload||'';
@@ -135,7 +136,7 @@ export function registerSsh(app:Express,d:{
       !/^[A-Za-z0-9@#$%&*+=._-]{8,96}$/.test(password)||
       !Number.isInteger(days)||days<1||days>366||
       !Number.isFinite(quotaGb)||quotaGb<0.01||quotaGb>100000||
-      !Number.isInteger(maxConnections)||maxConnections<1||maxConnections>10)
+      !Number.isInteger(maxConnections)||maxConnections<1||maxConnections>1000)
       return res.status(400).json({error:'Nom client, utilisateur, mot de passe, durée ou quota incorrect.'});
     if(d.admitNode&&!d.admitNode(node.id))return res.status(409).json({error:'Serveur complet ou fermé aux nouvelles ventes.'});
     const state=d.read();
@@ -216,8 +217,8 @@ export function registerSsh(app:Express,d:{
     const label=hasLabel?String(req.body.label||'').trim():a.label;
     if(hasLabel&&(!label||label.length>80))return res.status(400).json({error:'Nom client invalide.'});
     const maxConnections=hasConnections?Number(req.body.maxConnections):a.maxConnections;
-    if(hasConnections&&(!Number.isInteger(maxConnections)||maxConnections<1||maxConnections>10))
-      return res.status(400).json({error:'La limite de sessions doit être comprise entre 1 et 10.'});
+    if(hasConnections&&(!Number.isInteger(maxConnections)||maxConnections<1||maxConnections>1000))
+      return res.status(400).json({error:'La limite de sessions doit être comprise entre 1 et 1000.'});
     if(hasEnabled&&req.body.enabled&&(Date.parse(a.expiresAt)<=Date.now()||a.usedBytes>=a.quotaBytes||!d.ownerActive(newOwner?.id||a.resellerId)))
       return res.status(409).json({error:'Renouvelez le compte avant réactivation.'});
     a.label=label;a.maxConnections=maxConnections;
@@ -242,18 +243,20 @@ export function registerSsh(app:Express,d:{
     const actor=(req as any).user,a=d.read().accounts.find(a=>a.id===req.params.id);
     if(!a)return res.sendStatus(404);if(!allowed(actor,a))return res.sendStatus(403);
     const blocked=new Set(a.blockedDeviceKeys||[]);
-    return res.set('Cache-Control','no-store').json((a.devices||[]).map(device=>({...device,blocked:blocked.has(device.deviceKey)})).sort((x,y)=>Date.parse(y.lastSeenAt||'')-Date.parse(x.lastSeenAt||'')));
+    return res.set('Cache-Control','no-store').json((a.devices||[]).map(device=>({...device,name:a.deviceLabels?.[device.deviceKey]||device.name,blocked:blocked.has(device.deviceKey)})).sort((x,y)=>Date.parse(y.lastSeenAt||'')-Date.parse(x.lastSeenAt||'')));
   });
   app.put('/api/v1/admin/ssh/accounts/:id/devices/:deviceKey',d.authenticate,(req,res)=>{
     const actor=(req as any).user,state=d.read(),a=state.accounts.find(a=>a.id===req.params.id);
     if(!a)return res.sendStatus(404);if(!allowed(actor,a))return res.sendStatus(403);
     const deviceKey=String(req.params.deviceKey||'');if(!/^[a-f0-9]{32}$/.test(deviceKey))return res.sendStatus(400);
-    const blocked=req.body?.blocked;if(typeof blocked!=='boolean')return res.sendStatus(400);
+    const blocked=req.body?.blocked,name=req.body?.name;
+    if((blocked===undefined&&name===undefined)||(blocked!==undefined&&typeof blocked!=='boolean')||(name!==undefined&&(typeof name!=='string'||!name.trim()||name.trim().length>80)))return res.sendStatus(400);
     const set=new Set(a.blockedDeviceKeys||[]);
-    if(blocked&&!set.has(deviceKey)&&set.size>=50)return res.status(409).json({error:'50 appareils bloqués au maximum.'});
-    if(blocked)set.add(deviceKey);else set.delete(deviceKey);a.blockedDeviceKeys=[...set].slice(0,50);
-    d.write(state);d.audit({action:blocked?'SSH_DEVICE_BLOCKED':'SSH_DEVICE_UNBLOCKED',actor:actor.id,role:actor.role,details:JSON.stringify({accountId:a.id,deviceKey})});
-    return res.json({deviceKey,blocked});
+    if(blocked&&!set.has(deviceKey)&&set.size>=1000)return res.status(409).json({error:'1000 identifiants bloqués au maximum.'});
+    if(blocked===true)set.add(deviceKey);else if(blocked===false)set.delete(deviceKey);a.blockedDeviceKeys=[...set];
+    if(name!==undefined){if(!(a.devices||[]).some(d=>d.deviceKey===deviceKey))return res.sendStatus(404);a.deviceLabels||={};a.deviceLabels[deviceKey]=name.trim();}
+    d.write(state);d.audit({action:blocked===undefined?'SSH_DEVICE_RENAMED':blocked?'SSH_DEVICE_BLOCKED':'SSH_DEVICE_UNBLOCKED',actor:actor.id,role:actor.role,details:JSON.stringify({accountId:a.id,deviceKey})});
+    return res.json({deviceKey,blocked:set.has(deviceKey),name:a.deviceLabels?.[deviceKey]});
   });
   app.post('/api/v1/admin/ssh/accounts/:id/config',d.authenticate,(req,res)=>{
     const a=d.read().accounts.find(a=>a.id===req.params.id),actor=(req as any).user;

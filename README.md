@@ -15,7 +15,7 @@ Backend Node/Express, panneau React et bot Telegram pour vendre et administrer d
 
 PostgreSQL transactionnel en production ; sauvegardes AES-GCM avec copie S3 optionnelle ; métriques et alertes. Aucune passerelle de paiement automatique : un crédit n’est jamais ajouté sans vérification humaine. Détails de la dernière revue : [AUDIT.md](AUDIT.md).
 
-## Centre de service 3.1
+## Centre de service 3.2
 
 Annonces ciblées et programmées, notifications du site et association Telegram, tickets de support, portail client `/client`, historique de consommation, supervision réseau et capacité multi-VPS. [Fonctionnement, limites et configuration](docs/SERVICE_CENTER.md). Les paiements restent manuels et l’e-mail reste à configurer.
 
@@ -57,7 +57,7 @@ Configurer dans GitHub Actions :
 | `ADMIN_INITIAL_PASSWORD`, `MASTER_SECRET` | Secrets optionnels | Générés lors du premier déploiement si absents, puis préservés |
 | `ADMIN_NAME`, `VPS_PORT` | Variables optionnelles | Nom et port SSH |
 
-Le workflow `Deploy ABESS VPN to VPS` se lance uniquement manuellement sur `main` (`workflow_dispatch`). Les pushes ne déploient pas. Le Compose central lance seulement PostgreSQL, le backend et Caddy ; aucun moteur VPN. Les identifiants initiaux générés sont conservés dans `~/abessvpn-server/INITIAL_ADMIN_CREDENTIALS.txt`, mode 600 ; les enregistrer dans un gestionnaire sécurisé puis retirer ce fichier. Le `.env` du VPS conserve les clés et mots de passe PostgreSQL stables. Les options S3, MFA et alertes saisies sur le VPS sont préservées lors des déploiements suivants.
+Le workflow `Deploy ABESS VPN to VPS` se lance manuellement sur `main`, ou par un commit sur `main` qui modifie son fichier et contient `roll out SSH-WSS-only panel to VPS`. Le Compose central lance seulement PostgreSQL, le backend et Caddy ; aucun moteur VPN. Les identifiants initiaux générés sont conservés dans `~/abessvpn-server/INITIAL_ADMIN_CREDENTIALS.txt`, mode 600 ; les enregistrer dans un gestionnaire sécurisé puis retirer ce fichier. Le `.env` du VPS conserve les clés et mots de passe PostgreSQL stables. Les options S3, MFA et alertes saisies sur le VPS sont préservées lors des déploiements suivants.
 
 Le domaine du control plane ne remplit pas automatiquement les profils commerciaux. Configurer explicitement l’hôte public et le SNI corrects dans Infrastructure avant émission. Le port, le chemin et le SNI doivent correspondre au service réellement configuré sur le VPS externe ; le domaine du panneau ne les impose pas.
 

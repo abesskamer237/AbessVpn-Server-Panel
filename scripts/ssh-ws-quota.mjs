@@ -40,8 +40,8 @@ export function validatePolicy(value, now=Date.now()) {
     if(!a || !ID.test(a.id) || !USER.test(a.username) ||
        !HEX.test(a.tokenHash) || !validSourceIp(a.sourceIp) || typeof a.enabled!=='boolean' ||
        !integer(a.quotaBytes,1) || !integer(a.baselineUsedBytes,0) ||
-       !integer(a.maxConnections,1,10) ||
-       (a.blockedDevices!==undefined && (!Array.isArray(a.blockedDevices) || a.blockedDevices.length>50 || a.blockedDevices.some(x=>!DEVICE.test(x)))) ||
+       !integer(a.maxConnections,1,1000) ||
+       (a.blockedDevices!==undefined && (!Array.isArray(a.blockedDevices) || a.blockedDevices.length>1000 || a.blockedDevices.some(x=>!DEVICE.test(x)))) ||
        !Number.isFinite(Date.parse(a.expiresAt)) ||
        ids.has(a.id) || tokens.has(a.tokenHash) || ips.has(a.sourceIp)) throw Error('Invalid gateway licence');
     ids.add(a.id);tokens.add(a.tokenHash);ips.add(a.sourceIp);
@@ -101,7 +101,9 @@ export class QuotaLedger {
         throw Error('Invalid account usage record');
       // Individual records are updated on every reservation/refund and are
       // therefore authoritative over the compatibility summary snapshot.
-      this.balances[record.id]={usedBytes:record.usedBytes,creditBytes:0,sessions:0,devices:record.devices&&typeof record.devices==='object'?record.devices:{}};
+      const devices=record.devices&&typeof record.devices==='object'?record.devices:{};
+      for(const d of Object.values(devices))d.activeSessions=0;
+      this.balances[record.id]={usedBytes:record.usedBytes,creditBytes:0,sessions:0,devices};
     }
   }
   _persistOne(id) {
@@ -169,9 +171,12 @@ export class QuotaLedger {
     d.userAgent=String(meta.userAgent||'').slice(0,160);
     d.name=String(meta.name||'').slice(0,80);
     d.brand=String(meta.brand||'').slice(0,80);
+    d.identityKind=meta.identityKind==='declared'?'declared':'session';
     d.activeSessions=(d.activeSessions||0)+1;
     d.sessionId=sessionId;
     b.devices[deviceKey]=d;
+    const inactive=Object.keys(b.devices).filter(key=>!b.devices[key].activeSessions);
+    while(Object.keys(b.devices).length>2000&&inactive.length)delete b.devices[inactive.shift()];
     b.sessions++;
     this._persistOne(id);
     return sessionId;
@@ -193,7 +198,7 @@ export class QuotaLedger {
   }
   consume(id,requested,deviceKey,direction='up',now=Date.now()) {
     const p=this._profile(id,now),b=this.balances[id];
-    if(!p || !integer(requested,0,65536))return 0;
+    if(!p || (p.blockedDevices||[]).includes(deviceKey) || !integer(requested,0,65536))return 0;
     let allowance=Math.min(requested,Math.max(0,p.quotaBytes-b.usedBytes));
     while(allowance>b.creditBytes) {
       const remaining=p.quotaBytes-b.usedBytes-b.creditBytes;
@@ -216,7 +221,7 @@ export class QuotaLedger {
   report() {
     const accounts=Object.entries(this.balances).map(([id,v])=>({
       id,usedBytes:v.usedBytes,online:v.sessions,
-      devices:Object.entries(v.devices||{}).slice(-50).map(([deviceKey,d])=>({deviceKey,...d}))
+      devices:Object.entries(v.devices||{}).sort((a,b)=>Number(Boolean(b[1].activeSessions))-Number(Boolean(a[1].activeSessions))||Date.parse(b[1].lastSeenAt||0)-Date.parse(a[1].lastSeenAt||0)).slice(0,1000).map(([deviceKey,d])=>({deviceKey,...d}))
     }));
     syncAtomic(this.reportFile,{format:'abess-ssh-ws-usage-v1',observedAt:new Date().toISOString(),
       policyObservedAt:this.policy?new Date(this.policy.generatedAt).toISOString():null,accounts});

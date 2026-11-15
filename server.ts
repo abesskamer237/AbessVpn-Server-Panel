@@ -1956,7 +1956,7 @@ async function startServer() {
       })) }),
     nodeSshDesired: node => ({
       format:'abess-managed-ssh-ws-v1',
-      enforcementMode:readService().fleet[node.id]?.enforcementMode||'audit',
+      enforcementMode:'enforce-all',
       enforcementSince:readService().fleet[node.id]?.enforcementSince,
       observedAt:new Date().toISOString(),
       accounts:readSsh().accounts.filter(a=>a.managed&&a.nodeId===node.id).map(a=>{
@@ -1990,8 +1990,8 @@ async function startServer() {
           recordUsage(history,a,now);
           if(Array.isArray(report.devices))a.devices=report.devices.map((dv:any)=>({
             deviceKey:String(dv.deviceKey),usedBytes:Number(dv.usedBytes||0),upBytes:Number(dv.upBytes||0),downBytes:Number(dv.downBytes||0),
-            firstSeenAt:String(dv.firstSeenAt||''),lastSeenAt:String(dv.lastSeenAt||''),activeSessions:Math.max(0,Math.min(10,Math.trunc(Number(dv.activeSessions)||0))),
-            ip:String(dv.ip||'').slice(0,80),userAgent:String(dv.userAgent||'').slice(0,160),name:String(dv.name||'').slice(0,80),brand:String(dv.brand||'').slice(0,80)
+            firstSeenAt:String(dv.firstSeenAt||''),lastSeenAt:String(dv.lastSeenAt||''),activeSessions:Math.max(0,Math.min(1000,Math.trunc(Number(dv.activeSessions)||0))),
+            ip:String(dv.ip||'').slice(0,80),userAgent:String(dv.userAgent||'').slice(0,160),name:String(dv.name||'').slice(0,80),brand:String(dv.brand||'').slice(0,80),identityKind:dv.identityKind==='declared'?'declared':'session'
           }));
         }
         const allowed=a.enabled&&sshOwnerActive(a.resellerId)&&

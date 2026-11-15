@@ -79,7 +79,7 @@ export interface VpnNode {
     freeMemoryBytes: number;
     diskTotalBytes: number;
     diskFreeBytes: number;
-    sessionGuard?:{observedAt:string;healthy:boolean;mode:string;observedSessions:number;overLimitAccounts:number;deniedTotal:number};
+    sessionGuard?:{observedAt:string;healthy:boolean;mode:string;strictBytes?:boolean;observedSessions:number;overLimitAccounts:number;deniedTotal:number};
     network?:{medianRttMs?:number;p95RttMs?:number;rttObservedAt?:string;rttSamples?:number;tcpStatsScope?:string;retransmitPercent?:number;rxBytesPerSecond?:number;txBytesPerSecond?:number;retransmitsPerSecond?:number;cpuPressurePercent?:number;tcpCongestionControl?:string};
     services: {sshd: boolean; gateway: boolean; reconciler: boolean};
   };
@@ -185,7 +185,7 @@ export function registerOperations(
     nodeUsage: (node: VpnNode, snapshot: any) => void;
     nodeSshDesired: (node: VpnNode) => unknown;
     nodeTelemetry?: (nodeId:string,telemetry:NonNullable<VpnNode['sshWsHost']>)=>void;
-    nodeSshReport: (node: VpnNode, reports: Array<{id: string; state: string; usedBytes?: number; online?: number; devices?: Array<{deviceKey:string;usedBytes:number;upBytes:number;downBytes:number;firstSeenAt?:string;lastSeenAt?:string;activeSessions?:number;ip?:string;userAgent?:string;name?:string;brand?:string}>}>) => void;
+    nodeSshReport: (node: VpnNode, reports: Array<{id: string; state: string; usedBytes?: number; online?: number; devices?: Array<{deviceKey:string;usedBytes:number;upBytes:number;downBytes:number;firstSeenAt?:string;lastSeenAt?:string;activeSessions?:number;ip?:string;userAgent?:string;name?:string;brand?:string;identityKind?:'session'|'declared'}>}>) => void;
   },
 ) {
   const admin: RequestHandler = (req, res, next) => {
@@ -401,7 +401,7 @@ export function registerOperations(
           (x.state==='active' && (x.usedBytes===undefined || x.online===undefined)) ||
           (x.usedBytes!==undefined && (!Number.isSafeInteger(x.usedBytes) || x.usedBytes<0)) ||
           (x.online!==undefined && (!Number.isInteger(x.online)||x.online<0||x.online>5000)) ||
-          (x.devices!==undefined && (!Array.isArray(x.devices)||x.devices.length>50||x.devices.some((dv:any)=>!dv||!/^[a-f0-9]{32}$/.test(String(dv.deviceKey||''))||!Number.isSafeInteger(Number(dv.usedBytes||0))||Number(dv.usedBytes||0)<0||!Number.isSafeInteger(Number(dv.upBytes||0))||Number(dv.upBytes||0)<0||!Number.isSafeInteger(Number(dv.downBytes||0))||Number(dv.downBytes||0)<0||Number(dv.activeSessions||0)<0||Number(dv.activeSessions||0)>5000)))) ) return res.sendStatus(400);
+          (x.devices!==undefined && (!Array.isArray(x.devices)||x.devices.length>1000||x.devices.some((dv:any)=>!dv||!/^[a-f0-9]{32}$/.test(String(dv.deviceKey||''))||!Number.isSafeInteger(Number(dv.usedBytes||0))||Number(dv.usedBytes||0)<0||!Number.isSafeInteger(Number(dv.upBytes||0))||Number(dv.upBytes||0)<0||!Number.isSafeInteger(Number(dv.downBytes||0))||Number(dv.downBytes||0)<0||Number(dv.activeSessions||0)<0||Number(dv.activeSessions||0)>5000)))) ) return res.sendStatus(400);
     const telemetry=req.body?.telemetry;
     let safeTelemetry:VpnNode['sshWsHost']|undefined;
     if(telemetry!==undefined){
@@ -425,8 +425,8 @@ export function registerOperations(
       let sessionGuard:NonNullable<VpnNode['sshWsHost']>['sessionGuard'];
       if(telemetry.sessionGuard!==undefined){
         const s=telemetry.sessionGuard,age=Date.now()-Date.parse(s?.observedAt||'');
-        if(!s||!Number.isFinite(age)||age>60000||age< -5000||typeof s.healthy!=='boolean'||!['audit','enforce-new'].includes(s.mode)||['observedSessions','overLimitAccounts','deniedTotal'].some(k=>!Number.isSafeInteger(s[k])||s[k]<0||s[k]>1e12))return res.sendStatus(400);
-        sessionGuard={observedAt:s.observedAt,healthy:s.healthy,mode:s.mode,observedSessions:s.observedSessions,overLimitAccounts:s.overLimitAccounts,deniedTotal:s.deniedTotal};
+        if(!s||!Number.isFinite(age)||age>60000||age< -5000||typeof s.healthy!=='boolean'||!['audit','enforce-new','enforce-all'].includes(s.mode)||(s.strictBytes!==undefined&&typeof s.strictBytes!=='boolean')||['observedSessions','overLimitAccounts','deniedTotal'].some(k=>!Number.isSafeInteger(s[k])||s[k]<0||s[k]>1e12))return res.sendStatus(400);
+        sessionGuard={observedAt:s.observedAt,healthy:s.healthy,mode:s.mode,strictBytes:s.strictBytes===true,observedSessions:s.observedSessions,overLimitAccounts:s.overLimitAccounts,deniedTotal:s.deniedTotal};
       }
       safeTelemetry={
         observedAt,network,sessionGuard,

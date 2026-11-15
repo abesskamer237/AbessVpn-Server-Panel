@@ -128,6 +128,10 @@ fetch(base+"/api/v1/nodes/"+encodeURIComponent(id)+"/ssh-ws/desired",{
 }).catch(e=>{console.error("HOST_NODE_CONTROL_ERROR="+e.message);process.exit(3)})
 '
 echo '[ABESS SSH-WS] Applying secure Caddy Unix socket group membership...'
+bash scripts/install-raw-meter.sh --prepare </dev/null
+bash scripts/install-raw-meter.sh --activate </dev/null
+sed -i 's|^SSH_WS_USAGE_REPORT_FILE=.*|SSH_WS_USAGE_REPORT_FILE=/var/lib/abess-raw-meter/usage-live.json|' /etc/abess-ssh-ws/agent.env
+systemctl restart abess-ssh-ws-reconciler.service
 docker compose up -d --no-deps --force-recreate caddy
 for name in abess-ssh-ws-sshd abess-ssh-ws-gateway abess-ssh-ws-reconciler; do
  systemctl is-active --quiet "$name" || {
@@ -185,7 +189,11 @@ echo 'ABESS_SSH_WS_PATH=/ssh-ws/<unique-client-secret>'
 echo "ABESS_SSH_WS_NODE_ID=$VPN_NODE_ID"
 
 # Keep passive accounting on the existing raw-upgrade forwarding service.
-if systemctl is-active --quiet willy-ssh-ws.service; then
+if [[ -f /var/lib/abess-raw-meter/enabled ]]; then
+  systemctl is-active --quiet abess-raw-meter.service
+  curl --fail --silent --show-error --max-time 5 http://172.18.0.1:8081/healthz | grep -q '"ok":true'
+  echo 'RAW_METER_VERIFIED=true passive_billing_disabled=true'
+elif systemctl is-active --quiet willy-ssh-ws.service; then
   bash scripts/install-traffic-observer.sh </dev/null
 fi
 

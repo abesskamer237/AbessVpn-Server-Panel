@@ -125,6 +125,8 @@ TasksMax=512
 WantedBy=multi-user.target
 UNIT
 install -m 0600 -o root -g root "$VPN_NODE_KEY_FILE" /etc/abess-ssh-ws/node-key
+usage_report=/var/lib/abess-ssh-ws/gateway/usage-live.json
+if [[ -f /var/lib/abess-raw-meter/enabled ]]; then usage_report=/var/lib/abess-raw-meter/usage-live.json; fi
 cat > /etc/abess-ssh-ws/agent.env <<ENV
 CONTROL_API_BASE_URL=$CONTROL_API_BASE_URL
 VPN_NODE_ID=$VPN_NODE_ID
@@ -132,7 +134,7 @@ VPN_NODE_KEY_FILE=/etc/abess-ssh-ws/node-key
 SSH_WS_STATE_FILE=/var/lib/abess-ssh-ws/state.json
 SSH_WS_ALLOW_USERS_FILE=/etc/abess-ssh-ws/allowed-users.conf
 SSH_WS_POLICY_FILE=/var/lib/abess-ssh-ws/policy/gateway-policy.json
-SSH_WS_USAGE_REPORT_FILE=/var/lib/abess-ssh-ws/gateway/usage-live.json
+SSH_WS_USAGE_REPORT_FILE=$usage_report
 SSH_WS_GATEWAY_GID=$(id -g abess-gateway)
 SSH_WS_OFFLINE_LIMIT_MS=600000
 NO_PROXY=127.0.0.1,localhost

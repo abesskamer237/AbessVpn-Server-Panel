@@ -36,10 +36,10 @@ try{
   let fleet;
   for(let attempt=0;attempt<8;attempt++){
     fleet=await call('/api/v1/admin/fleet',admin);
-    if(fleet.nodes.some(n=>n.online&&n.hostTelemetry?.sessionGuard?.healthy))break;
+    if(fleet.nodes.some(n=>n.online&&n.hostTelemetry?.sessionGuard?.healthy&&n.hostTelemetry.sessionGuard.strictBytes))break;
     await new Promise(r=>setTimeout(r,5000));
   }
-  assert(fleet.nodes.some(n=>n.online&&n.hostTelemetry?.sessionGuard?.healthy),'No fresh healthy session controller reported by a managed server');
+  assert(fleet.nodes.some(n=>n.online&&n.hostTelemetry?.sessionGuard?.healthy&&n.hostTelemetry.sessionGuard.strictBytes),'No fresh healthy strict quota controller reported by a managed server');
   console.log('PANEL_FEATURES_VERIFIED='+JSON.stringify({announcementAudienceIsolation:true,usageHistory:true,support:true,customerPortalAccessControl:true,fleet:true,rolesTested:actors.map(a=>a.role),sessionControllerHealthy:true,payments:'manual',email:'requires-provider'}));
 }finally{
   try{await store.transaction(()=>{for(const token of tokens)security.sessions.delete(token)})}finally{await store.pool.end()}

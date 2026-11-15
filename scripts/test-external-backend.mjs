@@ -209,6 +209,16 @@ try{
     'active accounts require verified measured SSH traffic');
   assert.equal((await call(`nodes/${managedNode.body.id}/ssh-ws/status`,
     {reports:[{id:managedId,state:'active',usedBytes:1048576,online:1}]},managedNode.body.key)).status,200);
+  assert.equal((await call(`admin/ssh/accounts/${managedId}`,{maxConnections:1000},importerSession,'PATCH')).status,200);
+  assert.equal((await call(`admin/ssh/accounts/${managedId}`,{maxConnections:1001},importerSession,'PATCH')).status,400);
+  const deviceKey='c'.repeat(32);
+  assert.equal((await call(`nodes/${managedNode.body.id}/ssh-ws/status`,{reports:[{id:managedId,state:'active',usedBytes:1048576,online:1,devices:[{deviceKey,usedBytes:1000,upBytes:400,downBytes:600,activeSessions:1,identityKind:'session'}]}]},managedNode.body.key)).status,200);
+  assert.equal((await call(`admin/ssh/accounts/${managedId}/devices/${deviceKey}`,{name:'Téléphone test'},importerSession,'PUT')).status,200);
+  assert.equal((await call(`admin/ssh/accounts/${managedId}/devices/${deviceKey}`,{blocked:true},peerSession,'PUT')).status,403);
+  assert.equal((await call(`admin/ssh/accounts/${managedId}/devices/${deviceKey}`,{blocked:true},importerSession,'PUT')).status,200);
+  const deviceView=await call(`admin/ssh/accounts/${managedId}/devices`,undefined,importerSession);
+  assert.equal(deviceView.body[0].name,'Téléphone test');assert.equal(deviceView.body[0].blocked,true);assert.equal(deviceView.body[0].upBytes,400);
+  assert.equal((await call(`admin/ssh/accounts/${managedId}/devices/${deviceKey}`,{blocked:false},importerSession,'PUT')).status,200);
   const managedDelivered=await call(`admin/ssh/accounts/${managedId}/config`,{transport:'wss'},importerSession);
   assert.equal(managedDelivered.status,200);
   assert.equal(managedDelivered.body.password,manifest.body.accounts[0].password);

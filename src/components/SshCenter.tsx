@@ -13,11 +13,12 @@ type ExportData={
   host:string;port:number;fingerprint:string;wire:string;transport:string;
   expiresAt?:string;quotaGb?:number;usedGb?:number|null;trafficVerified?:boolean;
 };
-type Device={deviceKey:string;usedBytes:number;upBytes:number;downBytes:number;firstSeenAt?:string;lastSeenAt?:string;activeSessions?:number;ip?:string;userAgent?:string;name?:string;brand?:string;blocked:boolean};
+type Device={deviceKey:string;usedBytes:number;upBytes:number;downBytes:number;firstSeenAt?:string;lastSeenAt?:string;activeSessions?:number;ip?:string;userAgent?:string;name?:string;brand?:string;identityKind?:'session'|'declared';blocked:boolean};
 type DrawerTab='overview'|'config'|'devices'|'history';
 
 const badge=(tone:string)=>'badge badge-'+tone;
 const gb=(n:number|null|undefined)=>bytesToGb(n).toLocaleString('fr-FR',{maximumFractionDigits:2});
+const traffic=(n:number)=>{const units=['octets','Ko','Mo','Go','To'];let value=Math.max(0,n||0),i=0;while(value>=1024&&i<units.length-1){value/=1024;i++}return value.toLocaleString('fr-FR',{maximumFractionDigits:2})+' '+units[i]};
 const PASSWORD_CHARS='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789@#%+=._-';
 function generatePassword(length=14){
   const values=crypto.getRandomValues(new Uint32Array(length));
@@ -49,6 +50,7 @@ export function SshCenter({inventory,resellers,role,audit,currentUser,request,re
   const [editLabel,setEditLabel]=useState(''),[editConnections,setEditConnections]=useState(1),[newSshPassword,setNewSshPassword]=useState(''),[transferTo,setTransferTo]=useState('');
   const [config,setConfig]=useState<ExportData|null>(null),[showSecret,setShowSecret]=useState(false);
   const [devices,setDevices]=useState<Device[]|null>(null);
+  const [deviceNames,setDeviceNames]=useState<Record<string,string>>({});
   const [bulk,setBulk]=useState<null|'renew'>(null);
 
   useEffect(()=>{if(!toast)return;const t=window.setTimeout(()=>setToast(''),2600);return()=>window.clearTimeout(t)},[toast]);
@@ -72,11 +74,14 @@ export function SshCenter({inventory,resellers,role,audit,currentUser,request,re
   const selected=accounts.find(a=>a.id===selectedId)||null;
   useEffect(()=>{
     if(!selected)return;
-    setEditLabel(selected.label);setEditConnections(selected.maxConnections);setConfig(null);setShowSecret(false);setDevices(null);setNewSshPassword('');setTransferTo('');
+    setEditLabel(selected.label);setEditConnections(selected.maxConnections);setConfig(null);setShowSecret(false);setDevices(null);setDeviceNames({});setNewSshPassword('');setTransferTo('');
   },[selectedId]);
   useEffect(()=>{
     if(!selected||tab!=='devices')return;
-    request('/api/v1/admin/ssh/accounts/'+selected.id+'/devices').then(setDevices).catch(e=>setError(e instanceof Error?e.message:'Appareils indisponibles'));
+    let cancelled=false;
+    const load=()=>request('/api/v1/admin/ssh/accounts/'+selected.id+'/devices').then(data=>{if(!cancelled)setDevices(data)}).catch(e=>{if(!cancelled)setError(e instanceof Error?e.message:'Appareils indisponibles')});
+    void load();const timer=window.setInterval(()=>{if(document.visibilityState==='visible')void load()},5000);
+    return()=>{cancelled=true;window.clearInterval(timer)};
   },[selectedId,tab]);
 
   const statusCount=(k:string)=>accounts.filter(a=>accountStatus(a).key===k).length;
@@ -261,7 +266,7 @@ export function SshCenter({inventory,resellers,role,audit,currentUser,request,re
           <label className="field-block"><span className="field-label">Serveur</span><select className="select" required value={nodeId} onChange={e=>setNodeId(e.target.value)}><option value="auto">Automatique · serveur le moins rempli</option>{inventory?.managedNodes.map(n=><option key={n.id} value={n.id} disabled={!n.agentOnline}>{n.name} · {n.agentOnline?'en ligne':'hors ligne'}</option>)}</select>{!onlineNodes.length&&<span className="field-help" style={{color:'var(--warning)'}}>Aucun VPS en ligne pour le moment.</span>}</label>
           <label className="field-block"><span className="field-label">Durée</span><select className="select" value={days} onChange={e=>setDays(Number(e.target.value))}>{[7,14,30,60,90,180,365].map(d=><option key={d} value={d}>{d} jours</option>)}</select></label>
           <label className="field-block"><span className="field-label">Quota (Go)</span><input className="field num" type="number" min=".01" step=".01" required value={quotaGb} onChange={e=>setQuotaGb(Number(e.target.value))}/></label>
-          <label className="field-block"><span className="field-label">Sessions simultanées</span><input className="field num" type="number" min="1" max="10" required value={maxConnections} onChange={e=>setMaxConnections(Number(e.target.value))}/></label>
+          <label className="field-block"><span className="field-label">Sessions simultanées</span><input className="field num" type="number" min="1" max="1000" required value={maxConnections} onChange={e=>setMaxConnections(Number(e.target.value))}/></label>
           {canOperate&&<label className="field-block"><span className="field-label">Revendeur propriétaire</span><select className="select" value={resellerId} onChange={e=>setResellerId(e.target.value)}><option value="">Administration</option>{resellers.filter(r=>r.status==='active').map(r=><option key={r.id} value={r.id}>{r.name} · {Number(r.credits||0).toFixed(2)} Go</option>)}</select></label>}
         </div>
         {showsBalance&&<div className="detail-grid">
@@ -296,7 +301,7 @@ export function SshCenter({inventory,resellers,role,audit,currentUser,request,re
 
           <section className="drawer-section"><div className="ds-head"><div><h2>Paramètres</h2><p>Nom affiché et limite de sessions simultanées.</p></div></div><div className="ds-body">
             <div className="form-grid"><label className="field-block"><span className="field-label">Nom</span><input className="field" value={editLabel} maxLength={80} onChange={e=>setEditLabel(e.target.value)}/></label>
-            <label className="field-block"><span className="field-label">Sessions</span><input className="field num" type="number" min="1" max="10" value={editConnections} onChange={e=>setEditConnections(Number(e.target.value))}/></label></div>
+            <label className="field-block"><span className="field-label">Sessions</span><input className="field num" type="number" min="1" max="1000" value={editConnections} onChange={e=>setEditConnections(Number(e.target.value))}/></label></div>
             <button className="btn btn-sm" style={{marginTop:10}} disabled={working||(editLabel===selected.label&&editConnections===selected.maxConnections)} onClick={()=>void run(async()=>{await patch(selected,{label:editLabel,maxConnections:editConnections});return 'Paramètres enregistrés.'})}>Enregistrer</button>
           </div></section>
 
@@ -334,13 +339,13 @@ export function SshCenter({inventory,resellers,role,audit,currentUser,request,re
           </div>}
         </div></section>}
 
-        {tab==='devices'&&<section className="drawer-section"><div className="ds-head"><div><h2>Appareils connectés</h2><p>Bloquez un appareil inconnu : il ne pourra plus se connecter.</p></div><MonitorSmartphone size={14} color="var(--muted)"/></div><div className="ds-body" style={{paddingTop:4,paddingBottom:4}}>
+        {tab==='devices'&&<section className="drawer-section"><div className="ds-head"><div><h2>Appareils connectés</h2><p>Consommation par connexion. Sans identifiant transmis par le client, la suspension concerne cette session ; un nom personnalisé ne constitue pas une identification matérielle.</p></div><MonitorSmartphone size={14} color="var(--muted)"/></div><div className="ds-body" style={{paddingTop:4,paddingBottom:4}}>
           {devices===null?<div className="empty-state">Chargement…</div>:!devices.length?<div className="empty-state"><Smartphone size={20}/><strong>Aucun appareil observé</strong><span>Ils apparaissent après la première connexion du client.</span></div>
           :<div className="alert-list">{devices.map(dv=><div className="alert-row" key={dv.deviceKey}>
             <div className="avatar" style={{width:28,height:28,color:dv.blocked?'var(--danger)':'var(--accent)'}}>{dv.blocked?<Ban size={13}/>:<Smartphone size={13}/>}</div>
-            <div><p>{[dv.brand,dv.name].filter(Boolean).join(' ')||'Appareil '+dv.deviceKey.slice(0,6)}{(dv.activeSessions||0)>0&&<span className="badge badge-success" style={{marginLeft:6,height:18}}>en ligne</span>}</p>
-              <span>{dv.ip||'IP inconnue'} · {gb(dv.usedBytes)} Go · vu {fmtDateTime(dv.lastSeenAt)}</span></div>
-            <button className={'btn btn-sm'+(dv.blocked?'':' btn-danger')} disabled={working} onClick={()=>void run(async()=>{await request('/api/v1/admin/ssh/accounts/'+selected.id+'/devices/'+dv.deviceKey,'PUT',{blocked:!dv.blocked});setDevices(list=>list?.map(x=>x.deviceKey===dv.deviceKey?{...x,blocked:!dv.blocked}:x)||null);return dv.blocked?'Appareil débloqué.':'Appareil bloqué.'})}>{dv.blocked?'Débloquer':'Bloquer'}</button>
+            <div><p>{[dv.brand,dv.name].filter(Boolean).join(' ')||(dv.identityKind==='declared'?'Appareil déclaré ':'Session SSH ')+dv.deviceKey.slice(0,6)}{(dv.activeSessions||0)>0&&<span className="badge badge-success" style={{marginLeft:6,height:18}}>en ligne</span>}</p>
+              <span>{dv.ip||'IP inconnue'} · Total {traffic(dv.usedBytes)} · Envoi {traffic(dv.upBytes)} · Réception {traffic(dv.downBytes)} · {dv.activeSessions||0} session(s) · vu {fmtDateTime(dv.lastSeenAt)}</span><div className="input-group" style={{marginTop:6}}><input className="field" aria-label={'Nom de '+dv.deviceKey.slice(0,6)} maxLength={80} placeholder="Nom personnalisé" value={deviceNames[dv.deviceKey]??dv.name??''} onChange={e=>setDeviceNames({...deviceNames,[dv.deviceKey]:e.target.value})}/><button className="btn btn-sm" disabled={working||!deviceNames[dv.deviceKey]?.trim()||deviceNames[dv.deviceKey].trim()===dv.name} onClick={()=>void run(async()=>{const name=deviceNames[dv.deviceKey].trim();await request('/api/v1/admin/ssh/accounts/'+selected.id+'/devices/'+dv.deviceKey,'PUT',{name});setDevices(list=>list?.map(x=>x.deviceKey===dv.deviceKey?{...x,name}:x)||null);return 'Nom enregistré.'})}>Nommer</button></div></div>
+            <button className={'btn btn-sm'+(dv.blocked?'':' btn-danger')} disabled={working} onClick={()=>void run(async()=>{await request('/api/v1/admin/ssh/accounts/'+selected.id+'/devices/'+dv.deviceKey,'PUT',{blocked:!dv.blocked});setDevices(list=>list?.map(x=>x.deviceKey===dv.deviceKey?{...x,blocked:!dv.blocked}:x)||null);return dv.blocked?'Identifiant réautorisé.':'Suspension demandée au relais.'})}>{dv.blocked?'Réautoriser':'Suspendre'}</button>
           </div>)}</div>}
         </div></section>}
 

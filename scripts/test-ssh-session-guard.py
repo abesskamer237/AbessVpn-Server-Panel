@@ -22,6 +22,13 @@ class GuardTests(unittest.TestCase):
     def test_stale_policy_rejected(self):
         self.policy['generatedAt']=datetime.fromtimestamp(self.now-61,timezone.utc).isoformat()
         with self.assertRaises(ValueError):g.planned_actions(self.policy,[],self.now)
+    def test_strict_mode_removes_existing_excess_and_disabled_sessions(self):
+        a=self.policy['accounts'][0];a['enforcementMode']='enforce-all'
+        sessions=[self.session(1,self.since-100),self.session(2,self.since-50)]
+        actions,_,mode=g.planned_actions(self.policy,sessions,self.now)
+        self.assertEqual([s['pid'] for s in actions],[2]);self.assertEqual(mode,'enforce-all')
+        a['enabled']=False
+        self.assertEqual(len(g.planned_actions(self.policy,sessions,self.now)[0]),2)
     def test_pid_reuse_and_root_cannot_be_signalled(self):
         item=self.session(5,self.now);sent=[]
         self.assertFalse(g.terminate_session(item,lambda _:dict(item,startTicks=99999),lambda *x:sent.append(x)))

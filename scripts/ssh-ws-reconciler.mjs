@@ -25,7 +25,7 @@ export function validateDesired(manifest) {
        !Number.isFinite(Date.parse(a.expiresAt)) ||
        !Number.isSafeInteger(a.quotaBytes) || a.quotaBytes<1 ||
        !Number.isSafeInteger(a.baselineUsedBytes) || a.baselineUsedBytes<0 ||
-       !Number.isInteger(a.maxConnections) || a.maxConnections<1 || a.maxConnections>10 ||
+       !Number.isInteger(a.maxConnections) || a.maxConnections<1 || a.maxConnections>1000 ||
        (a.enabled && (!/^[a-f0-9]{64}$/.test(a.tokenHash) ||
          typeof a.password!=='string' || !/^[A-Za-z0-9@#$%&*+=._-]{8,96}$/.test(a.password))))
        throw Error('Invalid SSH-WS account');
@@ -224,7 +224,7 @@ async function readUsage(env,store,policyTime) {
     if(!a || !accountIdPattern.test(a.id) || seen.has(a.id) ||
        !Number.isSafeInteger(a.usedBytes) || a.usedBytes<0 ||
        !Number.isInteger(a.online) || a.online<0 || a.online>5000 ||
-       (a.devices!==undefined && (!Array.isArray(a.devices) || a.devices.length>50 || a.devices.some(d=>!d||!/^[a-f0-9]{32}$/.test(String(d.deviceKey||''))||!Number.isSafeInteger(Number(d.usedBytes||0))||Number(d.usedBytes||0)<0||!Number.isSafeInteger(Number(d.upBytes||0))||Number(d.upBytes||0)<0||!Number.isSafeInteger(Number(d.downBytes||0))||Number(d.downBytes||0)<0))))return null;
+       (a.devices!==undefined && (!Array.isArray(a.devices) || a.devices.length>1000 || a.devices.some(d=>!d||!/^[a-f0-9]{32}$/.test(String(d.deviceKey||''))||!Number.isSafeInteger(Number(d.usedBytes||0))||Number(d.usedBytes||0)<0||!Number.isSafeInteger(Number(d.upBytes||0))||Number(d.upBytes||0)<0||!Number.isSafeInteger(Number(d.downBytes||0))||Number(d.downBytes||0)<0))))return null;
     seen.add(a.id);
   }
   return usage;
@@ -284,7 +284,7 @@ async function hostTelemetry() {
   return {
     observedAt:new Date().toISOString(),
     network:await networkTelemetry(),
-    sessionGuard:await (async()=>{try{const s=JSON.parse(await fs.readFile('/var/lib/abess-session-guard/status.json','utf8'));if(s.format!=='abess-session-guard-v1'||Date.now()-Date.parse(s.observedAt)>30000)return undefined;return {observedAt:s.observedAt,healthy:s.healthy,mode:s.mode,observedSessions:s.observedSessions||0,overLimitAccounts:s.overLimitAccounts||0,deniedTotal:s.deniedTotal||0}}catch{return undefined}})(),
+    sessionGuard:await (async()=>{try{const s=JSON.parse(await fs.readFile('/var/lib/abess-session-guard/status.json','utf8'));if(s.format!=='abess-session-guard-v1'||Date.now()-Date.parse(s.observedAt)>30000)return undefined;return {observedAt:s.observedAt,healthy:s.healthy,mode:s.mode,strictBytes:s.strictBytes===true,observedSessions:s.observedSessions||0,overLimitAccounts:s.overLimitAccounts||0,deniedTotal:s.deniedTotal||0}}catch{return undefined}})(),
     uptimeSeconds:Math.max(0,Math.floor(os.uptime())),
     cpuPercent,
     load1:Number(os.loadavg()[0].toFixed(2)),
@@ -342,11 +342,16 @@ export async function syncOnce(env=process.env,request=fetch,host=hostOperations
       ?'blocked':x.state,usedBytes:entry.usedBytes,online:entry.online,devices:entry.devices||[]};
   });
   const telemetry=await hostTelemetry();
-  const ack=await request(new URL('status',endpoint),{
-    method:'POST',headers:{...headers,'Content-Type':'application/json'},
-    body:JSON.stringify({reports,telemetry}),redirect:'error',signal:AbortSignal.timeout(8000)
-  });
-  if(!ack.ok){const body=(await ack.text()).slice(0,300).replace(/\s+/g,' ');throw Error('Acknowledgement rejected HTTP '+ack.status+(body?': '+body:''));}
+  const batches=[];let batch=[],size=0;
+  for(const report of reports){const bytes=Buffer.byteLength(JSON.stringify(report));if(batch.length&&size+bytes>1400000){batches.push(batch);batch=[];size=0;}batch.push(report);size+=bytes;}
+  if(batch.length||!batches.length)batches.push(batch);
+  for(let i=0;i<batches.length;i++){
+    const ack=await request(new URL('status',endpoint),{
+      method:'POST',headers:{...headers,'Content-Type':'application/json'},
+      body:JSON.stringify({reports:batches[i],...(i===0?{telemetry}:{})}),redirect:'error',signal:AbortSignal.timeout(8000)
+    });
+    if(!ack.ok){const body=(await ack.text()).slice(0,300).replace(/\s+/g,' ');throw Error('Acknowledgement rejected HTTP '+ack.status+(body?': '+body:''));}
+  }
   store.lastSuccessfulAt=Date.now();
   return {...result,reports};
 }

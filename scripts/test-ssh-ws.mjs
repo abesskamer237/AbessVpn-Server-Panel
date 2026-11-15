@@ -172,8 +172,14 @@ const desired={format:'abess-managed-ssh-ws-v1',observedAt:new Date().toISOStrin
   accounts:[{id,username:user,password,expiresAt:new Date(Date.now()+86400000).toISOString(),
     enabled:true,tokenHash:hash(key),quotaBytes:12288,baselineUsedBytes:0,maxConnections:1}]};
 assert.equal(validateDesired(desired).length,1);
+assert.equal(validateDesired({...desired,accounts:[{...desired.accounts[0],maxConnections:1000}]}).length,1);
+const ceiling=new QuotaLedger({usageFile:path.join(dir,'ceiling.json'),reportFile:path.join(dir,'ceiling-report.json')});
+ceiling.setPolicy({...policy,generatedAt:new Date().toISOString(),accounts:[{...policy.accounts[0],quotaBytes:1048576,baselineUsedBytes:0,enabled:true,maxConnections:1000}]});
+for(let i=0;i<1000;i++)assert(ceiling.start(id,{deviceKey:'a'.repeat(32)}));
+assert.equal(ceiling.online(id),1000);assert.equal(ceiling.start(id,{deviceKey:'b'.repeat(32)}),null);
+ceiling.close();
 assert.throws(()=>validateDesired({...desired,accounts:[{...desired.accounts[0],username:'root'}]}));
-assert.throws(()=>validateDesired({...desired,accounts:[{...desired.accounts[0],maxConnections:999}]}));
+assert.throws(()=>validateDesired({...desired,accounts:[{...desired.accounts[0],maxConnections:1001}]}));
 const users=new Set(),commands=[];
 const host={
   exists(name){return users.has(name);},
