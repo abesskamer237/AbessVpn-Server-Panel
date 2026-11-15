@@ -153,7 +153,21 @@ done
   fi
   echo 'Gateway policy did not become ready. Check diagnostics above.' >&2; exit 1
 }
-curl --fail --silent --show-error --max-time 10 "https://$VPN_DOMAIN/api/v1/ping" | grep -q '"ok":true'
+# A started container may not yet have bound HTTPS. Check the public API
+# independently of the private gateway policy, which can already be ready.
+HTTPS_READY=no
+for attempt in {1..20}; do
+  if curl --fail --silent --show-error --connect-timeout 3 --max-time 5 "https://$VPN_DOMAIN/api/v1/ping" | grep -q '"ok":true'; then
+    HTTPS_READY=yes
+    break
+  fi
+  sleep 2
+done
+[[ "$HTTPS_READY" = yes ]] || {
+  docker compose logs --tail 40 caddy >&2 || true
+  echo 'Public HTTPS API did not become ready after Caddy recreation.' >&2
+  exit 1
+}
 docker compose exec -T caddy test -S /var/run/abess-ssh-ws/gateway.sock || {
  echo 'Caddy container cannot access private SSH-WS socket' >&2; exit 1;
 }

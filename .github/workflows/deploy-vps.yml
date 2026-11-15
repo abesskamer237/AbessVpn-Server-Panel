@@ -1,5 +1,5 @@
 name: Deploy ABESS VPN to VPS
-# Production rollout marker: ABESS VPN 3.1 validated communication forms
+# Production rollout marker: ABESS VPN 3.1 bounded HTTPS readiness after Caddy recreation
 
 on:
   workflow_dispatch:
