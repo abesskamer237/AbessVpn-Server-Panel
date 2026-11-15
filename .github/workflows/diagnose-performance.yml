@@ -1,5 +1,5 @@
 name: Diagnose VPN performance
-# Check numeric-port sockets and privilege-separated SSH session identities.
+# Verify deployed session identities and the configured Telegram bot identity.
 on:
   workflow_dispatch:
   push:
@@ -88,7 +88,7 @@ jobs:
           "$HOME/.local/bin/abess-ssh" -p "${VPS_PORT:-22}" "${VPS_USER}@${VPS_HOST}" 'bash -s' <<'REMOTE'
           set -euo pipefail
           cd "$HOME/abessvpn-server"
-          docker compose exec -T --interactive=false api node -e 'console.log("NOTIFICATION_CHANNEL_CONFIGURATION="+JSON.stringify({telegramBotConfigured:Boolean(process.env.TELEGRAM_BOT_TOKEN?.trim()),emailProviderConfigured:Boolean(process.env.SMTP_HOST)}))'
+          docker compose exec -T --interactive=false api node -e '(async()=>{const token=process.env.TELEGRAM_BOT_TOKEN?.trim();let bot;try{if(token)bot=await(await fetch("https://api.telegram.org/bot"+token+"/getMe",{signal:AbortSignal.timeout(8000)})).json()}catch{}console.log("NOTIFICATION_CHANNEL_CONFIGURATION="+JSON.stringify({telegramBotConfigured:Boolean(token),telegramBotUsername:bot?.ok?bot.result?.username:null,emailProviderConfigured:Boolean(process.env.SMTP_HOST)}))})()'
           REMOTE
       - name: Compare session identities without printing accounts or addresses
         env:
