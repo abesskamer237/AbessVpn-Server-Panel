@@ -1,0 +1,105 @@
+name: Update strict VPN limits
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [.github/workflows/update-strict-meter.yml]
+permissions:
+  contents: read
+concurrency:
+  group: abessvpn-production-deploy
+  cancel-in-progress: false
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+      - name: Verify quotas and device persistence with real SSH
+        run: |
+          npm ci
+          node scripts/test-ssh-ws.mjs
+          docker build -f docker/ssh-session-test.Dockerfile -t abess-strict-meter-test:ci .
+          docker run --rm --network none --cap-add SYS_PTRACE abess-strict-meter-test:ci python3 test-ssh-raw-live.py
+          docker run --rm --network none --cap-add SYS_PTRACE -e ABESS_PROBE_FRAMED=yes abess-strict-meter-test:ci python3 test-ssh-raw-live.py
+      - name: Configure SSH authentication
+        shell: bash
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_SSH_KNOWN_HOSTS: ${{ secrets.VPS_SSH_KNOWN_HOSTS }}
+          VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD || secrets.VPS_PASSWORD }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_PORT: ${{ vars.VPS_PORT }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.ssh" "$HOME/.local/bin"
+          if [[ -n "${VPS_SSH_KEY:-}" ]]; then
+            printf '%s\n' "$VPS_SSH_KEY" > "$HOME/.ssh/id_ed25519"
+            chmod 600 "$HOME/.ssh/id_ed25519"
+          elif [[ -n "${VPS_SSH_PASSWORD:-}" ]]; then
+            if ! command -v sshpass >/dev/null 2>&1; then
+              sudo apt-get update
+              sudo apt-get install -y sshpass
+            fi
+          else
+            echo "Provide VPS_SSH_KEY (recommended) or VPS_SSH_PASSWORD." >&2
+            exit 1
+          fi
+          # Verify the existing production VPS identity against its
+          # previously recorded Ed25519 host key fingerprint. Refuse changes.
+          if [[ -z "${VPS_SSH_KNOWN_HOSTS:-}" ]]; then
+            ssh-keyscan -T 12 -p "${VPS_PORT:-22}" -t ed25519 "$VPS_HOST" 2>/dev/null > "$HOME/.ssh/known_hosts"
+          else
+            printf '%s\n' "$VPS_SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          fi
+          test -s "$HOME/.ssh/known_hosts"
+          ssh-keygen -lf "$HOME/.ssh/known_hosts" -E sha256 |
+            grep -Fq 'SHA256:LgoMnkXsbf7RYOw5LRm0ErLVQ6n0JDJBJIAltFxOChc' || {
+              echo "::error::VPS SSH host key differs from previously verified installation." >&2
+              exit 1
+            }
+          chmod 600 "$HOME/.ssh/known_hosts"
+          cat > "$HOME/.local/bin/abess-ssh" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [[ -s "$HOME/.ssh/id_ed25519" ]]; then
+            exec ssh -o StrictHostKeyChecking=yes -i "$HOME/.ssh/id_ed25519" -o BatchMode=yes -o IdentitiesOnly=yes "$@"
+          fi
+          export SSHPASS="$VPS_SSH_PASSWORD"
+          exec sshpass -e ssh -o StrictHostKeyChecking=yes -o PreferredAuthentications=password,keyboard-interactive -o PubkeyAuthentication=no "$@"
+          SH
+          cat > "$HOME/.local/bin/abess-scp" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [[ -s "$HOME/.ssh/id_ed25519" ]]; then
+            exec scp -o StrictHostKeyChecking=yes -i "$HOME/.ssh/id_ed25519" -o BatchMode=yes -o IdentitiesOnly=yes "$@"
+          fi
+          export SSHPASS="$VPS_SSH_PASSWORD"
+          exec sshpass -e scp -o StrictHostKeyChecking=yes -o PreferredAuthentications=password,keyboard-interactive -o PubkeyAuthentication=no "$@"
+          SH
+          chmod 700 "$HOME/.local/bin/abess-ssh" "$HOME/.local/bin/abess-scp"
+      - name: Update the native quota relay and verify public hard limits
+        env:
+          VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD || secrets.VPS_PASSWORD }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ vars.VPS_PORT }}
+          VPN_DOMAIN: ${{ vars.VPN_DOMAIN }}
+        run: |
+          set -euo pipefail
+          [[ "$VPN_DOMAIN" =~ ^[A-Za-z0-9.-]+$ ]]
+          remote_dir="/tmp/abess-meter-native-${{ github.run_id }}"
+          "$HOME/.local/bin/abess-ssh" -p "${VPS_PORT:-22}" "${VPS_USER}@${VPS_HOST}" "install -d -m 700 '$remote_dir'"
+          "$HOME/.local/bin/abess-scp" -P "${VPS_PORT:-22}" scripts/ssh-raw-meter.mjs scripts/ssh-ws-quota.mjs scripts/ssh-pam-admission.py scripts/install-raw-meter.sh scripts/probe-strict-production.mjs "${VPS_USER}@${VPS_HOST}:$remote_dir/"
+          "$HOME/.local/bin/abess-ssh" -p "${VPS_PORT:-22}" "${VPS_USER}@${VPS_HOST}" "bash -s -- '$remote_dir' '$VPN_DOMAIN'" <<'REMOTE'
+          set -euo pipefail
+          trap 'rm -rf "$1"' EXIT
+          cd "$HOME/abessvpn-server"
+          test -f /var/lib/abess-raw-meter/enabled
+          bash "$1/install-raw-meter.sh" --prepare </dev/null
+          bash "$1/install-raw-meter.sh" --activate </dev/null
+          node "$1/probe-strict-production.mjs" "$2" </dev/null
+          echo 'STRICT_METER_NATIVE_UPDATE=SUCCESS'
+          REMOTE

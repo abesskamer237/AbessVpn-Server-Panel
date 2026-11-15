@@ -149,8 +149,10 @@ Le déploiement prépare le relais avant le changement d’amont Caddy, conserve
 une sauvegarde de `/etc/pam.d/sshd`, puis active le hook géré sans redémarrer le
 SSH administrateur. `scripts/test-ssh-raw-live.py` vérifie avec un vrai OpenSSH
 et PAM le refus avant authentification, l’impossibilité d’un contournement direct,
-le maintien de l’accès root, la suspension/réactivation et le quota exact après
-redémarrage. Le service de transport historique reste installé pour restauration,
+le maintien de l’accès root, la suspension/réactivation, le quota exact et les
+compteurs des appareils après redémarrage. Le workflow **Update strict VPN limits**
+permet de mettre à jour seulement le relais natif et de rejouer le contrôle public,
+sans reconstruire l’API ni redémarrer Caddy. Le service de transport historique reste installé pour restauration,
 mais les licences gérées doivent passer par le relais contrôlé.
 
 ## Données et validation

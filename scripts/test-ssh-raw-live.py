@@ -95,7 +95,8 @@ while True:
         relay.terminate();relay.wait(timeout=5)
         restart=subprocess.Popen(['node',str(ROOT/'ssh-raw-meter.mjs')],env=dict(os.environ,RAW_METER_HOST='127.0.0.1',RAW_METER_PORT='2081',RAW_METER_SSH_PORT='22222',RAW_METER_DATA=str(d/'data'),RAW_METER_POLICY=str(d/'policy.json'),RAW_METER_ACTIVE=str(d/'active')),stdout=log,stderr=log);processes.append(restart)
         time.sleep(1.2);assert usage()['usedBytes']==account['quotaBytes'] and usage()['online']==0
-        print('RAW_SSH_HARD_LIMITS_VERIFIED='+json.dumps({'transport':'rfc6455' if FRAMED else 'raw','realPamAdmission':True,'extraSessionRejectedBeforeAuthentication':True,'directSshBypassRejected':True,'adminUnaffected':True,'deviceBlockAndResume':True,'quotaBytes':exhausted['usedBytes'],'quotaNeverExceeded':True,'restartPreservesQuota':True}))
+        assert usage()['devices'][0]['usedBytes']==account['quotaBytes'],'Device consumption was lost on clean restart'
+        print('RAW_SSH_HARD_LIMITS_VERIFIED='+json.dumps({'transport':'rfc6455' if FRAMED else 'raw','realPamAdmission':True,'extraSessionRejectedBeforeAuthentication':True,'directSshBypassRejected':True,'adminUnaffected':True,'deviceBlockAndResume':True,'quotaBytes':exhausted['usedBytes'],'quotaNeverExceeded':True,'restartPreservesQuota':True,'deviceCountersSurviveRestart':True}))
     except Exception:
         log.flush();print((d/'relay.log').read_text());print('SSHD_ALIVE='+str(daemon.poll() is None));raise
     finally:

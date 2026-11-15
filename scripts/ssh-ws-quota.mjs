@@ -189,9 +189,10 @@ export class QuotaLedger {
       b.devices[deviceKey].activeSessions=Math.max(0,(b.devices[deviceKey].activeSessions||0)-1);
       b.devices[deviceKey].lastSeenAt=new Date().toISOString();
     }
-    if(b.sessions===0 && b.creditBytes>0) {
+    if(b.sessions===0) {
       // Refund unused reservations after clean connection closure.
       b.creditBytes=0;
+      // Also flush devices when quota was exhausted exactly (no refund).
       this._persistOne(id);
     }
     this.report();
@@ -226,7 +227,7 @@ export class QuotaLedger {
     syncAtomic(this.reportFile,{format:'abess-ssh-ws-usage-v1',observedAt:new Date().toISOString(),
       policyObservedAt:this.policy?new Date(this.policy.generatedAt).toISOString():null,accounts});
   }
-  close(){this._persist();this.report();}
+  close(){for(const id of Object.keys(this.balances))this._persistOne(id);this._persist();this.report();}
   online(id){return this.balances[id]?.sessions||0;}
   used(id){return this.balances[id]?.usedBytes||0;}
 }
