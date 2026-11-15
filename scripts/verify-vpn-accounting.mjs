@@ -28,12 +28,12 @@ async function transport(kind){
     const stream=createWebSocketStream(ws);stream.on('error',()=>{});return stream;
   }
   const socket=tls.connect({host:origin,port:443,servername:origin,rejectUnauthorized:true});socket.setNoDelay(true);
-  let header=Buffer.alloc(0),ready=false;
-  const stream=new Duplex({read(){socket.resume()},write(chunk,encoding,callback){socket.write(chunk,encoding,callback)},destroy(error,callback){socket.destroy();callback(error)}});
+  let header=Buffer.alloc(0),ready=false,pending=null;
+  const stream=new Duplex({read(){socket.resume()},write(chunk,encoding,callback){if(ready)socket.write(chunk,encoding,callback);else pending={chunk,encoding,callback}},destroy(error,callback){socket.destroy();callback(error)}});
   stream.on('error',()=>{});socket.on('error',e=>stream.destroy(e));socket.on('close',()=>stream.destroy());
   socket.once('secureConnect',()=>socket.write(`GET ${c.vpnPath} HTTP/1.1\r\nHost: ${origin}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nX-Abess-Device-ID: accounting-${run}-${kind}\r\n\r\n`));
   socket.on('data',chunk=>{
-    if(!ready){header=Buffer.concat([header,chunk]);const end=header.indexOf('\r\n\r\n');if(end<0){if(header.length>8192)stream.destroy(Error('Oversize upgrade'));return}assert(header.toString('latin1',0,end).startsWith('HTTP/1.1 101'));ready=true;chunk=header.subarray(end+4);header=null}
+    if(!ready){header=Buffer.concat([header,chunk]);const end=header.indexOf('\r\n\r\n');if(end<0){if(header.length>8192)stream.destroy(Error('Oversize upgrade'));return}assert(header.toString('latin1',0,end).startsWith('HTTP/1.1 101'));ready=true;chunk=header.subarray(end+4);header=null;if(pending){socket.write(pending.chunk,pending.encoding,pending.callback);pending=null}}
     if(chunk.length&&!stream.push(chunk))socket.pause();
   });
   return stream;

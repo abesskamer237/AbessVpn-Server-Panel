@@ -1,5 +1,5 @@
 name: Verify real VPN consumption
-# Synthetic administrator-owned accounts only; never modifies customer quotas.
+# Synthetic administrator-owned accounts only; verifies exact stream totals and hard limits.
 on:
   workflow_dispatch:
   push:
