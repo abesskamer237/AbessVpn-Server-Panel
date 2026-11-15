@@ -29,6 +29,7 @@ if(process.argv[2]==='--bridge'){
   }
 }else{
   const credentialsFile=process.argv[2],credentials=JSON.parse(fs.readFileSync(credentialsFile,'utf8')),domain=process.env.VPN_DOMAIN;
+  if(process.env.VPN_EDGE_OVERRIDE){const edge=process.env.VPN_EDGE_OVERRIDE.toLowerCase();assert(/^d[a-z0-9]+\.cloudfront\.net$/.test(edge));credentials.vpnHost=edge;credentials.vpnSni=edge;fs.writeFileSync(credentialsFile,JSON.stringify(credentials),{mode:0o600});}
   assert(/^[a-zA-Z0-9.-]+$/.test(domain||''));assert(credentials.port>0&&credentials.username.startsWith('abv_perf_'));
   const directory=fs.mkdtempSync(path.join(os.tmpdir(),'abess-performance-client-')),children=[],report={scope:'external Internet runner to VPS; not Orange Cameroon',rateCapMbps:100,cases:{},parallel:{},stability:{}};
   const script=fileURLToPath(import.meta.url),quote=s=>"'"+s.replaceAll("'","'\\''")+"'";

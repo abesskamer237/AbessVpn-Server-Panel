@@ -54,6 +54,23 @@ if(mode==='setup'){
     const config=await api(token,`admin/ssh/accounts/${account.id}/config`,'POST',{transport:'wss'});
     process.stdout.write(JSON.stringify({username,password,port,hostKey,vpnHost:config.host,vpnSni:config.sni,vpnPort:config.port,vpnPath:config.path}));
   }catch(e){try{await cleanup()}catch{}throw e}finally{if(token)revoke(token)}
+}else if(mode==='apply-edge'){
+  const edge=String(process.argv[4]||'').toLowerCase();assert(/^d[a-z0-9]+\.cloudfront\.net$/.test(edge));
+  const baseline=service();let token,previous,updated=false;const envFile=path.join(process.cwd(),'.env'),temp=envFile+'.edge-'+run;
+  try{
+    token=auth();const nodeId=JSON.parse(fs.readFileSync('/etc/abess-ssh-ws/node-bootstrap.json','utf8')).id;
+    const inventory=await api(token,'admin/ssh');previous=inventory.managedNodes.find(n=>n.id===nodeId);assert(previous,'Managed node missing');
+    const fingerprint=command('ssh-keygen',['-lf','/etc/ssh/ssh_host_ed25519_key.pub','-E','sha256']).split(/\s+/)[1];
+    const content=fs.readFileSync(envFile,'utf8');const oldLine=content.split('\n').find(l=>l.startsWith('SSH_WS_EDGE_HOST='))||null;
+    fs.mkdirSync('/var/lib/abess-edge-backups',{recursive:true,mode:0o700});fs.writeFileSync('/var/lib/abess-edge-backups/'+run+'.json',JSON.stringify({previousSni:previous.sni,previousEnvLine:oldLine,changedAt:new Date().toISOString()}),{mode:0o600});
+    const next=content.split('\n').filter(l=>!l.startsWith('SSH_WS_EDGE_HOST=')).join('\n').trimEnd()+'\nSSH_WS_EDGE_HOST='+JSON.stringify(edge)+'\n';
+    fs.writeFileSync(temp,next,{mode:0o600,flag:'wx'});
+    const body={enabled:true,fingerprint,sni:edge,port:previous.port,path:previous.path};
+    const result=await api(token,'admin/nodes/'+nodeId+'/ssh-ws','PUT',body);assert.equal(result.sshWsSni,edge);updated=true;
+    try{fs.renameSync(temp,envFile)}catch(e){await api(token,'admin/nodes/'+nodeId+'/ssh-ws','PUT',{...body,sni:previous.sni});throw e}
+    const check=await api(token,'admin/ssh');assert.equal(check.managedNodes.find(n=>n.id===nodeId).sni,edge);
+    console.log('VPN_EDGE_UPDATED='+JSON.stringify({hostname:edge,configurationVerified:true,environmentPersisted:true,relayPidUnchanged:baseline.MainPID===service().MainPID}));
+  }finally{if(fs.existsSync(temp))fs.unlinkSync(temp);if(token)revoke(token)}
 }else if(mode==='cleanup')console.log('VPN_HOST_PERFORMANCE='+JSON.stringify(await cleanup()));
 else if(mode==='serve'){
   const server=await startTrafficServer({rateMbps:100,budgetBytes:512*1024**2});

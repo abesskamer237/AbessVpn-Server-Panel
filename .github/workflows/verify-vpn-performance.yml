@@ -1,5 +1,5 @@
 name: Verify VPN speed and stability
-# Keep the administrative baseline authentication isolated from canary askpass.
+# Verify the operator-provided CloudFront endpoint before persisting its routing.
 on:
   workflow_dispatch:
   push:
@@ -105,11 +105,27 @@ jobs:
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_PORT: ${{ vars.VPS_PORT }}
           VPN_DOMAIN: ${{ vars.VPN_DOMAIN }}
+          VPN_EDGE_OVERRIDE: d2rje676b1sz0e.cloudfront.net
         run: |
           set -euo pipefail
           export ABESS_SSH_COMMAND="$HOME/.local/bin/abess-ssh"
           export VPN_PERFORMANCE_REPORT="$RUNNER_TEMP/abess-vpn-performance-report.json"
           node scripts/verify-vpn-performance.mjs "$RUNNER_TEMP/abess-performance-credentials.json"
+      - name: Persist the CloudFront endpoint only after its SSH identity and stability pass
+        env:
+          VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD || secrets.VPS_PASSWORD }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ vars.VPS_PORT }}
+        run: |
+          set -euo pipefail
+          node -e 'const r=require(process.argv[1]);if(!r.exportedRouteVerified||r.stability.unexpectedDisconnects!==0)process.exit(1)' "$RUNNER_TEMP/abess-vpn-performance-report.json"
+          remote_dir="/tmp/abess-performance-${{ github.run_id }}"
+          "$HOME/.local/bin/abess-ssh" -p "${VPS_PORT:-22}" "${VPS_USER}@${VPS_HOST}" "bash -s -- '$remote_dir' '${{ github.run_id }}'" <<'REMOTE'
+          set -euo pipefail
+          cd "$HOME/abessvpn-server"
+          node "$1/vpn-performance-host.mjs" apply-edge "$2" d2rje676b1sz0e.cloudfront.net </dev/null
+          REMOTE
       - name: Collect host health and remove the canary, listener and credentials
         if: always()
         env:
