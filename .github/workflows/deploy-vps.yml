@@ -1,5 +1,5 @@
 name: Deploy ABESS VPN to VPS
-# Production rollout marker: ABESS VPN 3.1 secure optional Telegram configuration
+# Production rollout marker: ABESS VPN 3.1 authenticated SSH session identity
 
 on:
   workflow_dispatch:
@@ -51,6 +51,11 @@ jobs:
 
       - name: Verify progressive session enforcement
         run: python3 scripts/test-ssh-session-guard.py
+
+      - name: Verify authenticated sessions with real SSH forwarding
+        run: |
+          docker build -f docker/ssh-session-test.Dockerfile -t abess-ssh-session-test:ci .
+          docker run --rm --network none --cap-add SYS_PTRACE abess-ssh-session-test:ci
 
       - name: Security regression tests
         run: node --import tsx scripts/test-security.mjs

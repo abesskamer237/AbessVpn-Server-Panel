@@ -62,6 +62,11 @@ Les annonces actives compatibles avec l’audience sont aussi accessibles dans l
 centre. Un dépassement de sessions observé est signalé sans tronquer son affichage
 à la limite configurée.
 
+Les sessions comptabilisées sont authentifiées avec le compte Linux géré.
+Les processus de supervision SSH privilégiés et les connexions `[net]` ou
+`[preauth]` en attente d’authentification sont exclus du compteur et du trafic
+facturé. Les cumuls historiques restent conservés lors de cette correction.
+
 **Telegram** exige un bot configuré et vérifié avec `TELEGRAM_BOT_TOKEN`. Chaque
 revendeur associe son compte depuis Notifications, suit un lien personnel valable
 dix minutes dans une conversation privée, puis active le canal et lance un test.

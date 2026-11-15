@@ -7,6 +7,7 @@ on:
       - .github/workflows/update-traffic-observer.yml
       - scripts/ssh-ws-passive-traffic.py
       - scripts/install-traffic-observer.sh
+      - scripts/ssh_session_identity.py
       - scripts/test-ssh-socket-traffic.py
 permissions:
   contents: read
@@ -86,5 +87,5 @@ jobs:
           set -euo pipefail
           remote_dir="$("$HOME/.local/bin/abess-ssh" -p "${VPS_PORT:-22}" "${VPS_USER}@${VPS_HOST}" 'mktemp -d /tmp/abess-traffic-update.XXXXXXXX')"
           [[ "$remote_dir" =~ ^/tmp/abess-traffic-update\.[A-Za-z0-9]+$ ]]
-          "$HOME/.local/bin/abess-scp" -P "${VPS_PORT:-22}" scripts/ssh-ws-passive-traffic.py scripts/install-traffic-observer.sh scripts/test-ssh-socket-traffic.py "${VPS_USER}@${VPS_HOST}:$remote_dir/"
+          "$HOME/.local/bin/abess-scp" -P "${VPS_PORT:-22}" scripts/ssh-ws-passive-traffic.py scripts/ssh_session_identity.py scripts/install-traffic-observer.sh scripts/test-ssh-socket-traffic.py "${VPS_USER}@${VPS_HOST}:$remote_dir/"
           "$HOME/.local/bin/abess-ssh" -p "${VPS_PORT:-22}" "${VPS_USER}@${VPS_HOST}" "bash '$remote_dir/install-traffic-observer.sh' </dev/null; result=\$?; rm -rf '$remote_dir'; exit \$result"

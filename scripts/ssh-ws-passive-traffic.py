@@ -13,8 +13,9 @@ are excluded to avoid counting the same tunnel payload a second time.
 Linux/root only. Standard library only.
 """
 from __future__ import annotations
-import hashlib, json, os, re, socket, struct, subprocess, threading, time, urllib.request
+import grp, hashlib, json, os, re, socket, struct, subprocess, threading, time, urllib.request
 from pathlib import Path
+from ssh_session_identity import read_authenticated_process
 from typing import Dict, Tuple, Optional
 
 PORT=int(os.environ.get("ABESS_OBSERVER_PORT","8080"))
@@ -169,15 +170,13 @@ def parse_packet(frame:bytes):
 
 def ssh_process_accounts(users):
     result={}
+    managed_gid=grp.getgrnam('abessvpn').gr_gid
     for proc in Path("/proc").iterdir():
         if not proc.name.isdigit():continue
         try:
-            comm=(proc/"comm").read_text().strip()
-            if not (comm=="sshd" or comm.startswith("sshd-")):continue
-            cmd=(proc/"cmdline").read_bytes().replace(b"\x00",b" ").decode(errors="replace")
-            match=re.search(r"sshd(?:-session)?: ([A-Za-z0-9_-]+)(?:@| \[)",cmd)
-            if match and match.group(1) in users:result[int(proc.name)]=users[match.group(1)]
-        except OSError:pass
+            identity=read_authenticated_process(int(proc.name),managed_gid)
+            if identity and identity['username'] in users:result[int(proc.name)]=users[identity['username']]
+        except (OSError,KeyError,StopIteration,ValueError):pass
     return result
 
 def ssh_socket_samples(output,processes,ports=SSH_PORTS):

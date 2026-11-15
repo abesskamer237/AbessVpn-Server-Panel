@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Read-only session identity diagnostics; never prints accounts or endpoints."""
-import collections, grp, importlib.util, json, pwd, re, subprocess
+import collections, grp, importlib.util, json, pwd, re, subprocess, sys
 from pathlib import Path
 
+sys.path.insert(0,'/usr/local/lib/abess')
 spec=importlib.util.spec_from_file_location('guard','/usr/local/lib/abess/ssh-session-guard.py')
 guard=importlib.util.module_from_spec(spec);spec.loader.exec_module(guard)
 policy=json.loads(guard.POLICY.read_text())

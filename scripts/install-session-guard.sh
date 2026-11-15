@@ -7,6 +7,7 @@ before="$(systemctl show -p MainPID --value willy-ssh-ws.service)"
 install -d -m 0755 /usr/local/lib/abess
 install -d -m 0700 /var/lib/abess-session-guard
 install -m 0755 "$source_dir/ssh-session-guard.py" /usr/local/lib/abess/ssh-session-guard.py
+install -m 0644 "$source_dir/ssh_session_identity.py" /usr/local/lib/abess/ssh_session_identity.py
 cat > /etc/systemd/system/abess-session-guard.service <<'UNIT'
 [Unit]
 Description=ABESS managed SSH connection limits (new sessions only)

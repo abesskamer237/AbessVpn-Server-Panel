@@ -1,27 +1,19 @@
 #!/usr/bin/env python3
 """Enforce new managed SSH sessions only; preserve pre-activation connections."""
-import grp,json,os,pwd,re,signal,subprocess,time
+import grp,json,os,re,signal,subprocess,time
 from pathlib import Path
+from ssh_session_identity import read_authenticated_process
 POLICY=Path(os.environ.get('ABESS_POLICY_FILE','/var/lib/abess-ssh-ws/policy/gateway-policy.json'))
 STATUS=Path(os.environ.get('ABESS_GUARD_STATUS','/var/lib/abess-session-guard/status.json'))
 USER=re.compile(r'^abv_[a-z0-9][a-z0-9_-]{2,27}$')
 ACCOUNT=re.compile(r'^ssh_[0-9a-f-]{36}$')
-BOOT_TIME=int(next(l.split()[1] for l in Path('/proc/stat').read_text().splitlines() if l.startswith('btime ')))
-CLOCK_TICKS=os.sysconf('SC_CLK_TCK')
 
 def read_process(pid):
-    p=Path('/proc')/str(pid)
-    stat=(p/'stat').read_text();fields=stat[stat.rindex(')')+2:].split()
-    uid=int(next(l.split()[1] for l in (p/'status').read_text().splitlines() if l.startswith('Uid:')))
-    cmd=(p/'cmdline').read_bytes().replace(b'\x00',b' ').decode(errors='replace')
-    match=re.search(r'sshd(?:-session)?: (abv_[a-z0-9_-]+)(?:@| \[)',cmd)
-    if not match or not USER.fullmatch(match.group(1)) or uid<1000:return None
-    user=pwd.getpwnam(match.group(1))
-    if user.pw_uid!=uid or user.pw_gid!=grp.getgrnam('abessvpn').gr_gid:return None
-    return {'pid':pid,'uid':uid,'username':user.pw_name,'startTicks':int(fields[19]),'startedAt':BOOT_TIME+int(fields[19])/CLOCK_TICKS}
+    return read_authenticated_process(pid,grp.getgrnam('abessvpn').gr_gid)
 
-def sessions_snapshot():
-    out=subprocess.check_output(['ss','-tinpeH','state','established','( sport = :22 or sport = :2222 )'],text=True,timeout=5)
+def sessions_snapshot(ports=(22,2222)):
+    port_filter='( '+' or '.join('sport = :'+str(int(p)) for p in ports)+' )'
+    out=subprocess.check_output(['ss','-tinpeH','state','established',port_filter],text=True,timeout=5)
     sessions={}
     for line in out.splitlines():
         inode=re.search(r'\bino:(\d+)',line)

@@ -9,6 +9,7 @@ before="$(systemctl show -p MainPID --value willy-ssh-ws.service)"
 install -d -m 0755 /usr/local/lib/abess
 install -d -m 0700 /var/lib/abess-traffic-observer
 install -m 0755 "$source_dir/ssh-ws-passive-traffic.py" /usr/local/lib/abess/ssh-ws-passive-traffic.py
+install -m 0644 "$source_dir/ssh_session_identity.py" /usr/local/lib/abess/ssh_session_identity.py
 cat > /etc/systemd/system/abess-traffic-observer.service <<'UNIT'
 [Unit]
 Description=ABESS passive SSH transport traffic observer

@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-import importlib.util,time,unittest
+import importlib.util,tempfile,time,unittest
+from types import SimpleNamespace
 from datetime import datetime,timezone
 from pathlib import Path
 spec=importlib.util.spec_from_file_location('guard',Path(__file__).with_name('ssh-session-guard.py'));g=importlib.util.module_from_spec(spec);spec.loader.exec_module(g)
+from ssh_session_identity import read_authenticated_process
 class GuardTests(unittest.TestCase):
     def setUp(self):
         self.now=time.time();self.since=self.now-10
@@ -27,4 +29,20 @@ class GuardTests(unittest.TestCase):
         self.assertEqual(sent,[])
         self.assertTrue(g.terminate_session(item,lambda _:dict(item),lambda *x:sent.append(x)))
         self.assertEqual(sent[0][0],5)
+    def test_authenticated_forwarding_only_and_preauth_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);proc=root/'123';proc.mkdir()
+            (proc/'comm').write_text('sshd\n');(proc/'exe').symlink_to('/usr/sbin/sshd')
+            (proc/'stat').write_text('123 (sshd) '+' '.join(['S','1']+['0']*17+['12345']))
+            account=SimpleNamespace(pw_name='abv_alice',pw_uid=1001,pw_gid=987)
+            def read(title,uid=1001):
+                (proc/'cmdline').write_bytes(title.encode()+b'\x00')
+                (proc/'status').write_text('Uid:\t'+'\t'.join([str(uid)]*4)+'\n')
+                return read_authenticated_process(123,987,root,lambda _:account)
+            for title in ['sshd: abv_alice','sshd: abv_alice@notty']:
+                self.assertEqual(read(title)['username'],'abv_alice')
+            for title,uid in [('sshd: abv_alice [priv]',0),('sshd: abv_alice [net]',105),('sshd: abv_alice [preauth]',105),('sshd: abv_alice@notty',0),('sshd: abv_alice@notty',105)]:
+                self.assertIsNone(read(title,uid))
+            account.pw_gid=1
+            self.assertIsNone(read('sshd: abv_alice'))
 if __name__=='__main__':unittest.main()
