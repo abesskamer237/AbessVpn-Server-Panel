@@ -72,6 +72,15 @@ l’API Telegram ; les échecs sont réessayés au maximum trois fois. Les envoi
 par une file durable et ont lieu hors des transactions PostgreSQL. Une restauration
 annule les envois encore en attente pour éviter de renvoyer de vieilles alertes.
 
+Pour le bot choisi, **@AbessV2raybot**, enregistrer son jeton BotFather dans
+le secret GitHub Actions `TELEGRAM_BOT_TOKEN` du dépôt, puis lancer le workflow
+**Deploy ABESS VPN to VPS**. Ne pas mettre le jeton dans une issue, le code ou
+le chat. Le déploiement garde la configuration existante si ce secret est absent.
+Une fois le bot vérifié par Telegram, chaque revendeur doit encore associer son
+compte dans **Notifications** et activer ses alertes. `TELEGRAM_ADMIN_IDS` reste
+une liste séparée, gérée sur le VPS, pour l’administration du bot ; aucune
+association de notifications n’accorde ce privilège.
+
 **E-mail** reste désactivé, comme convenu, en l’absence de service d’envoi. Aucun
 mail n’est simulé ni déclaré livré. Les paiements MTN MoMo / Orange Money restent
 également **manuels** : aucune déclaration client ne crédite un compte.

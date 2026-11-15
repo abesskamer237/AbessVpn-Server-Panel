@@ -1,5 +1,5 @@
 name: Deploy ABESS VPN to VPS
-# Production rollout marker: ABESS VPN 3.1 bounded HTTPS readiness after Caddy recreation
+# Production rollout marker: ABESS VPN 3.1 secure optional Telegram configuration
 
 on:
   workflow_dispatch:
@@ -123,6 +123,7 @@ jobs:
           ADMIN_NAME: ${{ vars.ADMIN_NAME }}
           ADMIN_INITIAL_PASSWORD: ${{ secrets.ADMIN_INITIAL_PASSWORD }}
           MASTER_SECRET: ${{ secrets.MASTER_SECRET }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         run: |
           set -euo pipefail
           node <<'NODE'
@@ -173,6 +174,14 @@ jobs:
             ADMIN_INITIAL_PASSWORD: adminInitialPassword,
             MASTER_SECRET: masterSecret
           };
+          // Absence preserves the VPS setting. Never serialize an empty token
+          // over a working bot, and never print a token into deployment logs.
+          const telegramToken = process.env.TELEGRAM_BOT_TOKEN?.trim();
+          if (telegramToken) {
+            console.log(`::add-mask::${telegramToken}`);
+            if (!/^\d+:[A-Za-z0-9_-]+$/.test(telegramToken)) throw new Error('Invalid TELEGRAM_BOT_TOKEN format.');
+            values.TELEGRAM_BOT_TOKEN = telegramToken;
+          }
           const envText = Object.entries(values)
             .map(([key, value]) => key + '=' + JSON.stringify(value))
             .join('\n') + '\n';
@@ -368,6 +377,9 @@ jobs:
               key="${existing_line%%=*}"
               [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
               case "$key" in VPN_DOMAIN|SSH_WS_HOST|ADMIN_EMAIL|ADMIN_NAME|ACME_EMAIL) continue ;; esac
+              if [[ "$key" == TELEGRAM_BOT_TOKEN ]] && grep -q '^TELEGRAM_BOT_TOKEN=' .env.new; then
+                continue
+              fi
               grep -v "^${key}=" .env.new > .env.merged || true
               printf '%s\n' "$existing_line" >> .env.merged
               mv .env.merged .env.new
