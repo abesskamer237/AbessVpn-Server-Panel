@@ -1,5 +1,5 @@
 name: Diagnose VPN performance
-# Verify raw SSH wire compatibility and PAM readiness before strict admission.
+# Verify raw upgrade compatibility with and without WebSocket key headers.
 on:
   workflow_dispatch:
   push:
