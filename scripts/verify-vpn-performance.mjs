@@ -45,8 +45,11 @@ if(process.argv[2]==='--bridge'){
       executable='ssh';const bridge=[process.execPath,script,'--bridge',credentialsFile,domain,route,kind,'perf-'+process.env.GITHUB_RUN_ID+'-'+label].map(quote).join(' ');
       args=['-p','443',...common,'-o','ServerAliveInterval=0','-o','HostKeyAlias=abess-performance','-o','StrictHostKeyChecking=yes','-o','UserKnownHostsFile='+directory+'/known_hosts','-o','PreferredAuthentications=password','-o','PubkeyAuthentication=no','-o','NumberOfPasswordPrompts=1','-o','ProxyCommand='+bridge,credentials.username+'@abess-performance'];
     }
-    const childEnv={...process.env,DISPLAY:'abess-performance',SSH_ASKPASS:directory+'/askpass',SSH_ASKPASS_REQUIRE:'force',ABESS_PERFORMANCE_PASSWORD:credentials.password};
-    if(kind!=='direct')for(const key of ['VPS_SSH_PASSWORD','VPS_PASSWORD','VPS_SSH_KEY','SSHPASS'])delete childEnv[key];
+    const childEnv={...process.env};
+    if(kind!=='direct'){
+      Object.assign(childEnv,{DISPLAY:'abess-performance',SSH_ASKPASS:directory+'/askpass',SSH_ASKPASS_REQUIRE:'force',ABESS_PERFORMANCE_PASSWORD:credentials.password});
+      for(const key of ['VPS_SSH_PASSWORD','VPS_PASSWORD','VPS_SSH_KEY','SSHPASS'])delete childEnv[key];
+    }
     const child=spawn(executable,args,{stdio:['ignore','ignore','pipe'],env:childEnv});
     child.diagnostic='';child.stderr.on('data',c=>child.diagnostic=(child.diagnostic+c.toString()).slice(-1000));children.push(child);
     let echo;

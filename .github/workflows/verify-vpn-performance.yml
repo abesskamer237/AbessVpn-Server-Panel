@@ -1,4 +1,5 @@
 name: Verify VPN speed and stability
+# Keep the administrative baseline authentication isolated from canary askpass.
 on:
   workflow_dispatch:
   push:
