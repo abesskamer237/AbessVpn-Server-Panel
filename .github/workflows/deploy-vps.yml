@@ -1,5 +1,5 @@
 name: Deploy ABESS VPN to VPS
-# Production rollout marker: strict quotas for raw and RFC6455 SSH transports
+# Production rollout marker: real consumption visibility and precise reseller totals
 
 on:
   workflow_dispatch:

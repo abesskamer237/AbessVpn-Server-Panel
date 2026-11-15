@@ -1,14 +1,14 @@
 import {useEffect,useMemo,useState,type FormEvent} from 'react';
 import {BadgeDollarSign,Check,Copy,CornerDownRight,Download,Eye,EyeOff,KeyRound,Mail,MoreHorizontal,Network,Pause,Play,Plus,Search,Store,Tag,Trash2,UserPlus,Users,Wallet,Wand2,X} from 'lucide-react';
 import type {Reseller,SshAccount,Transaction,User} from '../panelTypes';
-import {accountStatus,bytesToGb,csvDownload,fmtDate,fmtDateTime,money} from '../panelTypes';
+import {accountStatus,bytesToGb,csvDownload,fmtDate,fmtDateTime,money,humanTraffic} from '../panelTypes';
 
 type Props={
   resellers:Reseller[];accounts:SshAccount[];transactions:Transaction[];busy:boolean;currentUser:User;
   request:(url:string,method?:string,body?:unknown)=>Promise<any>;
   refresh:()=>Promise<void>;onOpenClient?:(id:string)=>void;
 };
-type Row=Reseller&{clients:number;branchClients:number;active:number;soldGb:number;usedGb:number;revenue:number;margin:number};
+type Row=Reseller&{clients:number;branchClients:number;active:number;soldGb:number;usedBytes:number|null;revenue:number;margin:number};
 type DrawerTab='overview'|'clients'|'ledger'|'settings';
 
 const CHARS='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789@#%+=._-';
@@ -40,7 +40,7 @@ export function ResellerCenter({resellers,accounts,transactions,busy,currentUser
     const branch=accounts.filter(a=>a.resellerId&&branchIds.has(a.resellerId)&&a.managed);
     const soldGb=mine.reduce((n,a)=>n+a.quotaBytes,0)/1024**3;
     const revenue=soldGb*(r.pricePerGbCfa||0)+mine.length*(r.pricePerLicenceCfa||0);
-    return {...r,clients:mine.length,branchClients:branch.length,active:mine.filter(a=>a.effectiveEnabled).length,soldGb,usedGb:mine.reduce((n,a)=>n+(a.usedBytes||0),0)/1024**3,revenue,margin:revenue-soldGb*(r.costPerGbCfa||0)};
+    return {...r,clients:mine.length,branchClients:branch.length,active:mine.filter(a=>a.effectiveEnabled).length,soldGb,usedBytes:mine.some(a=>a.usedBytes!=null)?mine.reduce((n,a)=>n+(a.usedBytes||0),0):null,revenue,margin:revenue-soldGb*(r.costPerGbCfa||0)};
   }),[resellers,accounts]);
 
   const filtered=useMemo(()=>rows.filter(r=>{
@@ -133,7 +133,7 @@ export function ResellerCenter({resellers,accounts,transactions,busy,currentUser
           </div></td>
           <td className="num"><span className="table-primary" style={{color:Number(r.credits)<5?'var(--warning)':undefined}}>{Number(r.credits).toFixed(2)}</span> <span className="table-secondary">Go</span></td>
           <td className="num"><span className="table-primary">{r.active}</span><span className="table-secondary"> / {r.clients}</span>{(r.descendantCount||0)>0&&<div className="table-secondary">{r.descendantCount} sous-revendeur(s)</div>}</td>
-          <td className="num">{r.usedGb.toFixed(1)} <span className="table-secondary">/ {r.soldGb.toFixed(1)} Go</span></td>
+          <td className="num">{humanTraffic(r.usedBytes)} <span className="table-secondary">/ {r.soldGb.toFixed(1)} Go</span></td>
           <td className="num"><div className="table-primary">{money(r.revenue)}</div><div className="table-secondary">marge {money(r.margin)}</div></td>
           <td><span className={'badge '+(r.status==='active'?'badge-success':'badge-warning')}>{r.status==='active'?'Actif':'Suspendu'}</span></td>
           <td onClick={e=>e.stopPropagation()}><div className="row-actions">{manageable?<>
@@ -158,7 +158,7 @@ export function ResellerCenter({resellers,accounts,transactions,busy,currentUser
           <div className="detail-grid">
             <div className="detail-item"><label>Solde</label><strong className="num">{Number(selected.credits).toFixed(2)} Go</strong></div>
             <div className="detail-item"><label>Clients actifs</label><strong className="num">{selected.active} / {selected.clients}</strong></div>
-            <div className="detail-item"><label>Vendu / consommé</label><strong className="num">{selected.soldGb.toFixed(1)} / {selected.usedGb.toFixed(1)} Go</strong></div>
+            <div className="detail-item"><label>Vendu / consommé</label><strong className="num">{selected.soldGb.toFixed(1)} Go / {humanTraffic(selected.usedBytes)}</strong></div>
             <div className="detail-item"><label>CA · marge estimés</label><strong className="num">{money(selected.revenue)} · {money(selected.margin)}</strong></div>
             <div className="detail-item"><label>Sous-revendeurs</label><strong>{childrenOf(selected).length} direct(s) · {selected.descendantCount||0} au total</strong></div>
             <div className="detail-item"><label>Dernière connexion</label><strong>{selected.lastLoginAt?fmtDateTime(selected.lastLoginAt):'Jamais'}</strong></div>

@@ -33,7 +33,7 @@ async function transport(kind){
   stream.on('error',()=>{});socket.on('error',e=>stream.destroy(e));socket.on('close',()=>stream.destroy());
   socket.once('secureConnect',()=>socket.write(`GET ${c.vpnPath} HTTP/1.1\r\nHost: ${origin}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nX-Abess-Device-ID: accounting-${run}-${kind}\r\n\r\n`));
   socket.on('data',chunk=>{
-    if(!ready){header=Buffer.concat([header,chunk]);const end=header.indexOf('\r\n\r\n');if(end<0){if(header.length>8192)stream.destroy(Error('Oversize upgrade'));return}assert(header.toString('latin1',0,end).startsWith('HTTP/1.1 101'));ready=true;chunk=header.subarray(end+4);header=null;if(pending){socket.write(pending.chunk,pending.encoding,pending.callback);pending=null}}
+    if(!ready){header=Buffer.concat([header,chunk]);const end=header.indexOf('\r\n\r\n');if(end<0){if(header.length>8192)stream.destroy(Error('Oversize upgrade'));return}if(!header.toString('latin1',0,end).startsWith('HTTP/1.1 101')){stream.destroy(Error('Raw HTTP upgrade refused'));return}ready=true;chunk=header.subarray(end+4);header=null;if(pending){socket.write(pending.chunk,pending.encoding,pending.callback);pending=null}}
     if(chunk.length&&!stream.push(chunk))socket.pause();
   });
   return stream;
