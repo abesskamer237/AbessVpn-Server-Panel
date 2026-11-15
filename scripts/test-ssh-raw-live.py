@@ -5,6 +5,7 @@ from datetime import datetime,timezone
 from pathlib import Path
 assert os.environ.get('ABESS_ISOLATED_SSH_TEST')=='yes'
 ROOT=Path(__file__).parent
+FRAMED=os.environ.get('ABESS_PROBE_FRAMED')=='yes'
 def run(*args):subprocess.run(args,check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
 def wait(fn):
     for _ in range(150):
@@ -54,8 +55,10 @@ while True:
   else:os.write(1,data)
 ''')
     base=['ssh','-p','22222','-i',str(d/'key'),'-o','StrictHostKeyChecking=no','-o','UserKnownHostsFile=/dev/null','-o','LogLevel=ERROR','-o','IdentitiesOnly=yes','-o','BatchMode=yes','-o','ConnectTimeout=4']
+    (d/'framed-proxy.mjs').write_text("import {createRequire} from 'node:module';const {WebSocket,createWebSocketStream}=createRequire('/tests/package.json')('ws');const w=new WebSocket('ws://127.0.0.1:2081/legacy-common-path',{perMessageDeflate:false,headers:{'X-Abess-Device-ID':process.argv[2],'X-Abess-Device-Name':'Test phone'}});const s=createWebSocketStream(w);w.on('error',()=>process.exit(1));w.on('close',()=>process.exit(0));s.on('error',()=>process.exit(1));process.stdin.pipe(s).pipe(process.stdout);")
     def client(device,port):
-        p=subprocess.Popen(base+['-o',f'ProxyCommand=/usr/local/bin/python3 {d}/proxy.py {device}','-N','-L',str(port)+':127.0.0.1:24000','abv_rawlive@127.0.0.1'],stdout=subprocess.DEVNULL,stderr=subprocess.PIPE);processes.append(p);return p
+        proxy=f'node {d}/framed-proxy.mjs {device}' if FRAMED else f'/usr/local/bin/python3 {d}/proxy.py {device}'
+        p=subprocess.Popen(base+['-o','ProxyCommand='+proxy,'-N','-L',str(port)+':127.0.0.1:24000','abv_rawlive@127.0.0.1'],stdout=subprocess.DEVNULL,stderr=subprocess.PIPE);processes.append(p);return p
     def usage():return json.loads((d/'data/usage-live.json').read_text())['accounts'][0]
     try:
         wait(lambda:Path('/run/abess-raw-meter/control.sock').exists())
@@ -92,7 +95,7 @@ while True:
         relay.terminate();relay.wait(timeout=5)
         restart=subprocess.Popen(['node',str(ROOT/'ssh-raw-meter.mjs')],env=dict(os.environ,RAW_METER_HOST='127.0.0.1',RAW_METER_PORT='2081',RAW_METER_SSH_PORT='22222',RAW_METER_DATA=str(d/'data'),RAW_METER_POLICY=str(d/'policy.json'),RAW_METER_ACTIVE=str(d/'active')),stdout=log,stderr=log);processes.append(restart)
         time.sleep(1.2);assert usage()['usedBytes']==account['quotaBytes'] and usage()['online']==0
-        print('RAW_SSH_HARD_LIMITS_VERIFIED='+json.dumps({'realPamAdmission':True,'extraSessionRejectedBeforeAuthentication':True,'directSshBypassRejected':True,'adminUnaffected':True,'deviceBlockAndResume':True,'quotaBytes':exhausted['usedBytes'],'quotaNeverExceeded':True,'restartPreservesQuota':True}))
+        print('RAW_SSH_HARD_LIMITS_VERIFIED='+json.dumps({'transport':'rfc6455' if FRAMED else 'raw','realPamAdmission':True,'extraSessionRejectedBeforeAuthentication':True,'directSshBypassRejected':True,'adminUnaffected':True,'deviceBlockAndResume':True,'quotaBytes':exhausted['usedBytes'],'quotaNeverExceeded':True,'restartPreservesQuota':True}))
     except Exception:
         log.flush();print((d/'relay.log').read_text());print('SSHD_ALIVE='+str(daemon.poll() is None));raise
     finally:

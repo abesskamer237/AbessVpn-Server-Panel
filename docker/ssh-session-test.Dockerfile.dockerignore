@@ -1,0 +1,13 @@
+**
+!scripts/
+!scripts/ssh_session_identity.py
+!scripts/ssh-session-guard.py
+!scripts/ssh-ws-passive-traffic.py
+!scripts/test-ssh-session-live.py
+!scripts/ssh-raw-meter.mjs
+!scripts/ssh-ws-quota.mjs
+!scripts/ssh-pam-admission.py
+!scripts/test-ssh-raw-live.py
+!node_modules/
+!node_modules/ws/
+!node_modules/ws/**

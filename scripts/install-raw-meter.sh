@@ -57,7 +57,8 @@ printf '%s\n' "$checksum" > /var/lib/abess-raw-meter/code.sha256
 if [[ "$mode" = --activate ]]; then
   [[ -f /etc/pam.d/sshd ]]
   /usr/sbin/sshd -t
-  /usr/sbin/sshd -T | grep -qx 'usepam yes' || { echo 'UsePAM must already be enabled before strict admission.' >&2; exit 1; }
+  ssh_config="$(/usr/sbin/sshd -T)"
+  grep -qx 'usepam yes' <<< "$ssh_config" || { echo 'UsePAM must already be enabled before strict admission.' >&2; exit 1; }
   if [[ ! -f /var/lib/abess-raw-meter/pam-sshd.original ]]; then cp -p /etc/pam.d/sshd /var/lib/abess-raw-meter/pam-sshd.original; chmod 0600 /var/lib/abess-raw-meter/pam-sshd.original; fi
   # PAM reads this account hook on each login; no administrator SSH restart.
   python3 - <<'PY'

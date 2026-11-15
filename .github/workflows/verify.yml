@@ -56,6 +56,7 @@ jobs:
           docker build -f docker/ssh-session-test.Dockerfile -t abess-ssh-session-test:ci .
           docker run --rm --network none --cap-add SYS_PTRACE abess-ssh-session-test:ci
           docker run --rm --network none --cap-add SYS_PTRACE abess-ssh-session-test:ci python3 test-ssh-raw-live.py
+          docker run --rm --network none --cap-add SYS_PTRACE -e ABESS_PROBE_FRAMED=yes abess-ssh-session-test:ci python3 test-ssh-raw-live.py
 
       - name: Security regression tests
         run: node --import tsx scripts/test-security.mjs

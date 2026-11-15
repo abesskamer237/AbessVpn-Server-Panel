@@ -10,9 +10,15 @@ import crypto from 'node:crypto';
 import assert from 'node:assert/strict';
 import {spawn,execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
+import {createRequire} from 'node:module';
 const delay=ms=>new Promise(r=>setTimeout(r,ms));
 if(process.argv[2]==='--stdio-bridge'){
   const domain=process.argv[3],device=process.argv[4];
+  if(process.argv[5]==='framed'){
+    const {WebSocket,createWebSocketStream}=createRequire('/opt/abess-panel/package.json')('ws');
+    const ws=new WebSocket('wss://'+domain+'/ssh-ws/strict-verification',{perMessageDeflate:false,headers:{'X-Abess-Device-ID':device,'X-Abess-Device-Name':'Controle serveur'}});
+    const stream=createWebSocketStream(ws);ws.on('error',()=>process.exit(1));ws.on('close',()=>process.exit(0));stream.on('error',()=>process.exit(1));process.stdin.pipe(stream).pipe(process.stdout);
+  }else{
   const socket=tls.connect({host:domain,port:443,servername:domain,rejectUnauthorized:true});let headers=Buffer.alloc(0),ready=false;
   socket.setTimeout(10000,()=>socket.destroy());
   socket.once('secureConnect',()=>socket.write(`GET /ssh-ws/strict-verification HTTP/1.1\r\nHost: ${domain}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nX-Abess-Device-ID: ${device}\r\nX-Abess-Device-Name: Controle serveur\r\n\r\n`));
@@ -24,6 +30,7 @@ if(process.argv[2]==='--stdio-bridge'){
     ready=true;socket.setTimeout(0);if(headers.length>end+4)process.stdout.write(headers.subarray(end+4));headers=null;process.stdin.pipe(socket);
   });
   process.stdout.on('drain',()=>socket.resume());socket.on('error',()=>process.exit(1));socket.on('close',()=>process.exit(0));
+  }
 }else{
   assert(process.getuid()===0,'Run on the intended production host as root');
   const domain=process.argv[2];assert(/^[A-Za-z0-9.-]+$/.test(domain));
@@ -37,8 +44,8 @@ if(process.argv[2]==='--stdio-bridge'){
   fs.writeFileSync(path.join(directory,'askpass'),'#!/bin/sh\nprintf "%s" "$ABESS_PROBE_PASSWORD"\n',{mode:0o700});
   const publicKey=fs.readFileSync('/etc/ssh/ssh_host_ed25519_key.pub','utf8').trim().split(/\s+/).slice(0,2).join(' ');
   fs.writeFileSync(path.join(directory,'known_hosts'),'abess-strict-probe,[abess-strict-probe]:443 '+publicKey+'\n',{mode:0o600});
-  const launch=(forwardPort,echoPort)=>{
-    const args=['-N','-p','443','-o','HostKeyAlias=abess-strict-probe','-o','StrictHostKeyChecking=yes','-o','UserKnownHostsFile='+path.join(directory,'known_hosts'),'-o','PreferredAuthentications=password','-o','PubkeyAuthentication=no','-o','NumberOfPasswordPrompts=1','-o','ConnectTimeout=8','-o','LogLevel=ERROR','-o',`ProxyCommand=${process.execPath} ${script} --stdio-bridge ${domain} ${device}`,'-L',`127.0.0.1:${forwardPort}:127.0.0.1:${echoPort}`,username+'@abess-strict-probe'];
+  const launch=(forwardPort,echoPort,framed=false)=>{
+    const args=['-N','-p','443','-o','HostKeyAlias=abess-strict-probe','-o','StrictHostKeyChecking=yes','-o','UserKnownHostsFile='+path.join(directory,'known_hosts'),'-o','PreferredAuthentications=password','-o','PubkeyAuthentication=no','-o','NumberOfPasswordPrompts=1','-o','ConnectTimeout=8','-o','LogLevel=ERROR','-o',`ProxyCommand=${process.execPath} ${script} --stdio-bridge ${domain} ${device} ${framed?'framed':'raw'}`,'-L',`127.0.0.1:${forwardPort}:127.0.0.1:${echoPort}`,username+'@abess-strict-probe'];
     const p=spawn('ssh',args,{stdio:['ignore','ignore','pipe'],env:{...process.env,DISPLAY:'abess-verification',SSH_ASKPASS:path.join(directory,'askpass'),SSH_ASKPASS_REQUIRE:'force',ABESS_PROBE_PASSWORD:passwd}});p.diagnostic='';p.stderr.on('data',c=>{p.diagnostic=(p.diagnostic+c.toString()).slice(-2000)});children.push(p);return p;
   };
   async function freePort(){const s=net.createServer();await new Promise(r=>s.listen(0,'127.0.0.1',r));const p=s.address().port;await new Promise(r=>s.close(r));return p;}
@@ -49,7 +56,7 @@ if(process.argv[2]==='--stdio-bridge'){
     account=await call('admin/ssh/managed','POST',{nodeId:bootstrap.id,label:'[Test automatique quotas]',username,password:passwd,days:1,quotaGb:0.01,maxConnections:1});
     await wait(async()=>{const inventory=await call('admin/ssh');return inventory.accounts.find(a=>a.id===account.id&&a.provisionState==='active')},'canary provisioning');
     echo=net.createServer(s=>{s.on('error',()=>{});s.pipe(s)});await new Promise(r=>echo.listen(0,'127.0.0.1',r));
-    const port=await freePort(),first=launch(port,echo.address().port);
+    const port=await freePort(),first=launch(port,echo.address().port,true);
     await wait(()=>{if(first.exitCode!==null)throw Error('Public SSH canary failed: '+first.diagnostic);return localUsage()?.online===1},'public SSH authentication');
     const extra=launch(await freePort(),echo.address().port);await wait(()=>extra.exitCode!==null||extra.signalCode!==null,'extra session rejection');
     assert(first.exitCode===null&&first.signalCode===null);assert.equal(localUsage().online,1);
@@ -70,7 +77,7 @@ if(process.argv[2]==='--stdio-bridge'){
     const persisted=await wait(async()=>{const i=await call('admin/ssh');return i.accounts.find(a=>a.id===account.id&&a.usedBytes===account.quotaBytes)},'API quota persistence');
     assert.equal(spent.usedBytes,account.quotaBytes);assert.equal(persisted.online,0);
     const view=await call(`admin/ssh/accounts/${account.id}/devices`);assert(view.some(d=>d.name==='Controle des limites'&&d.usedBytes>0));
-    console.log('PRODUCTION_STRICT_LIMITS_VERIFIED='+JSON.stringify({publicTlsAndRawSsh:true,pamAdmission:true,maxSessionsNeverExceeded:true,deviceSuspendResume:true,exactQuotaBytes:spent.usedBytes,quotaNeverExceeded:true,apiPersistence:true}));
+    console.log('PRODUCTION_STRICT_LIMITS_VERIFIED='+JSON.stringify({publicRawAndFramedSsh:true,pamAdmission:true,maxSessionsNeverExceeded:true,deviceSuspendResume:true,exactQuotaBytes:spent.usedBytes,quotaNeverExceeded:true,apiPersistence:true}));
   }finally{
     for(const p of children)if(p.exitCode===null)p.kill('SIGTERM');if(echo)echo.close();
     try{if(account&&token)await call('admin/ssh/accounts/'+account.id,'DELETE');}

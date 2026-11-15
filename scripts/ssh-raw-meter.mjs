@@ -8,6 +8,7 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import {Transform} from 'node:stream';
 import {pathToFileURL} from 'node:url';
+import {createRequire} from 'node:module';
 import {QuotaLedger} from './ssh-ws-quota.mjs';
 
 export async function startRawMeter(options={}){
@@ -21,7 +22,7 @@ export async function startRawMeter(options={}){
   if(!['127.0.0.1','172.18.0.1'].includes(host)||![port,sshPort].every(p=>Number.isInteger(p)&&p>=0&&p<=65535))throw Error('Invalid relay address');
   fs.mkdirSync(directory,{recursive:true,mode:0o700});
   const ledger=new QuotaLedger({usageFile:path.join(directory,'usage.json'),reportFile:path.join(directory,'usage-live.json'),reservationBytes:1048576});
-  const sessions=new Set(),byPeer=new Map();
+  const sessions=new Set(),byPeer=new Map();let wss;
   let valid=false,previous=null,deniedTotal=0,closed=false;
   const active=()=>fs.existsSync(activeFile);
   function publishAdmissions(){
@@ -47,9 +48,9 @@ export async function startRawMeter(options={}){
   });
   server.headersTimeout=10000;server.requestTimeout=15000;server.maxHeadersCount=40;
   server.on('clientError',(_e,socket)=>socket.destroy());
-  server.on('upgrade',(req,socket,head)=>{
+  function relayConnection(req,socket,head,raw=true){
     refresh();
-    if(!valid||!active()||req.method!=='GET'||String(req.url).length>2048||sessions.size>=10000){socket.end('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');return;}
+    if(!valid||!active()||req.method!=='GET'||String(req.url).length>2048||sessions.size>=10000){if(raw)socket.end('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');else socket.destroy();return;}
     const upstream=net.createConnection({host:'127.0.0.1',port:sshPort});
     const s={id:null,deviceKey:null,upstream,socket,preauthBytes:0,released:false,meta:{
       ip:String(req.headers['x-forwarded-for']||req.socket.remoteAddress||'').split(',')[0].trim().slice(0,80),
@@ -69,14 +70,24 @@ export async function startRawMeter(options={}){
         if(take>0)this.push(chunk.subarray(0,take));s.kill();callback();
       }catch{s.kill();callback();}
     }});
-    for(const stream of [socket,upstream]){stream.setNoDelay(true);stream.setKeepAlive(true,30000);stream.on('error',s.kill);stream.on('close',()=>{s.kill();release();});}
+    for(const stream of [socket,upstream]){stream.setNoDelay?.(true);stream.setKeepAlive?.(true,30000);stream.on('error',s.kill);stream.on('close',()=>{s.kill();release();});}
+    req.socket.setNoDelay(true);req.socket.setKeepAlive(true,30000);
     upstream.once('connect',()=>{
       s.peer=upstream.localAddress+':'+upstream.localPort;byPeer.set(s.peer,s);
-      socket.write('HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n');
+      if(raw)socket.write('HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n');
       const up=meter('up'),down=meter('down');up.on('error',s.kill);down.on('error',s.kill);
       if(head.length)up.write(head);
       socket.pipe(up).pipe(upstream);upstream.pipe(down).pipe(socket);
     });
+  }
+  server.on('upgrade',(req,socket,head)=>{
+    if(!req.headers['sec-websocket-key']){relayConnection(req,socket,head);return;}
+    try{
+      let ws;
+      try{ws=createRequire(import.meta.url)('ws');}catch{ws=createRequire('/opt/abess-panel/package.json')('ws');}
+      wss??=new ws.WebSocketServer({noServer:true,perMessageDeflate:false,maxPayload:65536});
+      wss.handleUpgrade(req,socket,head,client=>relayConnection(req,ws.createWebSocketStream(client,{highWaterMark:65536}),Buffer.alloc(0),false));
+    }catch{socket.destroy();}
   });
   fs.mkdirSync(path.dirname(controlSocket),{recursive:true,mode:0o700});
   try{const st=fs.lstatSync(controlSocket);if(!st.isSocket()||st.uid!==process.getuid())throw Error('Unsafe control socket');fs.unlinkSync(controlSocket);}catch(e){if(e.code!=='ENOENT')throw e;}
@@ -108,7 +119,7 @@ export async function startRawMeter(options={}){
   await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,host,resolve);});
   const policyTimer=setInterval(refresh,250);policyTimer.unref();
   const reports=setInterval(()=>{try{ledger.report();publishAdmissions();fs.writeFileSync(path.join(directory,'status.json'),JSON.stringify({...health(),observedAt:new Date().toISOString()}),{mode:0o600});}catch{valid=false;for(const s of sessions)s.kill();}},1000);reports.unref();
-  return {server,control,ledger,port:server.address().port,refresh,health,async close(){if(closed)return;closed=true;clearInterval(policyTimer);clearInterval(reports);for(const s of sessions)s.kill();await new Promise(r=>setImmediate(r));await Promise.all([new Promise(r=>server.close(r)),new Promise(r=>control.close(r))]);ledger.close();try{fs.unlinkSync(controlSocket);}catch{}}};
+  return {server,control,ledger,port:server.address().port,refresh,health,async close(){if(closed)return;closed=true;clearInterval(policyTimer);clearInterval(reports);for(const s of sessions)s.kill();await new Promise(r=>setImmediate(r));await Promise.all([new Promise(r=>server.close(r)),new Promise(r=>control.close(r)),...(wss?[new Promise(r=>wss.close(r))]:[])]);ledger.close();try{fs.unlinkSync(controlSocket);}catch{}}};
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
   startRawMeter().then(m=>{console.log('RAW_METER_LISTENING=true');const stop=()=>{m.close().then(()=>process.exit(0)).catch(()=>process.exit(1));};process.once('SIGTERM',stop);process.once('SIGINT',stop);}).catch(()=>{console.error('RAW_METER_STARTUP_FAILED');process.exitCode=1;});

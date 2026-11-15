@@ -109,6 +109,8 @@ promis, ni migration forcée depuis un serveur dont l’arrêt n’est pas confi
 ## Limites réelles des connexions
 
 Le chemin public HTTP 101 → SSH brut utilise désormais `abess-raw-meter`.
+Le relais détecte aussi les en-têtes RFC6455 et conserve le transport WebSocket
+encadré. Les deux formats partagent le même quota et la même limite de sessions.
 Le hook PAM **account** associe la connexion au compte Linux authentifié avant
 que SSH confirme la connexion. Le relais admet atomiquement au maximum la limite
 choisie, de **1 à 1000 sessions par licence**. Le compte administrateur et les
