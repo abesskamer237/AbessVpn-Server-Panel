@@ -1,5 +1,5 @@
 name: Diagnose VPN performance
-# Check numeric-port socket statistics and mobile SSH liveness defaults.
+# Check numeric-port sockets and privilege-separated SSH session identities.
 on:
   workflow_dispatch:
   push:
