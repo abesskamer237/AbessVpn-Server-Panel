@@ -1,7 +1,7 @@
 export type Role='SUPER_ADMIN'|'ADMIN'|'RESELLER';
 
 export type User={
-  id:string;name:string;email:string;role:Role;credits:number;
+  id:string;name:string;email:string;role:Role;credits:number;seatLimit?:number|null;
   totalTokensCreated?:number;totalBandwidthAllocatedGb?:number;
 };
 
