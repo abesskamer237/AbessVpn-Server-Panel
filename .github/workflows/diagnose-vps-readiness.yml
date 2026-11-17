@@ -92,6 +92,11 @@ jobs:
           else echo 'CADDY_CONTAINER=not-found'; fi
           echo '=== PUBLIC PORT LISTENERS (READ ONLY) ==='
           ss -lntp '( sport = :80 or sport = :443 )' 2>&1 || true
+          echo '=== DOCKER / COMPOSE PROCESSES (READ ONLY) ==='
+          ps -eo pid,ppid,etime,stat,args | grep -E '[d]ocker compose|[d]ocker (start|create|container start)|[c]addy run' || true
+          echo '=== DOCKER DAEMON HEALTH (READ ONLY) ==='
+          systemctl is-active docker 2>/dev/null || true
+          docker info --format 'DOCKER_INFO root={{.DockerRootDir}} driver={{.Driver}} containers={{.Containers}} running={{.ContainersRunning}} paused={{.ContainersPaused}} stopped={{.ContainersStopped}}' 2>&1 || true
           echo '=== PRE-DEPLOYMENT SNAPSHOT SIZES (READ ONLY) ==='
           docker_root="$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || echo /var/lib/docker)"
           for volume in abessvpn-server_abessvpn_data abessvpn-server_ssh_data abessvpn-server_abessvpn_postgres; do
