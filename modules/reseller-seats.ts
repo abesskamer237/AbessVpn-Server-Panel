@@ -25,7 +25,12 @@ export function resellerPlaceStatus(
   now = Date.now(),
 ) {
   const reseller = users.find(user => user.id === resellerId && user.role === 'RESELLER');
-  const placeLimit = typeof reseller?.seatLimit === 'number' ? reseller.seatLimit : null;
+  const parent = reseller?.parentId ? users.find(user => user.id === reseller.parentId && user.role === 'RESELLER') : undefined;
+  // A legacy child without an explicit allocation cannot bypass a finite
+  // parent allocation; it must receive places explicitly before selling.
+  const placeLimit = typeof reseller?.seatLimit === 'number'
+    ? reseller.seatLimit
+    : typeof parent?.seatLimit === 'number' ? 0 : null;
   const placesDirect = accounts.filter(account => {
     if (account.resellerId !== resellerId) return false;
     const expiry = Date.parse(account.expiresAt || '');
