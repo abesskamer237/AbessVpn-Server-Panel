@@ -457,11 +457,13 @@ jobs:
             bash scripts/install-raw-meter.sh --activate </dev/null
           fi
           if [ "$deploy_failed" -eq 0 ]; then dc up -d --no-build database api caddy || deploy_failed=1; fi
-          # Reload API environment and the Caddyfile bind mount even when
-          # their Compose service definitions or image tags stayed unchanged.
-          # Preserve databases, SSH accounts, tunnel sessions and volumes.
+          # The preceding 'up' already recreates the API when its image or
+          # environment changes. Do not restart it a second time: a redundant
+          # API restart has previously caused a healthy new container to enter
+          # a restart loop. Recreate only Caddy to reload its bind-mounted file.
+          # Databases, SSH accounts, tunnel sessions and volumes are preserved.
           if [ "$deploy_failed" -eq 0 ]; then
-            dc up -d --no-deps --force-recreate api caddy || deploy_failed=1
+            dc up -d --no-deps --force-recreate caddy || deploy_failed=1
           fi
           dc ps
 
@@ -476,6 +478,13 @@ jobs:
           done
 
           if [ "$ready" -ne 1 ] || [ "$deploy_failed" -ne 0 ]; then
+            echo 'Deployment readiness failed; collecting the failed API state before rollback.' >&2
+            dc ps -a >&2 || true
+            failed_api="$(dc ps -aq api | head -n 1)"
+            if [ -n "$failed_api" ]; then
+              docker inspect --format 'API_FAILURE_STATE status={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} error={{.State.Error}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}unavailable{{end}}' "$failed_api" >&2 || true
+              docker logs --tail=120 "$failed_api" >&2 || true
+            fi
             if [ "$rollback_allowed" -eq 1 ]; then
               echo 'Health checks failed; restoring the previous PostgreSQL-compatible API image.' >&2
               dc -f .rollback.yml up -d --no-build api caddy
