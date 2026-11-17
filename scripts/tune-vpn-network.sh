@@ -72,7 +72,7 @@ if [[ -f "$project/docker-compose.yml" ]]; then
   if [[ ! -e "$backup_dir/caddy-original-buffers.conf" ]]; then
     (umask 077
       for key in net.core.rmem_max net.core.wmem_max; do
-        printf '%s = %s\\n' "$key" "$(nsenter -t "$caddy_pid" -n sysctl -n "$key")"
+        printf '%s = %s\n' "$key" "$(nsenter -t "$caddy_pid" -n sysctl -n "$key")"
       done > "$backup_dir/caddy-original-buffers.conf")
   fi
   nsenter -t "$caddy_pid" -n sysctl -p "$caddy_buffer_config"
