@@ -90,7 +90,8 @@ try{
   const sshList=await call('admin/ssh',undefined,admin);assert.equal(sshList.body.accounts.find(a=>a.id===ssh.body.id).usedBytes,1234);assert.ok(!JSON.stringify(sshList.body).includes(config.password));
   // A paid SSH account follows the same credit ledger and tenant hierarchy as VLESS.
   const sellerPassword=randomBytes(24).toString('hex');
-  const seller=await call('admin/resellers',{email:'ssh-seller@example.test',name:'SSH Seller',password:sellerPassword,initialCredits:4},admin);assert.equal(seller.status,201);
+  const seller=await call('admin/resellers',{email:'ssh-seller@example.test',name:'SSH Seller',password:sellerPassword,initialCredits:4,seatLimit:1},admin);assert.equal(seller.status,201);
+  assert.equal(seller.body.seatLimit,1,'admin can assign a customer place limit at reseller creation');
   const peer=await call('admin/resellers',{email:'ssh-peer@example.test',name:'SSH Peer',password:sellerPassword,initialCredits:0},admin);assert.equal(peer.status,201);
   const sellerSession=(await call('auth/login',{email:'ssh-seller@example.test',password:sellerPassword})).body.token;
   const peerSession=(await call('auth/login',{email:'ssh-peer@example.test',password:sellerPassword})).body.token;
@@ -102,7 +103,12 @@ try{
   else await writeFile(path.join(dir,'transactions.json'),JSON.stringify([...history,...historical]));
   const sales=await Promise.all([call('admin/ssh/accounts',saleBody,admin),call('admin/ssh/accounts',saleBody,admin)]);
   assert.equal(sales.filter(r=>r.status===201).length,1,'concurrent sale only charges once');
-  const sale=sales.find(r=>r.status===201);assert.equal(sale.status,201);assert.equal(sale.body.quotaBytes,1024**3);assert.equal(sale.body.connection.wire,'http-connect');
+  const sale=sales.find(r=>r.status===201);assert.equal(sale.status,201);
+  assert.equal((await call('admin/ssh/accounts',{...saleBody,config:{...saleBody.config,username:'seller_overflow'}},sellerSession)).status,409,
+    'reseller cannot create a second customer licence after using its only assigned place');
+  const sellerStatus=(await call('admin/resellers',undefined,sellerSession)).body.find(r=>r.id===seller.body.id);
+  assert.deepEqual([sellerStatus.placesUsed,sellerStatus.placesAvailable],[1,0],
+    'reseller workspace displays consumed and remaining customer places');assert.equal(sale.body.quotaBytes,1024**3);assert.equal(sale.body.connection.wire,'http-connect');
   assert.equal((await call('auth/me',undefined,sellerSession)).body.credits,3);
   assert.equal((await call('admin/ssh/accounts',saleBody,admin)).status,409);assert.equal((await call('auth/me',undefined,sellerSession)).body.credits,3,'duplicate sale cannot charge twice');
   assert.equal((await call('admin/ssh/accounts',{...saleBody,resellerId:peer.body.id,config:{...saleBody.config,username:'unfunded_user'}},admin)).status,409);
@@ -158,7 +164,7 @@ try{
   assert.equal((await send(lastAccepted)).status,200);assert.equal((await used()).bandwidthUsedGb,beforeRotation,'key rotation preserves traffic baselines');
   await call(`admin/nodes/${node.body.id}`,undefined,admin,'DELETE');assert.equal((await send(sample(1))).status,401);
   // Resellers can import independent supplier accounts, but cannot own infrastructure or charge a peer.
-  const importer = await call('admin/resellers',{email:'ssh-importer@example.test',name:'SSH Importer',password:sellerPassword,initialCredits:2},admin);
+  const importer = await call('admin/resellers',{email:'ssh-importer@example.test',name:'SSH Importer',password:sellerPassword,initialCredits:2,seatLimit:2},admin);
   assert.equal(importer.status,201);
   const importerSession = (await call('auth/login',{email:'ssh-importer@example.test',password:sellerPassword})).body.token;
   const supplierBody = {
@@ -191,6 +197,11 @@ try{
   assert.equal(created.body.resellerId,importer.body.id,'cannot charge arbitrary reseller');
   assert.ok(!JSON.stringify(created.body).includes('password'));
   const managedId=created.body.id;
+  const managedOverflow=await call('admin/ssh/managed',{nodeId:managedNode.body.id,label:'Overflow customer',username:'abv_managed02',password:'StrongPass_456',days:7,quotaGb:0.5,maxConnections:1},importerSession);
+  assert.equal(managedOverflow.status,409,'managed SSH-WSS licence creation must enforce the reseller place limit');
+  const importerPlaceStatus=(await call('admin/resellers',undefined,importerSession)).body.find(r=>r.id===importer.body.id);
+  assert.deepEqual([importerPlaceStatus.placesUsed,importerPlaceStatus.placesAvailable],[2,0],
+    'supplier imports and managed SSH-WSS licences both consume customer places');
   assert.equal((await call(`admin/ssh/accounts/${managedId}/config`,{transport:'wss'},importerSession)).status,409,'never export a managed account before node confirmation');
   assert.equal((await call(`nodes/${managedNode.body.id}/ssh-ws/desired`,undefined,'invalid')).status,401);
   assert.equal((await call(`nodes/${managedNode.body.id}/ssh-ws/desired`,undefined,node.body.key)).status,401);
