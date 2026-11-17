@@ -61,6 +61,9 @@ jobs:
       - name: Security regression tests
         run: node --import tsx scripts/test-security.mjs
 
+      - name: Verify reseller hierarchical place limits
+        run: node --import tsx scripts/test-reseller-seats.mjs
+
       - name: Verify portable VPN subscription formats
         run: node --import tsx scripts/test-exports.mjs
 
