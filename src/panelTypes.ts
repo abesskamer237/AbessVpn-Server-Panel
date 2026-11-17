@@ -38,6 +38,9 @@ export type Reseller={
   createdAt?:string;lastLoginAt?:string|null;parentId?:string;parentName?:string;
   totalTokensCreated?:number;totalBandwidthAllocatedGb?:number;subResellersCount?:number;
   descendantCount?:number;hierarchyDepth?:number;hierarchyPath?:string[];
+  /** Assigned customer-account places; null means unlimited for legacy resellers. */
+  seatLimit?:number|null;placeLimit?:number|null;
+  placesDirect?:number;placesDelegated?:number;placesUsed?:number;placesAvailable?:number|null;
   pricePerGbCfa?:number;costPerGbCfa?:number;pricePerLicenceCfa?:number;
 };
 
