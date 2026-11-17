@@ -3,7 +3,22 @@ set -euo pipefail
 [[ "$EUID" -eq 0 ]] || exit 1
 source_dir="$(cd "$(dirname "$0")" && pwd)"
 python3 "$source_dir/test-ssh-session-guard.py"
-before="$(systemctl show -p MainPID --value willy-ssh-ws.service)"
+forwarding_unit=""
+for candidate in abess-ssh-ws-sshd.service willy-ssh-ws.service; do
+  if systemctl is-active --quiet "$candidate"; then
+    forwarding_unit="$candidate"
+    break
+  fi
+done
+[[ -n "$forwarding_unit" ]] || {
+  echo 'No supported ABESS SSH forwarding service is active.' >&2
+  exit 1
+}
+before="$(systemctl show -p MainPID --value "$forwarding_unit")"
+[[ "$before" =~ ^[1-9][0-9]*$ ]] || {
+  echo "Cannot read the active forwarding service PID: $forwarding_unit" >&2
+  exit 1
+}
 install -d -m 0755 /usr/local/lib/abess
 install -d -m 0700 /var/lib/abess-session-guard
 install -m 0755 "$source_dir/ssh-session-guard.py" /usr/local/lib/abess/ssh-session-guard.py
@@ -41,5 +56,5 @@ assert s.get('format')=='abess-session-guard-v1' and s.get('healthy') is True, '
 assert time.time()-datetime.fromisoformat(s['observedAt']).timestamp()<30
 print('SESSION_GUARD_HEALTH='+json.dumps({k:s[k] for k in ['mode','healthy','observedSessions','overLimitAccounts','deniedTotal']}))
 PYGUARD
-[[ "$(systemctl show -p MainPID --value willy-ssh-ws.service)" = "$before" ]]
-echo 'SESSION_GUARD_INSTALLED=true forwarding_pid_unchanged=true'
+[[ "$(systemctl show -p MainPID --value "$forwarding_unit")" = "$before" ]]
+echo "SESSION_GUARD_INSTALLED=true forwarding_service=$forwarding_unit forwarding_pid_unchanged=true"
