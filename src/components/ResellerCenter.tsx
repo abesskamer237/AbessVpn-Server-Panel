@@ -65,13 +65,17 @@ export function ResellerCenter({resellers,accounts,transactions,busy,currentUser
   const directChildren=resellers.filter(r=>r.parentId===currentUser.id);
   const canManage=(r:Reseller)=>isAdmin||r.parentId===currentUser.id;
   const myCredits=Number(currentUser.credits||0);
+  const myPlaceLimit=typeof currentUser.seatLimit==='number'?currentUser.seatLimit:null;
+  const myDirectPlaceUse=accounts.filter(a=>a.resellerId===currentUser.id&&(!Number.isFinite(Date.parse(a.expiresAt))||Date.parse(a.expiresAt)>Date.now())).length;
+  const myDelegatedPlaceUse=directChildren.reduce((total,r)=>total+(Number.isSafeInteger(r.seatLimit)?Number(r.seatLimit):myPlaceLimit===null?0:myPlaceLimit),0);
+  const myPlacesAvailable=myPlaceLimit===null?null:Math.max(0,myPlaceLimit-myDirectPlaceUse-myDelegatedPlaceUse);
 
   async function run(work:()=>Promise<void|string>){
     setWorking(true);setError('');
     try{const msg=await work();await refresh();if(typeof msg==='string')setToast(msg)}catch(e){setError(e instanceof Error?e.message:'Opération impossible')}
     finally{setWorking(false)}
   }
-  function openCreate(parent?:Reseller){setParentId(isAdmin?(parent?.id||''):'');setSeatLimit(parent?.placesAvailable==null?10:Math.min(10,Math.max(0,parent.placesAvailable)));setCreated(null);setPassword(generatePassword());setShowPw(true);setCreateOpen(true);setError('')}
+  function openCreate(parent?:Reseller){const available=isAdmin?(parent?.placesAvailable??null):myPlacesAvailable;setParentId(isAdmin?(parent?.id||''):'');setSeatLimit(available===null?10:Math.min(10,Math.max(0,available)));setCreated(null);setPassword(generatePassword());setShowPw(true);setCreateOpen(true);setError('')}
   async function create(e:FormEvent){
     e.preventDefault();
     await run(async()=>{
@@ -244,7 +248,7 @@ export function ResellerCenter({resellers,accounts,transactions,busy,currentUser
               <button type="button" className="icon-button" aria-label="Afficher le mot de passe initial" onClick={()=>setShowPw(v=>!v)}>{showPw?<EyeOff size={14}/>:<Eye size={14}/>}</button>
               <button type="button" className="icon-button" aria-label="Générer le mot de passe initial" onClick={()=>{setPassword(generatePassword());setShowPw(true)}}><Wand2 size={14}/></button></div></label>
           <label className="field-block"><span className="field-label">Crédits de départ (Go)</span><input className="field num" type="number" min={0} step=".01" value={credits} onChange={e=>setCredits(Number(e.target.value))}/>{!isAdmin&&<span className="field-help">Prélevés sur votre solde ({myCredits.toFixed(2)} Go).</span>}</label>
-          <label className="field-block"><span className="field-label">Places clients attribuées</span><input className="field num" type="number" min={0} max={10000} step={1} required value={seatLimit} onChange={e=>setSeatLimit(e.target.value===''?0:Number(e.target.value))}/><span className="field-help">Une place correspond à une licence client. Les places données à ses sous-revendeurs sont réservées sur cette enveloppe. Les licences expirées libèrent leur place.</span>{isAdmin&&parentId&&resellers.find(r=>r.id===parentId)?.placesAvailable!=null&&<span className="field-help">Parent sélectionné : {resellers.find(r=>r.id===parentId)?.placesAvailable} place(s) encore disponible(s).</span>}</label>
+          <label className="field-block"><span className="field-label">Places clients attribuées</span><input className="field num" type="number" min={0} max={10000} step={1} required value={seatLimit} onChange={e=>setSeatLimit(e.target.value===''?0:Number(e.target.value))}/><span className="field-help">Une place correspond à une licence client. Les places données à ses sous-revendeurs sont réservées sur cette enveloppe. Les licences expirées libèrent leur place.</span>{!isAdmin&&myPlacesAvailable!==null&&<span className="field-help">Votre enveloppe : {myPlacesAvailable} place(s) encore disponible(s).</span>}{isAdmin&&parentId&&resellers.find(r=>r.id===parentId)?.placesAvailable!=null&&<span className="field-help">Parent sélectionné : {resellers.find(r=>r.id===parentId)?.placesAvailable} place(s) encore disponible(s).</span>}</label>
           {isAdmin&&<label className="field-block" style={{gridColumn:'1/-1'}}><span className="field-label">Parent dans le réseau</span><select className="select" value={parentId} onChange={e=>{setParentId(e.target.value);const parent=resellers.find(r=>r.id===e.target.value);setSeatLimit(parent?.placesAvailable==null?10:Math.min(10,Math.max(0,parent.placesAvailable)))}}><option value="">Administration principale</option>{resellers.map(r=><option key={r.id} value={r.id}>{'— '.repeat(Math.max(0,(r.hierarchyDepth||1)-1))}{r.name} {r.placesAvailable==null?'(sans plafond)':`(${r.placesAvailable} place(s) dispo.)`}</option>)}</select></label>}
         </div>
       </div>
