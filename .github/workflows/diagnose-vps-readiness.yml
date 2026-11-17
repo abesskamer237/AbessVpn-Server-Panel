@@ -36,7 +36,15 @@ jobs:
           [[ "${VPS_USER:-}" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "Invalid VPS_USER." >&2; exit 1; }
           [[ "${VPN_DOMAIN:-}" =~ ^[A-Za-z0-9.-]+$ ]] || { echo "Invalid VPN_DOMAIN." >&2; exit 1; }
           port="${VPS_PORT:-22}"
-          [[ "$port" =~ ^[0-9]{1,5}$ ]] && ((10#$port >= 1 && 10#$port <= 65535)) || { echo "Invalid VPS_PORT." >&2; exit 1; }
+          if ! [[ "$port" =~ ^[0-9]{1,5}$ ]]; then
+            echo "Invalid VPS_PORT." >&2
+            exit 1
+          fi
+          port_value=$((10#$port))
+          if (( port_value < 1 || port_value > 65535 )); then
+            echo "Invalid VPS_PORT." >&2
+            exit 1
+          fi
           install -d -m 700 "$HOME/.ssh"
           if [[ -n "${VPS_SSH_KEY:-}" ]]; then
             printf '%s\n' "$VPS_SSH_KEY" > "$HOME/.ssh/id_ed25519"
@@ -65,7 +73,7 @@ jobs:
             ssh_command=(ssh -p "$port" -i "$HOME/.ssh/id_ed25519" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes)
           else
             export SSHPASS="$VPS_SSH_PASSWORD"
-            ssh_command=(sshpass -e ssh -p "$port" -o StrictHostKeyChecking=yes -o PreferredAuthentications=password,keyboard-interactive -o PubkeyAuthentication=no)
+            ssh_command=(sshpass -e ssh -p "$port" -o StrictHostKeyChecking=yes -o "PreferredAuthentications=password,keyboard-interactive" -o PubkeyAuthentication=no)
           fi
           "${ssh_command[@]}" "$destination" "VPN_DOMAIN='$VPN_DOMAIN' bash -s" <<'REMOTE'
           set -uo pipefail
