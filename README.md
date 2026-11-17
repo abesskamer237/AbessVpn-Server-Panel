@@ -6,7 +6,7 @@ Backend Node/Express, panneau React et bot Telegram pour vendre et administrer d
 
 - **Tableau de bord** : clients actifs, renouvellements, sessions, trafic, alertes VPS et performance commerciale.
 - **Clients SSH-WSS** : création sur le VPS le moins chargé, quotas, sessions simultanées, suspension, renouvellement idempotent, export de configuration et message client.
-- **Revendeurs** : hiérarchie multi-niveaux, transferts de crédits (Go), tarifs, marges estimées, suspension en cascade.
+- **Revendeurs** : hiérarchie multi-niveaux, transferts de crédits (Go), tarifs, marges estimées, suspension en cascade et enveloppes de places clients attribuées à la création. Les places des sous-revendeurs sont réservées dans le quota de leur parent ; les licences expirées libèrent une place. Les anciens revendeurs sans plafond restent illimités.
 - **Facturation** : catalogue d’offres, commandes de crédits, déclaration MTN MoMo / Orange Money, vérification manuelle par le Super Admin, factures imprimables, export CSV.
 - **Transactions** et **Journal d’audit** : registre financier complet et traçabilité HMAC des actions sensibles.
 - **Serveurs** : enrôlement des VPS, télémétrie CPU/RAM/disque/services, sauvegarde chiffrée.
