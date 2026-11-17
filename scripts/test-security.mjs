@@ -70,6 +70,16 @@ try {
     assert.equal((await request('/api/v1/admin/operations/restore', malformed, active.token)).status, 400);
     assert.deepEqual(JSON.parse(await readFile(usersPath, 'utf8')), users, 'invalid encrypted restore must not mutate users');
   }
+  const overAllocatedUsers=[
+    ...users,
+    {...users[0],id:'seat-root',email:'seat-root@example.test',role:'RESELLER',parentId:users[0].id,seatLimit:1},
+    {...users[0],id:'seat-child',email:'seat-child@example.test',role:'RESELLER',parentId:'seat-root',seatLimit:2},
+  ];
+  const overAllocatedBackup=encryptedBackup({...snapshot,users:overAllocatedUsers,ssh:{accounts:[]}},env.MASTER_SECRET);
+  assert.equal((await request('/api/v1/admin/operations/restore',overAllocatedBackup,active.token)).status,400,
+    'restore must reject a reseller branch that delegates more client places than its parent owns');
+  assert.deepEqual(JSON.parse(await readFile(usersPath,'utf8')),users,
+    'rejected place allocation restore must leave production-shaped user state untouched');
   // Device identifiers and request identifiers are not sufficient to recover a licence.
   const member = {firstName:'Client', lastName:'Test', contactDetail:'client@example.test', deviceId:'device-test-12345'};
   const issued = await (await request('/api/v1/membership/request', member)).json();
