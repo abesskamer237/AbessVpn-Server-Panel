@@ -285,7 +285,7 @@ export function SshCenter({inventory,resellers,role,audit,currentUser,request,re
 
         {tab==='overview'&&<>
           <div className="detail-grid">
-            <div className="detail-item"><label>Consommation débitée (×2)</label><strong className="num">{humanTraffic(selected.usedBytes)} / {gb(selected.quotaBytes)} Go</strong><div className="progress"><span style={{width:percent(selected.usedBytes,selected.quotaBytes)+'%'}}/></div></div>
+            <div className="detail-item"><label>Consommation</label><span className="table-secondary">Quota débité ×2</span><strong className="num">{humanTraffic(selected.usedBytes)} / {gb(selected.quotaBytes)} Go</strong><div className="progress"><span style={{width:percent(selected.usedBytes,selected.quotaBytes)+'%'}}/></div></div>
             <div className="detail-item"><label>Sessions</label><strong className="num">{selected.online??'—'} / {selected.maxConnections}</strong></div>
             <div className="detail-item"><label>Expiration</label><strong>{fmtDate(selected.expiresAt)} {expiryHint(selected)&&<span className="table-secondary">({expiryHint(selected)})</span>}</strong></div>
             <div className="detail-item"><label>Création</label><strong>{fmtDate(selected.createdAt)}</strong></div>
