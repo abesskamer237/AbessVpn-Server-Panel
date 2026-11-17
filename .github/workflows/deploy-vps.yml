@@ -88,6 +88,14 @@ jobs:
       - name: Build API image
         run: docker build --pull -f Dockerfile -t abessvpn-api:ci .
 
+      - name: Validate host post-deployment service scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/ssh-ws-postdeploy.sh
+          bash -n scripts/tune-vpn-network.sh
+          bash -n scripts/install-session-guard.sh
+
       - name: Verify deployment commands preserve the remote script input
         run: node scripts/test-deploy-stdin.mjs
 
