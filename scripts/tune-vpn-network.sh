@@ -19,6 +19,7 @@ engine_before="$(systemctl show -p MainPID --value "$forwarding_unit")"
   exit 1
 }
 backup_dir="/var/lib/abess-network-tuning"
+caddy_pid=""
 install -d -m 0700 "$backup_dir"
 if [[ ! -e "$backup_dir/original.conf" ]]; then
   (umask 077
