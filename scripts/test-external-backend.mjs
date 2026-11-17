@@ -104,7 +104,8 @@ try{
   const sales=await Promise.all([call('admin/ssh/accounts',saleBody,admin),call('admin/ssh/accounts',saleBody,admin)]);
   assert.equal(sales.filter(r=>r.status===201).length,1,'concurrent sale only charges once');
   const sale=sales.find(r=>r.status===201);assert.equal(sale.status,201);
-  assert.equal((await call('admin/ssh/accounts',{...saleBody,config:{...saleBody.config,username:'seller_overflow'}},sellerSession)).status,409,
+  const resellerOverflowBody={...saleBody,resellerId:undefined,nodeId:undefined,config:{...saleBody.config,username:'seller_overflow'}};
+  assert.equal((await call('admin/ssh/accounts',resellerOverflowBody,sellerSession)).status,409,
     'reseller cannot create a second customer licence after using its only assigned place');
   const sellerStatus=(await call('admin/resellers',undefined,admin)).body.find(r=>r.id===seller.body.id);
   assert.deepEqual([sellerStatus.placesUsed,sellerStatus.placesAvailable],[1,0],
