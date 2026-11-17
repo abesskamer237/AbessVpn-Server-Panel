@@ -18,6 +18,7 @@ import { registerServiceCenter, emptyService, emptyUsage, recordUsage, validServ
 import { registerAnnouncements, type Notice, type NoticeReceipts } from './modules/announcements.js';
 import { registerCommerce } from './modules/commerce.js';
 import { registerSsh, type SshState } from './modules/ssh.js';
+import { MAX_RESELLER_PLACES, resellerPlaceStatus } from './modules/reseller-seats.js';
 import { singBoxConfig, mihomoConfig } from './modules/subscriptions.js';
 import { SecurityService, registerSecurityRoutes, unseal } from './modules/security.js';
 import { DocumentStore } from './modules/store.js';
@@ -134,6 +135,8 @@ export interface AppUser {
   lastLoginAt: string | null;
   parentId?: string;
   parentName?: string;
+  /** Maximum customer places assigned to this reseller; null/undefined preserves legacy unlimited access. */
+  seatLimit?: number | null;
   pricePerGbCfa?: number;
   costPerGbCfa?: number;
   pricePerLicenceCfa?: number;
@@ -725,7 +728,9 @@ function validRestoredUsers(value: unknown): value is AppUser[] {
         typeof user.name !== 'string' ||
         !['SUPER_ADMIN', 'ADMIN', 'RESELLER'].includes(user.role) ||
         !['active', 'suspended'].includes(user.status) ||
-        !Number.isFinite(user.credits) || user.credits < 0) return false;
+        !Number.isFinite(user.credits) || user.credits < 0 ||
+        (user.seatLimit !== undefined && (user.role !== 'RESELLER' ||
+          (user.seatLimit !== null && (!Number.isSafeInteger(user.seatLimit) || user.seatLimit < 0 || user.seatLimit > MAX_RESELLER_PLACES))))) return false;
     const email = user.email.trim().toLowerCase();
     if (emails.has(email)) return false;
     emails.add(email);
@@ -2155,15 +2160,20 @@ async function startServer() {
       descendantCache.set(id, total);
       return total;
     };
+    const sshAccounts = readSsh().accounts;
     const resellers = resellerUsers
       .filter(u => !visibleIds || visibleIds.has(u.id))
-      .map(({ passwordHash, ...rest }) => ({
-        ...rest,
-        subResellersCount: (childrenByParent.get(rest.id) || []).length,
-        descendantCount: countDescendants(rest.id),
-        hierarchyDepth: user.role==='RESELLER' ? depthFrom(rest.id,user.id) : depthFrom(rest.id),
-        hierarchyPath: pathNames(rest.id)
-      }))
+      .map(({ passwordHash, ...rest }) => {
+        const places = resellerPlaceStatus(rest.id, users, sshAccounts);
+        return {
+          ...rest,
+          ...places,
+          subResellersCount: (childrenByParent.get(rest.id) || []).length,
+          descendantCount: countDescendants(rest.id),
+          hierarchyDepth: user.role==='RESELLER' ? depthFrom(rest.id,user.id) : depthFrom(rest.id),
+          hierarchyPath: pathNames(rest.id)
+        };
+      })
       .sort((a,b)=>a.hierarchyPath.join(' / ').localeCompare(b.hierarchyPath.join(' / '),'fr'));
     res.json(resellers);
   });
@@ -2176,6 +2186,12 @@ async function startServer() {
     }
 
     const { email, password, name, initialCredits } = req.body || {};
+    const requestedSeatLimitRaw = req.body?.seatLimit;
+    if (requestedSeatLimitRaw !== undefined &&
+        (!Number.isSafeInteger(requestedSeatLimitRaw) || requestedSeatLimitRaw < 0 || requestedSeatLimitRaw > MAX_RESELLER_PLACES)) {
+      res.status(400).json({ error: `Le nombre de places doit être un entier compris entre 0 et ${MAX_RESELLER_PLACES}.` });
+      return;
+    }
     const requestedParentId = typeof req.body?.parentId === 'string' ? req.body.parentId.trim() : '';
     if (typeof email !== 'string' || typeof password !== 'string' || typeof name !== 'string' ||
         !/^[^\s@]{1,64}@[^\s@]{1,190}\.[^\s@]{2,}$/.test(email.trim()) || !name.trim() || name.trim().length > 80) {
@@ -2219,6 +2235,17 @@ async function startServer() {
       res.status(409).json({ error: 'Le revendeur parent est suspendu.' });
       return;
     }
+    // A parent with a finite place allocation must reserve the child's entire
+    // allocation before the child can create clients or delegate more places.
+    const requestedSeatLimit: number | null = requestedSeatLimitRaw === undefined
+      ? (parentAccount.role === 'RESELLER' ? 0 : null)
+      : requestedSeatLimitRaw as number;
+    if (parentAccount.role === 'RESELLER') {
+      const parentPlaces = resellerPlaceStatus(parentAccount.id, users, readSsh().accounts);
+      if (parentPlaces.placesAvailable !== null && requestedSeatLimit > parentPlaces.placesAvailable) {
+        return res.status(409).json({ error: `Places insuffisantes : ${parentPlaces.placesAvailable} disponible(s) sur ${parentPlaces.placeLimit}.` });
+      }
+    }
 
     let parentCreditBefore: number | null = null;
     if (user.role === 'RESELLER') {
@@ -2251,7 +2278,8 @@ async function startServer() {
       createdAt: new Date().toISOString(),
       lastLoginAt: null,
       parentId: parentAccount.id,
-      parentName: parentAccount.name
+      parentName: parentAccount.name,
+      seatLimit: requestedSeatLimit
     };
 
     users.push(newReseller);
@@ -2286,6 +2314,10 @@ async function startServer() {
       ...safeReseller,
       subResellersCount: 0,
       descendantCount: 0,
+      placesDirect: 0,
+      placesDelegated: 0,
+      placesUsed: 0,
+      placesAvailable: requestedSeatLimit,
       hierarchyDepth: user.role==='RESELLER' ? 1 : (parentAccount.role==='RESELLER' ? 1 : 0),
       hierarchyPath: [parentAccount.name, safeReseller.name]
     });
