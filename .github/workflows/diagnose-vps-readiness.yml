@@ -1,0 +1,98 @@
+name: Diagnose ABESS production VPS readiness
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/diagnose-vps-readiness.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: abess-vps-readiness-diagnostic
+  cancel-in-progress: false
+
+jobs:
+  diagnose:
+    name: Read-only VPS and SSH-WSS health checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Configure pinned SSH authentication and inspect production health
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_SSH_KNOWN_HOSTS: ${{ secrets.VPS_SSH_KNOWN_HOSTS }}
+          VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD || secrets.VPS_PASSWORD }}
+          VPS_PORT: ${{ vars.VPS_PORT }}
+          VPN_DOMAIN: ${{ vars.VPN_DOMAIN }}
+        run: |
+          set -euo pipefail
+          [[ "${VPS_HOST:-}" =~ ^[A-Za-z0-9.-]+$ ]] || { echo "Invalid VPS_HOST." >&2; exit 1; }
+          [[ "${VPS_USER:-}" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "Invalid VPS_USER." >&2; exit 1; }
+          [[ "${VPN_DOMAIN:-}" =~ ^[A-Za-z0-9.-]+$ ]] || { echo "Invalid VPN_DOMAIN." >&2; exit 1; }
+          port="${VPS_PORT:-22}"
+          [[ "$port" =~ ^[0-9]{1,5}$ ]] && ((10#$port >= 1 && 10#$port <= 65535)) || { echo "Invalid VPS_PORT." >&2; exit 1; }
+          install -d -m 700 "$HOME/.ssh"
+          if [[ -n "${VPS_SSH_KEY:-}" ]]; then
+            printf '%s\n' "$VPS_SSH_KEY" > "$HOME/.ssh/id_ed25519"
+            chmod 600 "$HOME/.ssh/id_ed25519"
+          elif [[ -n "${VPS_SSH_PASSWORD:-}" ]]; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq sshpass
+          else
+            echo "Set VPS_SSH_KEY or VPS_SSH_PASSWORD/VPS_PASSWORD." >&2
+            exit 1
+          fi
+          if [[ -n "${VPS_SSH_KNOWN_HOSTS:-}" ]]; then
+            printf '%s\n' "$VPS_SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          else
+            ssh-keyscan -T 12 -p "$port" -t ed25519 "$VPS_HOST" 2>/dev/null > "$HOME/.ssh/known_hosts"
+          fi
+          test -s "$HOME/.ssh/known_hosts"
+          ssh-keygen -lf "$HOME/.ssh/known_hosts" -E sha256 |
+            grep -Fq 'SHA256:bbOkBVBY0XxyMLJVAjDmJWLM56VIsyC4+5iaTEopNQM' || {
+              echo "::error::VPS SSH host key differs from the verified Contabo identity." >&2
+              exit 1
+            }
+          chmod 600 "$HOME/.ssh/known_hosts"
+          destination="${VPS_USER}@${VPS_HOST}"
+          if [[ -s "$HOME/.ssh/id_ed25519" ]]; then
+            ssh_command=(ssh -p "$port" -i "$HOME/.ssh/id_ed25519" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes)
+          else
+            export SSHPASS="$VPS_SSH_PASSWORD"
+            ssh_command=(sshpass -e ssh -p "$port" -o StrictHostKeyChecking=yes -o PreferredAuthentications=password,keyboard-interactive -o PubkeyAuthentication=no)
+          fi
+          "${ssh_command[@]}" "$destination" "VPN_DOMAIN='$VPN_DOMAIN' bash -s" <<'REMOTE'
+          set -uo pipefail
+          cd "$HOME/abessvpn-server" || exit 1
+          export COMPOSE_FILE="$PWD/docker-compose.yml"
+          failed=0
+          echo '=== COMPOSE SERVICES ==='
+          docker compose -f "$COMPOSE_FILE" ps || failed=1
+          echo '=== API HTTPS PING ==='
+          api_response="$(curl --silent --show-error --max-time 10 "https://$VPN_DOMAIN/api/v1/ping" 2>&1 || true)"
+          printf '%s\n' "$api_response"
+          printf '%s' "$api_response" | grep -q '"ok":true' || failed=1
+          echo '=== SSH-WSS SYSTEMD SERVICES ==='
+          for service in abess-ssh-ws-sshd.service abess-ssh-ws-gateway.service abess-ssh-ws-reconciler.service; do
+            state="$(systemctl is-active "$service" 2>/dev/null || true)"
+            printf 'SERVICE %s=%s\n' "$service" "${state:-unknown}"
+            [[ "$state" == active ]] || failed=1
+          done
+          echo '=== SSH-WSS GATEWAY HEALTH ==='
+          if [[ -S /var/lib/abess-ssh-ws/socket/gateway.sock ]]; then
+            gateway_health="$(curl --silent --show-error --max-time 8 --unix-socket /var/lib/abess-ssh-ws/socket/gateway.sock http://localhost/healthz 2>&1 || true)"
+            printf '%s\n' "$gateway_health"
+            printf '%s' "$gateway_health" | grep -q '"policyReady":true' || failed=1
+          else
+            echo 'GATEWAY_SOCKET=missing'
+            failed=1
+          fi
+          [[ "$failed" -eq 0 ]] || exit 1
+          echo 'READ_ONLY_VPS_DIAGNOSTIC=HEALTHY'
+          REMOTE
