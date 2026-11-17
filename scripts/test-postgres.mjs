@@ -167,7 +167,7 @@ try {
   // a grandchild's balance directly.
   const rootPassword=randomBytes(24).toString("hex");
   const root=await apiCall("admin/resellers",{
-    email:"network-root@example.test",password:rootPassword,name:"Network Root",initialCredits:20
+    email:"network-root@example.test",password:rootPassword,name:"Network Root",initialCredits:20,seatLimit:5
   },session.token);
   assert.equal(root.status,201);
   const rootLogin=await apiCall("auth/login",{email:"network-root@example.test",password:rootPassword},session.token);
@@ -176,7 +176,7 @@ try {
 
   const level2Password = randomBytes(24).toString("hex");
   const level2 = await apiCall("admin/resellers", {
-    email:"level2@example.test", password:level2Password, name:"Level 2", initialCredits:8
+    email:"level2@example.test", password:level2Password, name:"Level 2", initialCredits:8, seatLimit:3
   }, rootToken);
   assert.equal(level2.status,201);
   const level2Login = await apiCall("auth/login",{email:"level2@example.test",password:level2Password},session.token);
@@ -185,14 +185,14 @@ try {
 
   const level3Password=randomBytes(24).toString("hex");
   const level3=await apiCall("admin/resellers",{
-    email:"level3@example.test",password:level3Password,name:"Level 3",initialCredits:3
+    email:"level3@example.test",password:level3Password,name:"Level 3",initialCredits:3,seatLimit:2
   },level2Token);
   assert.equal(level3.status,201);
   const level3Login=await apiCall("auth/login",{email:"level3@example.test",password:level3Password},session.token);
   assert.equal(level3Login.status,200);
   const level3Token=level3Login.body.token;
   const level4=await apiCall("admin/resellers",{
-    email:"level4@example.test",password:randomBytes(24).toString("hex"),name:"Level 4",initialCredits:1
+    email:"level4@example.test",password:randomBytes(24).toString("hex"),name:"Level 4",initialCredits:1,seatLimit:1
   },level3Token);
   assert.equal(level4.status,201,"a reseller descendant can create another reseller");
 
@@ -202,6 +202,34 @@ try {
   assert.ok(branch.body.some(x=>x.id===level3.body.id&&x.hierarchyDepth===2));
   assert.ok(branch.body.some(x=>x.id===level4.body.id&&x.hierarchyDepth===3));
   assert.ok(branch.body.find(x=>x.id===level2.body.id).descendantCount>=2);
+
+  const allResellers=await apiCall("admin/resellers",undefined,session.token);
+  assert.equal(allResellers.status,200);
+  const rootPlaces=allResellers.body.find(x=>x.id===root.body.id);
+  const level2Places=allResellers.body.find(x=>x.id===level2.body.id);
+  const level3Places=allResellers.body.find(x=>x.id===level3.body.id);
+  assert.deepEqual(
+    [rootPlaces.placeLimit,rootPlaces.placesUsed,rootPlaces.placesAvailable],
+    [5,3,2],
+    "the top reseller reserves the entire seat allocation given to its direct child",
+  );
+  assert.deepEqual(
+    [level2Places.placeLimit,level2Places.placesUsed,level2Places.placesAvailable],
+    [3,2,1],
+    "a sub-reseller reserves its own child allocation against its place budget",
+  );
+  assert.deepEqual(
+    [level3Places.placeLimit,level3Places.placesUsed,level3Places.placesAvailable],
+    [2,1,1],
+    "grandchild allocations are reflected in their direct parent",
+  );
+  const overflowChild=await apiCall("admin/resellers",{
+    email:"level2-overflow@example.test",password:randomBytes(24).toString("hex"),
+    name:"Over allocated child",initialCredits:0,seatLimit:2
+  },level2Token);
+  assert.equal(overflowChild.status,409,"a parent cannot allocate more places than remain");
+  assert.equal((await apiCall("auth/me",undefined,level2Token)).body.credits,5,
+    "a rejected seat allocation must not deduct reseller credits");
 
   assert.equal(
     (await apiCall(`admin/resellers/${level3.body.id}/credit`,{amount:1},rootToken,{},"PUT")).status,
