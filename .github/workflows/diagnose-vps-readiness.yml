@@ -81,7 +81,17 @@ jobs:
           export COMPOSE_FILE="$PWD/docker-compose.yml"
           failed=0
           echo '=== COMPOSE SERVICES ==='
-          docker compose -f "$COMPOSE_FILE" ps || failed=1
+          docker compose -f "$COMPOSE_FILE" ps -a || failed=1
+          echo '=== ALL ABESS CONTAINERS (READ ONLY) ==='
+          docker ps -a --no-trunc --filter name=abessvpn-server || true
+          echo '=== CADDY CONTAINER DIAGNOSTICS (READ ONLY) ==='
+          caddy_id="$(docker ps -aq --filter name=abessvpn-server-caddy-1 | head -n 1)"
+          if [[ -n "$caddy_id" ]]; then
+            docker inspect --format 'CADDY_STATE status={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} error={{.State.Error}} image={{.Config.Image}}' "$caddy_id" || true
+            docker logs --tail 100 "$caddy_id" 2>&1 || true
+          else echo 'CADDY_CONTAINER=not-found'; fi
+          echo '=== PUBLIC PORT LISTENERS (READ ONLY) ==='
+          ss -lntp '( sport = :80 or sport = :443 )' 2>&1 || true
           echo '=== PRE-DEPLOYMENT SNAPSHOT SIZES (READ ONLY) ==='
           docker_root="$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || echo /var/lib/docker)"
           for volume in abessvpn-server_abessvpn_data abessvpn-server_ssh_data abessvpn-server_abessvpn_postgres; do
