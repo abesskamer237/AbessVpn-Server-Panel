@@ -57,7 +57,7 @@ async function stableSnapshot(){
   throw Error('No quiet accounting observation window');
 }
 const delta=(after,before)=>({up:after.up-before.up,down:after.down-before.down});
-function assertExact(a,b){const client=delta(a.wire,b.wire),relay=delta(a.device,b.device);assert.deepEqual(relay,client,'Client encrypted SSH bytes must exactly equal both relay directions');assert.equal(a.local.usedBytes-b.local.usedBytes,client.up+client.down,'Licence must equal independently measured bytes');assert.equal(a.local.usedBytes,a.device.up+a.device.down,'Device totals must equal licence');return {client,relay,totalBytes:client.up+client.down}}
+function assertExact(a,b){const client=delta(a.wire,b.wire),relay=delta(a.device,b.device),billed={up:client.up*2,down:client.down*2};assert.deepEqual(relay,billed,'The relay must bill exactly twice the independently measured bytes in both directions');assert.equal(a.local.usedBytes-b.local.usedBytes,(client.up+client.down)*2,'Licence consumption must be physical traffic ×2');assert.equal(a.local.usedBytes,a.device.up+a.device.down,'Device totals must equal billable licence usage');return {client,relay,totalBytes:client.up+client.down,billedBytes:billed.up+billed.down}}
 async function closeAll(){for(const s of sessions){s.client.end();if(s.server?.listening)s.server.close()}await sleep(600);for(const s of sessions)s.stream.destroy()}
 try{
   const initial=await snapshot();assert.equal(initial.local.usedBytes,0);assert.equal(initial.api.usedBytes,0,'Initial report must precede test traffic');

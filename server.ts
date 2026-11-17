@@ -2042,7 +2042,8 @@ async function startServer() {
           next[canonical] = value;
         }
         if (delta > 0) {
-          token.bandwidthUsedGb += delta / 1024 ** 3;
+          // The quota billing factor is ×2; directional source counters above stay physical.
+          token.bandwidthUsedGb += (delta * 2) / 1024 ** 3;
           if (token.status === 'active' && token.bandwidthUsedGb >= token.bandwidthGb) token.status = 'quota_exceeded';
         }
       }
@@ -2054,7 +2055,8 @@ async function startServer() {
         const counterKey = `ssh:${account.id}`;
         const old = next[counterKey] || 0;
         if (sample.usedBytes < old) throw new Error('SSH counter decreased');
-        account.usedBytes += sample.usedBytes - old;
+        // Keep the upstream cumulative baseline raw, but charge each new byte twice.
+        account.usedBytes += (sample.usedBytes - old) * 2;
         account.online = sample.online || 0;
         account.usageObservedAt = snapshot.observedAt;
         const history=readUsage();recordUsage(history,account,snapshot.observedAt);saveUsage(history);

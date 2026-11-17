@@ -61,6 +61,16 @@ Les mesures de plus de 60 secondes, de plus de 5 secondes dans le futur, antéri
 
 Les relevés doivent provenir du moteur ou de son exporteur de confiance ; la télémétrie du téléphone ne constitue pas une source de facturation. La clé d'un nœud autorise la déclaration de ses compteurs et doit être protégée comme un secret. Sa révocation bloque immédiatement les nouvelles requêtes de cet agent.
 
+## Coefficient de consommation (×2)
+
+Le panneau débite désormais **2 octets de quota pour chaque octet de trafic mesuré** après cette mise à jour. Ce coefficient s'applique aux nouveaux deltas, pas rétroactivement aux consommations déjà enregistrées :
+
+- **VLESS/Xray :** les deltas montants et descendants des compteurs cumulatifs sont multipliés par 2 pour le quota. Les compteurs directionnels source restent les octets physiques mesurés.
+- **SSH externe non administré :** chaque nouveau delta du compteur fourni par le VPS est également débité à ×2.
+- **SSH-WSS administré :** la passerelle réserve et débite deux unités de quota par octet physique avant de transmettre les données ; la consommation totale et la ventilation par appareil reflètent les unités débitées.
+
+Les baselines des compteurs sources restent brutes, les relevés répétés ne sont toujours pas facturés une seconde fois, et les historiques déjà acquis ne sont pas modifiés. Le quota se vide donc deux fois plus vite, mais **le débit réseau et le volume réellement transféré ne sont pas accélérés** : seul le calcul de consommation du quota change.
+
 ## Agent de remontée facultatif
 
 Configurer les variables dans un environnement sécurisé, sans les inscrire dans Git :

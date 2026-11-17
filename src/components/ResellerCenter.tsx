@@ -128,7 +128,7 @@ export function ResellerCenter({resellers,accounts,transactions,busy,currentUser
         <select className="select" style={{width:'auto',marginLeft:'auto'}} aria-label="Trier" value={sort} onChange={e=>setSort(e.target.value as typeof sort)}><option value="tree">Arborescence</option><option value="credits">Solde</option><option value="clients">Clients</option><option value="revenue">CA estimé</option></select>
       </div>
       <div style={{overflow:'auto'}}><table className="data-table"><thead><tr>
-        <th>Revendeur</th><th>Solde</th><th>Clients</th><th>Places</th><th>Consommation</th><th>CA estimé</th><th>État</th><th style={{width:1}}></th>
+        <th>Revendeur</th><th>Solde</th><th>Clients</th><th>Places</th><th>Consommation ×2</th><th>CA estimé</th><th>État</th><th style={{width:1}}></th>
       </tr></thead><tbody>{filtered.map(r=>{
         const depth=sort==='tree'?Math.max(0,Number(r.hierarchyDepth||0)-1):0;
         const manageable=canManage(r);

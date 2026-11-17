@@ -65,8 +65,8 @@ function syncAtomic(file, object) {
   } catch(e) {try{fs.unlinkSync(temp);}catch{}throw e;}
 }
 export class QuotaLedger {
-  constructor({usageFile,reportFile,reservationBytes=262144}) {
-    if(!usageFile || !reportFile || !integer(reservationBytes,4096,1048576))
+  constructor({usageFile,reportFile,reservationBytes=262144,usageMultiplier=2}) {
+    if(!usageFile || !reportFile || !integer(reservationBytes,4096,1048576) || !integer(usageMultiplier,1,4))
       throw Error('Invalid gateway ledger configuration');
     this.usageFile=usageFile;
     // Isolate durable reservations by account. Each 256KiB reservation writes
@@ -74,6 +74,7 @@ export class QuotaLedger {
     this.accountDir=usageFile+'.accounts';
     this.reportFile=reportFile;
     this.reservationBytes=reservationBytes;
+    this.usageMultiplier=usageMultiplier;
     this.balances={}; // accountId -> {usedBytes, creditBytes, sessions}
     this.policy=null;
     this.lastGoodPolicyAt=0;
@@ -200,7 +201,8 @@ export class QuotaLedger {
   consume(id,requested,deviceKey,direction='up',now=Date.now()) {
     const p=this._profile(id,now),b=this.balances[id];
     if(!p || (p.blockedDevices||[]).includes(deviceKey) || !integer(requested,0,65536))return 0;
-    let allowance=Math.min(requested,Math.max(0,p.quotaBytes-b.usedBytes));
+    const requestedCharge=requested*this.usageMultiplier;
+    let allowance=Math.min(requestedCharge,Math.max(0,p.quotaBytes-b.usedBytes));
     while(allowance>b.creditBytes) {
       const remaining=p.quotaBytes-b.usedBytes-b.creditBytes;
       if(remaining<=0)break;
@@ -209,12 +211,15 @@ export class QuotaLedger {
       b.creditBytes+=extra;
       try{this._persistOne(id);}catch(e){b.creditBytes-=extra;throw e;}
     }
-    const count=Math.min(allowance,b.creditBytes);
-    b.usedBytes+=count;
-    b.creditBytes-=count;
+    // Return physical bytes accepted by the stream, while charging ×2 quota units.
+    const chargeCount=Math.min(allowance,b.creditBytes);
+    const count=Math.min(requested,Math.floor(chargeCount/this.usageMultiplier));
+    const billedCount=count*this.usageMultiplier;
+    b.usedBytes+=billedCount;
+    b.creditBytes-=billedCount;
     if(DEVICE.test(String(deviceKey||''))&&b.devices?.[deviceKey]){
-      const d=b.devices[deviceKey];d.usedBytes=(d.usedBytes||0)+count;
-      if(direction==='down')d.downBytes=(d.downBytes||0)+count;else d.upBytes=(d.upBytes||0)+count;
+      const d=b.devices[deviceKey];d.usedBytes=(d.usedBytes||0)+billedCount;
+      if(direction==='down')d.downBytes=(d.downBytes||0)+billedCount;else d.upBytes=(d.upBytes||0)+billedCount;
       d.lastSeenAt=new Date(now).toISOString();
     }
     return count;

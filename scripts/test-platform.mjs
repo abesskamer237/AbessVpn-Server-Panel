@@ -317,7 +317,7 @@ try {
   const allTokens = await call("admin/tokens", undefined, token);
   assert.equal(
     allTokens.body.find((t) => t.id === remoteLicense.body.id).bandwidthUsedGb,
-    1,
+    2,
     "repeated counters must not double count",
   );
   heartbeat.snapshot.observedAt = new Date(Date.now() + 1).toISOString();

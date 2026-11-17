@@ -65,7 +65,7 @@ try{
   let snapshot=sample(1024);
   assert.equal((await send(snapshot,node,'wrong')).status,401);
   assert.equal((await send(snapshot,other)).status,200);assert.equal((await used()).bandwidthUsedGb,0,'another VPS cannot bill this licence');
-  assert.equal((await send(snapshot)).status,200);assert.equal((await send(snapshot)).status,200);assert.equal((await used()).bandwidthUsedGb*1024**3,1024);
+  assert.equal((await send(snapshot)).status,200);assert.equal((await send(snapshot)).status,200);assert.equal((await used()).bandwidthUsedGb*1024**3,2048,'1 physical Xray byte consumes 2 quota bytes');
   assert.equal((await call('auth/token',{token:licence.body.token,deviceId:'external-device-test'})).status,200);
   assert.equal((await call('client/availability',{token:licence.body.token,deviceId:'external-device-test'})).body.dataPlane,'ready');
   assert.equal((await send({...snapshot,observedAt:new Date(Date.now()-120000).toISOString()})).status,400);
@@ -74,10 +74,10 @@ try{
   for(const value of [-1,Number.MAX_SAFE_INTEGER+1,'NaN',''])assert.equal((await send(sample(value))).status,400);
   const dup=sample(2048);dup.stat.push({...dup.stat[0]});assert.equal((await send(dup)).status,400);
   assert.equal((await send(sample(512))).status,400,'reset requires a new process generation');
-  assert.equal((await used()).bandwidthUsedGb*1024**3,1024,'invalid snapshots never modify billing');
+  assert.equal((await used()).bandwidthUsedGb*1024**3,2048,'invalid snapshots never modify billing');
   assert.equal((await send({generation:'manual-process-1',observedAt:observed(),stat:[]})).status,200);
-  assert.equal((await send(sample(2048))).status,200);assert.equal((await used()).bandwidthUsedGb*1024**3,2048,'partial reports retain previous counter baselines');
-  assert.equal((await send(sample(100,'manual-process-2'))).status,200);assert.equal((await used()).bandwidthUsedGb*1024**3,2148);
+  assert.equal((await send(sample(2048))).status,200);assert.equal((await used()).bandwidthUsedGb*1024**3,4096,'partial reports retain raw baselines and bill deltas ×2');
+  assert.equal((await send(sample(100,'manual-process-2'))).status,200);assert.equal((await used()).bandwidthUsedGb*1024**3,4296);
   const config={host:'external.example.test',port:2084,username:'manual_user',password:randomBytes(20).toString('hex'),transport:'wss-raw-alt',tls:true,sni:'certificate.example.test',path:'/ssh-existing',fingerprint:'SHA256:'+randomBytes(32).toString('base64').replace(/=+$/,'')};
   const ssh=await call('admin/ssh/accounts',{nodeId:node.body.id,config,days:30,quotaGb:1,maxConnections:2},admin);assert.equal(ssh.status,201);assert.ok(!JSON.stringify(ssh.body).includes(config.password));
   assert.equal((await call('admin/ssh/accounts',{username:'new_user',days:30,quotaGb:1,maxConnections:1},admin)).status,400,'cannot create a local SSH user');
@@ -87,7 +87,7 @@ try{
   const invalidSsh=sample(250,'manual-process-2');invalidSsh.accounts=[{id:ssh.body.id,usedBytes:100}];
   assert.equal((await send(invalidSsh)).status,400);assert.equal((await used()).bandwidthUsedGb,beforeInvalidSsh,'SSH failure cannot partially bill VPN counters');
   const exported=await call(`admin/ssh/accounts/${ssh.body.id}/config`,{transport:config.transport},admin);assert.equal(exported.status,200);assert.equal(exported.body.password,config.password);assert.equal(exported.body.port,2084);assert.equal(exported.body.path,config.path);
-  const sshList=await call('admin/ssh',undefined,admin);assert.equal(sshList.body.accounts.find(a=>a.id===ssh.body.id).usedBytes,1234);assert.ok(!JSON.stringify(sshList.body).includes(config.password));
+  const sshList=await call('admin/ssh',undefined,admin);assert.equal(sshList.body.accounts.find(a=>a.id===ssh.body.id).usedBytes,2468,'external SSH byte deltas are billed ×2');assert.ok(!JSON.stringify(sshList.body).includes(config.password));
   // A paid SSH account follows the same credit ledger and tenant hierarchy as VLESS.
   const sellerPassword=randomBytes(24).toString('hex');
   const seller=await call('admin/resellers',{email:'ssh-seller@example.test',name:'SSH Seller',password:sellerPassword,initialCredits:4,seatLimit:1},admin);assert.equal(seller.status,201);
@@ -131,7 +131,7 @@ try{
   const sshUsage=sample(300,'manual-process-2');sshUsage.accounts=[{id:sale.body.id,usedBytes:900,online:1}];assert.equal((await send(sshUsage)).status,200);
   const renewalHeaders={'Idempotency-Key':'ssh-renewal-test-0001'};
   const renew=()=>call(`admin/ssh/accounts/${sale.body.id}/renew`,{additionalGb:1,days:7},sellerSession,undefined,renewalHeaders);
-  const renewals=await Promise.all([renew(),renew(),renew()]);assert.ok(renewals.every(r=>r.status===200));assert.equal(renewals[0].body.usedBytes,900);assert.equal(renewals[0].body.quotaBytes,2*1024**3);
+  const renewals=await Promise.all([renew(),renew(),renew()]);assert.ok(renewals.every(r=>r.status===200));assert.equal(renewals[0].body.usedBytes,1800,'SSH renewal preserves usage already billed ×2');assert.equal(renewals[0].body.quotaBytes,2*1024**3);
   assert.equal((await call('auth/me',undefined,sellerSession)).body.credits,2,'concurrent renewals debit exactly once');
   assert.equal((await call(`admin/ssh/accounts/${sale.body.id}/renew`,{additionalGb:2,days:7},sellerSession,undefined,renewalHeaders)).status,409,'a reused key cannot describe a different purchase');
   assert.equal((await call(`admin/ssh/accounts/${sale.body.id}/renew`,{additionalGb:20,days:7},sellerSession,undefined,{'Idempotency-Key':'ssh-renewal-test-0002'})).status,409);

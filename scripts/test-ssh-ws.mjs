@@ -92,7 +92,7 @@ try {
 
   gateway.ledger.report();
   const measured=JSON.parse(fs.readFileSync(reportFile,'utf8'));
-  assert.ok(measured.accounts.find(x=>x.id===idB).usedBytes>=2*'echo-check'.length);
+  assert.ok(measured.accounts.find(x=>x.id===idB).usedBytes>=4*'echo-check'.length,'both SSH directions are billed ×2');
   assert.equal(measured.accounts.find(x=>x.id===idB).online,1);
   assert.equal(measured.policyObservedAt,policy.generatedAt);
 
@@ -163,7 +163,8 @@ const crashFile=path.join(dir,'crash-usage.json');
 const ledger=new QuotaLedger({usageFile:crashFile,reportFile:path.join(dir,'crash-report.json')});
 ledger.setPolicy({...policy,generatedAt:new Date().toISOString(),
   accounts:policy.accounts.map(p=>({...p,enabled:true,baselineUsedBytes:0}))});
-assert.equal(ledger.consume(id,1200),1200);
+assert.equal(ledger.consume(id,1200),1200,'quota ledger still forwards the physical byte count');
+assert.equal(ledger.used(id),2400,'the durable quota ledger charges each physical byte twice');
 const recovered=new QuotaLedger({usageFile:crashFile,reportFile:path.join(dir,'crash-recovered.json')});
 assert.ok(recovered.used(id)>=1200,'fsynced advance-reservation avoids free replays');
 assert.ok(recovered.used(id)<=12288);

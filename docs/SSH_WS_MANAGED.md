@@ -113,11 +113,11 @@ chemin, puis clique sur **Activer SSH-WS**.
    attribue les crédits et enregistre un compte en état `pending`.
 3. L'agent VPS effectue `GET /api/v1/nodes/ID/ssh-ws/desired` avec la clé
    unique du nœud et réconcilie uniquement les utilisateurs du groupe prévu.
-4. L'agent publie la politique locale (quota octets, secret hashé et nombre de sessions), puis attend la confirmation de la passerelle et signale `active`, `blocked` ou `error` ainsi que les octets réels et sessions par `POST /api/v1/nodes/ID/ssh-ws/status`.
+4. L'agent publie la politique locale (quota octets, secret hashé et nombre de sessions), puis attend la confirmation de la passerelle et signale `active`, `blocked` ou `error` ainsi que la consommation débitée (coefficient ×2) et les sessions par `POST /api/v1/nodes/ID/ssh-ws/status`.
 5. Le revendeur ne peut exporter les secrets clients qu'une fois le compte
    confirmé actif et l'agent de contrôle récent.
 6. Une suspension ou expiration verrouille l'accès SSH et la passerelle ferme les WebSockets du compte lors de l'actualisation de la politique ; les anciennes sessions SSH du compte sont également terminées.
-7. La consommation des octets en montée et descente est cumulée ; le quota bloque les nouveaux octets dès que la limite est atteinte. Les sessions WebSocket simultanées sont plafonnées par compte, indépendamment du nombre de connexions globales du VPS.
+7. La consommation montante et descendante est cumulée à **×2** (deux unités de quota par octet physique) ; le quota bloque les nouveaux octets dès que la limite est atteinte. Les sessions WebSocket simultanées sont plafonnées par compte, indépendamment du nombre de connexions globales du VPS.
 
 En cas de coupure durable avec le panneau, l'agent passe en mode
 **fail-closed** après 10 minutes et révoque les comptes suivis localement.
@@ -132,9 +132,10 @@ public du panneau. Le client doit être compatible WebSocket RFC6455 **binaire**
 et importer le chemin exact. Faire attention aux logs du proxy : ne jamais
 journaliser le chemin complet ni le communiquer sur un groupe public.
 
-- **Quota Go :** `quotaBytes` représente le total octets utiles transportés
-  entre SSH et WebSocket dans **les deux sens** ; 1 Go = 1024³ octets. Cela
-  comprend les octets du protocole SSH, pas l'en-tête WebSocket/TLS/IP.
+- **Quota Go :** `quotaBytes` représente les unités de consommation facturées :
+  chaque octet utile du flux SSH transporté dans **les deux sens** compte pour
+  2 octets de quota ; 1 Go = 1024³ unités. Les octets SSH sont inclus, pas les
+  en-têtes WebSocket/TLS/IP.
 - **Connexions simultanées :** `maxConnections` est le nombre de *sessions
   WebSocket établies avec le même secret*, pas le nombre de canaux TCP,
   d'appareils identifiables ou de connexions Internet à l'intérieur de SSH.
@@ -243,7 +244,7 @@ comptabilisé : ne pas exposer le port SSH dédié à Internet.
 
 ## Comment interpréter le quota
 
-Le quota inclut **les octets du flux SSH chiffré dans les deux sens**, au point
+Le quota débite **deux unités pour chaque octet du flux SSH chiffré, dans les deux sens**, au point
 de passage SSH-WS. Il ne compte pas nécessairement les mêmes octets qu'un
 opérateur télécom, ni les en-têtes TLS/WebSocket ou tous les octets TCP/IP.
 Les réservations disque sont durables et peuvent surfacturer des octets non
