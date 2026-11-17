@@ -74,6 +74,18 @@ jobs:
           failed=0
           echo '=== COMPOSE SERVICES ==='
           docker compose -f "$COMPOSE_FILE" ps || failed=1
+          echo '=== PRE-DEPLOYMENT SNAPSHOT SIZES (READ ONLY) ==='
+          docker_root="$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || echo /var/lib/docker)"
+          for volume in abessvpn-server_abessvpn_data abessvpn-server_ssh_data abessvpn-server_abessvpn_postgres; do
+            location="$docker_root/volumes/$volume/_data"
+            if [[ -d "$location" ]]; then du -sh "$location" 2>/dev/null || true; else echo "VOLUME $volume not-found"; fi
+          done
+          backup_dir="$HOME/abessvpn-server/deployment-backups"
+          if [[ -d "$backup_dir" ]]; then
+            du -sh "$backup_dir" 2>/dev/null || true
+            find "$backup_dir" -maxdepth 1 -type f -printf '%f %s bytes\\n' 2>/dev/null | sort | tail -10 || true
+          else echo 'DEPLOYMENT_BACKUPS=not-created'; fi
+          df -h "$docker_root" | tail -1 || true
           echo '=== API HTTPS PING ==='
           api_response="$(curl --silent --show-error --max-time 10 "https://$VPN_DOMAIN/api/v1/ping" 2>&1 || true)"
           printf '%s\n' "$api_response"
