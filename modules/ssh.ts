@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import type {Express, RequestHandler} from 'express';
 import type {VpnNode} from './operations.js';
 import {seal, unseal} from './security.js';
+import {resellerPlaceStatus} from './reseller-seats.js';
 
 export const SSH_MODES = ['tcp','ws','ws-alt','ws-framed','wss-raw','wss-raw-alt','wss','wss-alt'] as const;
 export interface SshConnection {
@@ -40,7 +41,7 @@ export function validSshPayload(payload: unknown): payload is string {
     !/[^\x20-\x7e\r\n\t]/.test(payload) && /^(CONNECT|GET|POST|HEAD|OPTIONS|PUT|PATCH|DELETE) /.test(payload) &&
     !/\[(?!(?:crlf|cr|lf|host|port|host_port|protocol|ua)\])[^\]]+\]/i.test(payload);
 }
-type User = {id:string; name:string; role:string; status:string};
+type User = {id:string; name:string; role:string; status:string; parentId?:string; seatLimit?:number|null};
 export function registerSsh(app:Express,d:{
   authenticate:RequestHandler; read:()=>SshState; write:(s:SshState)=>void;
   audit:(event:any)=>void; key:string; nodes:()=>VpnNode[];
@@ -60,6 +61,13 @@ export function registerSsh(app:Express,d:{
   const monitored=(a:SshAccount)=>a.managed?
     d.nodes().some(n=>n.id===a.nodeId&&managedOnline(n)):ready(a.nodeId);
   const allowed=(actor:any,a:SshAccount)=>['SUPER_ADMIN','ADMIN'].includes(actor.role)||Boolean(a.resellerId&&d.canManage(actor,a.resellerId));
+  const placeLimitError=(owner:User,state:SshState)=>{
+    if(owner.role!=='RESELLER')return null;
+    const places=resellerPlaceStatus(owner.id,d.users(),state.accounts);
+    return places.placeLimit!==null&&(places.placesAvailable??0)<1
+      ? `Nombre de places atteint (${places.placesUsed}/${places.placeLimit}). Supprimez une licence expirée si elle est encore présente ou demandez une extension.`
+      : null;
+  };
   const active=(a:SshAccount)=>a.enabled&&Number.isFinite(Date.parse(a.expiresAt))&&Date.parse(a.expiresAt)>Date.now()&&a.usedBytes<a.quotaBytes&&d.ownerActive(a.resellerId)&&
     (!a.managed || (a.provisionState==='active'&&monitored(a)));
   app.get('/api/v1/admin/ssh',d.authenticate,(req,res)=>{
@@ -105,6 +113,8 @@ export function registerSsh(app:Express,d:{
       !Number.isInteger(days)||days<1||days>366||!Number.isFinite(quotaGb)||quotaGb<0.01||quotaGb>100000||
       !Number.isInteger(maxConnections)||maxConnections<1||maxConnections>1000)return res.status(400).json({error:'Client, durée, quota ou connexions invalides.'});
     const state=d.read();
+    const placeError=placeLimitError(owner,state);
+    if(placeError)return res.status(409).json({error:placeError});
     if(state.accounts.length>=5000||state.accounts.some(a=>a.username===username&&a.connection?.host.toLowerCase()===config.host.toLowerCase()))return res.status(409).json({error:'Utilisateur déjà présent ou capacité atteinte.'});
     const payload=config.payload||'';
     const account:SshAccount={id:'ssh_'+crypto.randomUUID(),username,label,nodeId,resellerId:owner.id,resellerName:owner.name,
@@ -140,6 +150,8 @@ export function registerSsh(app:Express,d:{
       return res.status(400).json({error:'Nom client, utilisateur, mot de passe, durée ou quota incorrect.'});
     if(d.admitNode&&!d.admitNode(node.id))return res.status(409).json({error:'Serveur complet ou fermé aux nouvelles ventes.'});
     const state=d.read();
+    const placeError=placeLimitError(owner,state);
+    if(placeError)return res.status(409).json({error:placeError});
     if(state.accounts.length>=5000||state.accounts.filter(a=>a.nodeId===node.id&&a.managed).length>=2000)
       return res.status(409).json({error:'Capacité maximale atteinte.'});
     if(state.accounts.some(a=>a.username===username)||(state.retiredUsernames||[]).includes(username))
@@ -177,6 +189,14 @@ export function registerSsh(app:Express,d:{
     // A disabled or expired licence may be renewed; only an inactive owner
     // branch or a removed VPS blocks the (charged) renewal.
     if(!d.ownerActive(a.resellerId))return res.status(409).json({error:'Le revendeur propriétaire est suspendu.'});
+    if(Date.parse(a.expiresAt)<=Date.now()&&a.resellerId){
+      const owner=d.users().find(u=>u.id===a.resellerId);
+      if(owner?.role==='RESELLER'){
+        const places=resellerPlaceStatus(owner.id,d.users(),state.accounts);
+        if(places.placeLimit!==null&&(places.placesAvailable??0)<1)
+          return res.status(409).json({error:'Aucune place disponible pour réactiver cette licence expirée.'});
+      }
+    }
     if(a.managed&&!d.nodes().some(n=>n.id===a.nodeId&&n.enabled&&n.sshWsManaged))
       return res.status(409).json({error:'Le serveur de cette licence n’est plus disponible.'});
     const quota=a.quotaBytes+Math.round(gb*1024**3);
@@ -213,6 +233,12 @@ export function registerSsh(app:Express,d:{
       if(!['SUPER_ADMIN','ADMIN'].includes(actor.role))return res.status(403).json({error:'Seule l’administration peut transférer un client.'});
       newOwner=d.users().find(u=>u.id===String(req.body.resellerId)&&u.status==='active');
       if(!newOwner||!d.ownerActive(newOwner.id))return res.status(400).json({error:'Nouveau propriétaire introuvable ou inactif.'});
+      const expiry=Date.parse(a.expiresAt);
+      if(newOwner.role==='RESELLER'&&newOwner.id!==a.resellerId&&(!Number.isFinite(expiry)||expiry>Date.now())){
+        const places=resellerPlaceStatus(newOwner.id,d.users(),state.accounts);
+        if(places.placeLimit!==null&&(places.placesAvailable??0)<1)
+          return res.status(409).json({error:'Le nouveau revendeur a atteint son nombre de places.'});
+      }
     }
     const label=hasLabel?String(req.body.label||'').trim():a.label;
     if(hasLabel&&(!label||label.length>80))return res.status(400).json({error:'Nom client invalide.'});
