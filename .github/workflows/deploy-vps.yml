@@ -1,5 +1,5 @@
 name: Deploy ABESS VPN to VPS
-# Production rollout marker: real consumption visibility and precise reseller totals
+# Production rollout marker: real consumption visibility, precise reseller totals and hierarchical customer place allocations.
 
 on:
   workflow_dispatch:
