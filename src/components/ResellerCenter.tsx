@@ -18,8 +18,8 @@ const CREDIT_PRESETS=[5,10,25,50,100];
 export function ResellerCenter({resellers,accounts,transactions,busy,currentUser,request,refresh,onOpenClient}:Props){
   const isAdmin=currentUser.role==='SUPER_ADMIN'||currentUser.role==='ADMIN';
   const [createOpen,setCreateOpen]=useState(false),[parentId,setParentId]=useState('');
-  const [name,setName]=useState(''),[email,setEmail]=useState(''),[password,setPassword]=useState(''),[showPw,setShowPw]=useState(false),[credits,setCredits]=useState(0);
-  const [created,setCreated]=useState<{name:string;email:string;password:string}|null>(null);
+  const [name,setName]=useState(''),[email,setEmail]=useState(''),[password,setPassword]=useState(''),[showPw,setShowPw]=useState(false),[credits,setCredits]=useState(0),[seatLimit,setSeatLimit]=useState(10);
+  const [created,setCreated]=useState<{name:string;email:string;password:string;seatLimit:number}|null>(null);
   const [selectedId,setSelectedId]=useState(''),[tab,setTab]=useState<DrawerTab>('overview');
   const [creditAmount,setCreditAmount]=useState(''),[creditMode,setCreditMode]=useState<'add'|'remove'>('add'),[creditNote,setCreditNote]=useState('');
   const [priceGb,setPriceGb]=useState(0),[costGb,setCostGb]=useState(0),[priceLicence,setPriceLicence]=useState(0);
@@ -71,13 +71,13 @@ export function ResellerCenter({resellers,accounts,transactions,busy,currentUser
     try{const msg=await work();await refresh();if(typeof msg==='string')setToast(msg)}catch(e){setError(e instanceof Error?e.message:'Opération impossible')}
     finally{setWorking(false)}
   }
-  function openCreate(parent?:Reseller){setParentId(isAdmin?(parent?.id||''):'');setCreated(null);setPassword(generatePassword());setShowPw(true);setCreateOpen(true);setError('')}
+  function openCreate(parent?:Reseller){setParentId(isAdmin?(parent?.id||''):'');setSeatLimit(parent?.placesAvailable==null?10:Math.min(10,Math.max(0,parent.placesAvailable)));setCreated(null);setPassword(generatePassword());setShowPw(true);setCreateOpen(true);setError('')}
   async function create(e:FormEvent){
     e.preventDefault();
     await run(async()=>{
-      await request('/api/v1/admin/resellers','POST',{name,email,password,initialCredits:credits,...(isAdmin&&parentId?{parentId}:{})});
-      setCreated({name,email,password});
-      setName('');setEmail('');setPassword('');setCredits(0);setParentId('');
+      await request('/api/v1/admin/resellers','POST',{name,email,password,initialCredits:credits,seatLimit,...(isAdmin&&parentId?{parentId}:{})});
+      setCreated({name,email,password,seatLimit});
+      setName('');setEmail('');setPassword('');setCredits(0);setSeatLimit(10);setParentId('');
       return 'Revendeur créé.';
     });
   }
@@ -92,8 +92,8 @@ export function ResellerCenter({resellers,accounts,transactions,busy,currentUser
     <div className="page-header"><div><h1>Revendeurs</h1><p>{isAdmin?'Réseau multi-niveaux, crédits, tarifs et performance commerciale.':'Votre réseau de sous-revendeurs : création, crédits, tarifs et suivi.'}</p></div>
       <div className="page-actions">
         <button className="btn" onClick={()=>csvDownload('abess-revendeurs.csv',[
-          ['Niveau','Chemin','Revendeur','Email','Parent','État','Solde Go','Clients directs','Descendants','CA estimé XAF','Marge estimée XAF'],
-          ...rows.map(r=>[r.hierarchyDepth||0,(r.hierarchyPath||[r.name]).join(' > '),r.name,r.email,r.parentName||'',r.status,r.credits,r.clients,r.descendantCount||0,r.revenue,r.margin])
+          ['Niveau','Chemin','Revendeur','Email','Parent','État','Solde Go','Clients directs','Places utilisées','Places attribuées','Places disponibles','Descendants','CA estimé XAF','Marge estimée XAF'],
+          ...rows.map(r=>[r.hierarchyDepth||0,(r.hierarchyPath||[r.name]).join(' > '),r.name,r.email,r.parentName||'',r.status,r.credits,r.clients,r.placesUsed||0,r.placeLimit??'Illimité',r.placesAvailable??'Illimité',r.descendantCount||0,r.revenue,r.margin])
         ])}><Download size={14}/>CSV</button>
         <button className="btn btn-primary" onClick={()=>openCreate()}><Plus size={14}/>{isAdmin?'Nouveau revendeur':'Nouveau sous-revendeur'}</button>
       </div>
@@ -121,7 +121,7 @@ export function ResellerCenter({resellers,accounts,transactions,busy,currentUser
         <select className="select" style={{width:'auto',marginLeft:'auto'}} aria-label="Trier" value={sort} onChange={e=>setSort(e.target.value as typeof sort)}><option value="tree">Arborescence</option><option value="credits">Solde</option><option value="clients">Clients</option><option value="revenue">CA estimé</option></select>
       </div>
       <div style={{overflow:'auto'}}><table className="data-table"><thead><tr>
-        <th>Revendeur</th><th>Solde</th><th>Clients</th><th>Consommation</th><th>CA estimé</th><th>État</th><th style={{width:1}}></th>
+        <th>Revendeur</th><th>Solde</th><th>Clients</th><th>Places</th><th>Consommation</th><th>CA estimé</th><th>État</th><th style={{width:1}}></th>
       </tr></thead><tbody>{filtered.map(r=>{
         const depth=sort==='tree'?Math.max(0,Number(r.hierarchyDepth||0)-1):0;
         const manageable=canManage(r);
@@ -133,6 +133,7 @@ export function ResellerCenter({resellers,accounts,transactions,busy,currentUser
           </div></td>
           <td className="num"><span className="table-primary" style={{color:Number(r.credits)<5?'var(--warning)':undefined}}>{Number(r.credits).toFixed(2)}</span> <span className="table-secondary">Go</span></td>
           <td className="num"><span className="table-primary">{r.active}</span><span className="table-secondary"> / {r.clients}</span>{(r.descendantCount||0)>0&&<div className="table-secondary">{r.descendantCount} sous-revendeur(s)</div>}</td>
+          <td className="num"><span className="table-primary">{r.placesUsed||0}</span><span className="table-secondary"> / {r.placeLimit==null?'∞':r.placeLimit}</span><div className="table-secondary">{r.placesAvailable==null?'Sans plafond':`${r.placesAvailable} disponible(s)`}</div></td>
           <td className="num">{humanTraffic(r.usedBytes)} <span className="table-secondary">/ {r.soldGb.toFixed(1)} Go</span></td>
           <td className="num"><div className="table-primary">{money(r.revenue)}</div><div className="table-secondary">marge {money(r.margin)}</div></td>
           <td><span className={'badge '+(r.status==='active'?'badge-success':'badge-warning')}>{r.status==='active'?'Actif':'Suspendu'}</span></td>
@@ -158,6 +159,7 @@ export function ResellerCenter({resellers,accounts,transactions,busy,currentUser
           <div className="detail-grid">
             <div className="detail-item"><label>Solde</label><strong className="num">{Number(selected.credits).toFixed(2)} Go</strong></div>
             <div className="detail-item"><label>Clients actifs</label><strong className="num">{selected.active} / {selected.clients}</strong></div>
+            <div className="detail-item"><label>Places du réseau</label><strong className="num">{selected.placesUsed||0} / {selected.placeLimit==null?'Illimité':selected.placeLimit}</strong><span className="field-help">{selected.placesAvailable==null?'Aucun plafond défini':`${selected.placesAvailable} place(s) disponible(s)`}</span></div>
             <div className="detail-item"><label>Vendu / consommé</label><strong className="num">{selected.soldGb.toFixed(1)} Go / {humanTraffic(selected.usedBytes)}</strong></div>
             <div className="detail-item"><label>CA · marge estimés</label><strong className="num">{money(selected.revenue)} · {money(selected.margin)}</strong></div>
             <div className="detail-item"><label>Sous-revendeurs</label><strong>{childrenOf(selected).length} direct(s) · {selected.descendantCount||0} au total</strong></div>
@@ -227,7 +229,7 @@ export function ResellerCenter({resellers,accounts,transactions,busy,currentUser
     {createOpen&&<div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)setCreateOpen(false)}}>{created?<div className="modal" style={{width:'min(480px,100%)'}}>
       <div className="modal-head"><div><strong>Revendeur créé</strong><div className="card-subtitle">Transmettez-lui ses accès de façon sécurisée.</div></div><button type="button" className="icon-button ghost" aria-label="Fermer" onClick={()=>setCreateOpen(false)}><X size={15}/></button></div>
       <div className="modal-body stack">
-        <div className="detail-grid"><div className="detail-item"><label>Email</label><strong>{created.email}</strong></div><div className="detail-item"><label>Mot de passe</label><strong className="mono">{created.password}</strong></div></div>
+        <div className="detail-grid"><div className="detail-item"><label>Email</label><strong>{created.email}</strong></div><div className="detail-item"><label>Mot de passe</label><strong className="mono">{created.password}</strong></div><div className="detail-item"><label>Places attribuées</label><strong className="num">{created.seatLimit}</strong></div></div>
         <p className="field-help">Ce mot de passe n’est affiché qu’une fois. Le revendeur pourra le changer dans « Sécurité ».</p>
       </div>
       <div className="modal-foot"><a className="btn" href={'https://wa.me/?text='+encodeURIComponent(accessMessage(created))} target="_blank" rel="noopener noreferrer">WhatsApp</a><button className="btn btn-primary" onClick={()=>copy(accessMessage(created),'Accès copiés.')}><Copy size={13}/>Copier les accès</button></div>
@@ -242,7 +244,8 @@ export function ResellerCenter({resellers,accounts,transactions,busy,currentUser
               <button type="button" className="icon-button" aria-label="Afficher le mot de passe initial" onClick={()=>setShowPw(v=>!v)}>{showPw?<EyeOff size={14}/>:<Eye size={14}/>}</button>
               <button type="button" className="icon-button" aria-label="Générer le mot de passe initial" onClick={()=>{setPassword(generatePassword());setShowPw(true)}}><Wand2 size={14}/></button></div></label>
           <label className="field-block"><span className="field-label">Crédits de départ (Go)</span><input className="field num" type="number" min={0} step=".01" value={credits} onChange={e=>setCredits(Number(e.target.value))}/>{!isAdmin&&<span className="field-help">Prélevés sur votre solde ({myCredits.toFixed(2)} Go).</span>}</label>
-          {isAdmin&&<label className="field-block" style={{gridColumn:'1/-1'}}><span className="field-label">Parent dans le réseau</span><select className="select" value={parentId} onChange={e=>setParentId(e.target.value)}><option value="">Administration principale</option>{resellers.map(r=><option key={r.id} value={r.id}>{'— '.repeat(Math.max(0,(r.hierarchyDepth||1)-1))}{r.name}</option>)}</select></label>}
+          <label className="field-block"><span className="field-label">Places clients attribuées</span><input className="field num" type="number" min={0} max={10000} step={1} required value={seatLimit} onChange={e=>setSeatLimit(e.target.value===''?0:Number(e.target.value))}/><span className="field-help">Une place correspond à une licence client. Les places données à ses sous-revendeurs sont réservées sur cette enveloppe. Les licences expirées libèrent leur place.</span>{isAdmin&&parentId&&resellers.find(r=>r.id===parentId)?.placesAvailable!=null&&<span className="field-help">Parent sélectionné : {resellers.find(r=>r.id===parentId)?.placesAvailable} place(s) encore disponible(s).</span>}</label>
+          {isAdmin&&<label className="field-block" style={{gridColumn:'1/-1'}}><span className="field-label">Parent dans le réseau</span><select className="select" value={parentId} onChange={e=>{setParentId(e.target.value);const parent=resellers.find(r=>r.id===e.target.value);setSeatLimit(parent?.placesAvailable==null?10:Math.min(10,Math.max(0,parent.placesAvailable)))}}><option value="">Administration principale</option>{resellers.map(r=><option key={r.id} value={r.id}>{'— '.repeat(Math.max(0,(r.hierarchyDepth||1)-1))}{r.name} {r.placesAvailable==null?'(sans plafond)':`(${r.placesAvailable} place(s) dispo.)`}</option>)}</select></label>}
         </div>
       </div>
       <div className="modal-foot"><button type="button" className="btn" onClick={()=>setCreateOpen(false)}>Annuler</button><button className="btn btn-primary" disabled={working||busy||(!isAdmin&&credits>myCredits)}>Créer le revendeur</button></div>
