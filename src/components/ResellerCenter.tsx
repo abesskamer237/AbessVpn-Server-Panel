@@ -105,7 +105,10 @@ export function ResellerCenter({resellers,accounts,transactions,busy,currentUser
 
     {!isAdmin&&<div className="balance-card">
       <div><div className="bc-label">Votre solde disponible</div><div className="bc-value">{myCredits.toFixed(2)} Go</div><div className="bc-label">Transférez des crédits à vos sous-revendeurs ou récupérez leurs crédits inutilisés.</div></div>
-      <span className="badge badge-success">{directChildren.length} sous-revendeur(s) direct(s)</span>
+      <div className="row-actions" style={{gap:6,flexWrap:"wrap"}}>
+        <span className="badge badge-success">{directChildren.length} sous-revendeur(s) direct(s)</span>
+        <span className="badge badge-neutral plain">{myPlaceLimit===null?"Places illimitées":`${myPlacesAvailable} place(s) disponible(s) sur ${myPlaceLimit}`}</span>
+      </div>
     </div>}
 
     <div className="metric-grid">
