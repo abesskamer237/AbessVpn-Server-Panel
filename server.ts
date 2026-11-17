@@ -1859,7 +1859,8 @@ async function startServer() {
       totalTokensCreated: user.totalTokensCreated,
       totalBandwidthAllocatedGb: user.totalBandwidthAllocatedGb,
       parentId: user.parentId,
-      parentName: user.parentName
+      parentName: user.parentName,
+      seatLimit: user.seatLimit
     });
   });
 
