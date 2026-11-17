@@ -715,6 +715,17 @@ function saveUsers(users: AppUser[]) {
   writeJsonAtomically(usersFile, users);
 }
 
+function validRestoredResellerPlaces(users: AppUser[], accounts: unknown[]): boolean {
+  if (!Array.isArray(accounts)) return false;
+  const placeAccounts = accounts as Array<{resellerId?:string;expiresAt?:string}>;
+  for (const reseller of users) {
+    if (reseller.role !== 'RESELLER') continue;
+    const places = resellerPlaceStatus(reseller.id, users, placeAccounts);
+    if (places.placeLimit !== null && places.placesUsed > places.placeLimit) return false;
+  }
+  return true;
+}
+
 // Reject corrupt reseller graphs before a restore can lock administrators out
 // or make hierarchy traversals loop indefinitely.
 function validRestoredUsers(value: unknown): value is AppUser[] {
@@ -1929,6 +1940,7 @@ async function startServer() {
       !snapshot.masterConfig||typeof snapshot.masterConfig!=='object'||
       !optionalObjects(snapshot.nodes)||!optionalObjects(snapshot.transactions)||!optionalObjects(snapshot.requests)||!optionalObjects(snapshot.announcements)||
       (snapshot.ssh!==undefined&&(!snapshot.ssh||!objects(snapshot.ssh.accounts)))||
+      !validRestoredResellerPlaces(snapshot.users,snapshot.ssh?.accounts||[])||
       (snapshot.commerce!==undefined&&(!snapshot.commerce||!objects(snapshot.commerce.orders)))||
       (snapshot.serviceCenter!==undefined&&!validServiceState(snapshot.serviceCenter))||
       (snapshot.usageHistory!==undefined&&!validUsageHistory(snapshot.usageHistory))||
