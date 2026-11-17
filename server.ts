@@ -2255,7 +2255,7 @@ async function startServer() {
       : requestedSeatLimitRaw as number;
     if (parentAccount.role === 'RESELLER') {
       const parentPlaces = resellerPlaceStatus(parentAccount.id, users, readSsh().accounts);
-      if (parentPlaces.placesAvailable !== null && requestedSeatLimit > parentPlaces.placesAvailable) {
+      if (parentPlaces.placesAvailable !== null && requestedSeatLimit !== null && requestedSeatLimit > parentPlaces.placesAvailable) {
         return res.status(409).json({ error: `Places insuffisantes : ${parentPlaces.placesAvailable} disponible(s) sur ${parentPlaces.placeLimit}.` });
       }
     }
