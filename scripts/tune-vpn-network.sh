@@ -49,8 +49,7 @@ install -m 0644 "$config" /etc/sysctl.d/90-abess-tcp.conf
 # 200 ms RTT (roughly 2.5 MiB bandwidth-delay product), without forcing
 # large buffers to be allocated for every connection. Preserve originals.
 buffer_config="$(mktemp)"
-caddy_buffer_config="$(mktemp)"
-trap 'rm -f "$config" "$buffer_config" "$caddy_buffer_config"' EXIT
+trap 'rm -f "$config" "$buffer_config"' EXIT
 if [[ ! -e "$backup_dir/original-buffers.conf" ]]; then
   (umask 077
    for key in net.core.rmem_max net.core.wmem_max net.core.netdev_max_backlog; do
@@ -58,7 +57,6 @@ if [[ ! -e "$backup_dir/original-buffers.conf" ]]; then
    done > "$backup_dir/original-buffers.conf")
 fi
 printf 'net.core.rmem_max = 4194304\nnet.core.wmem_max = 4194304\nnet.core.netdev_max_backlog = 4096\n' > "$buffer_config"
-printf 'net.core.rmem_max = 4194304\nnet.core.wmem_max = 4194304\n' > "$caddy_buffer_config"
 sysctl -p "$buffer_config"
 install -m 0644 "$buffer_config" /etc/sysctl.d/91-abess-tcp-buffers.conf
 # Caddy terminates public TLS in its own network namespace. Host defaults
@@ -69,15 +67,6 @@ if [[ -f "$project/docker-compose.yml" ]]; then
   [[ -n "$container" ]]
   caddy_pid="$(docker inspect --format '{{.State.Pid}}' "$container")"
   [[ "$caddy_pid" =~ ^[1-9][0-9]*$ ]]
-  if [[ ! -e "$backup_dir/caddy-original-buffers.conf" ]]; then
-    (umask 077
-      for key in net.core.rmem_max net.core.wmem_max; do
-        printf '%s = %s\n' "$key" "$(nsenter -t "$caddy_pid" -n sysctl -n "$key")"
-      done > "$backup_dir/caddy-original-buffers.conf")
-  fi
-  nsenter -t "$caddy_pid" -n sysctl -p "$caddy_buffer_config"
-  [[ "$(nsenter -t "$caddy_pid" -n sysctl -n net.core.rmem_max)" = 4194304 ]]
-  [[ "$(nsenter -t "$caddy_pid" -n sysctl -n net.core.wmem_max)" = 4194304 ]]
   previous_public_cc="$(nsenter -t "$caddy_pid" -n sysctl -n net.ipv4.tcp_congestion_control)"
   public_cc="$previous_public_cc"
   if [[ "$previous_public_cc" == cubic || "$previous_public_cc" == reno ]]; then public_cc="$new_cc"; fi
@@ -109,6 +98,5 @@ fi
 [[ "$(systemctl show -p MainPID --value "$forwarding_unit")" == "$engine_before" ]]
 echo "TCP_TUNING previous=$original_cc active=$(sysctl -n net.ipv4.tcp_congestion_control) mtu_probing=$(sysctl -n net.ipv4.tcp_mtu_probing) forwarding_service=$forwarding_unit forwarding_pid_unchanged=true"
 echo 'TCP_TUNING_SCOPE=new_connections; existing_tunnels_preserved=true'
-echo "TCP_BUFFER_TUNING host_rmem_max=$(sysctl -n net.core.rmem_max) host_wmem_max=$(sysctl -n net.core.wmem_max) netdev_backlog=$(sysctl -n net.core.netdev_max_backlog) caddy_rmem_max=$(nsenter -t "$caddy_pid" -n sysctl -n net.core.rmem_max 2>/dev/null || echo not-configured) caddy_wmem_max=$(nsenter -t "$caddy_pid" -n sysctl -n net.core.wmem_max 2>/dev/null || echo not-configured)"
+echo "TCP_BUFFER_TUNING host_rmem_max=$(sysctl -n net.core.rmem_max) host_wmem_max=$(sysctl -n net.core.wmem_max) netdev_backlog=$(sysctl -n net.core.netdev_max_backlog)"
 echo 'TCP_ROLLBACK=sysctl -p /var/lib/abess-network-tuning/original.conf; sysctl -p /var/lib/abess-network-tuning/original-buffers.conf; rm -f /etc/sysctl.d/90-abess-tcp.conf /etc/sysctl.d/91-abess-tcp-buffers.conf'
-echo 'CADDY_BUFFER_ROLLBACK=nsenter -t <caddy-pid> -n sysctl -p /var/lib/abess-network-tuning/caddy-original-buffers.conf'
