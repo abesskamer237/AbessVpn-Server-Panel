@@ -27,10 +27,10 @@ jobs:
             exit 1
           fi
           port="${VPS_PORT:-22}"
-          [[ "$port" =~ ^[0-9]{1,5}$ ]] && (( port >= 1 && port <= 65535 )) || {
+          if ! [[ "$port" =~ ^[0-9]{1,5}$ ]] || (( port < 1 || port > 65535 )); then
             echo "::error::VPS_PORT is invalid."
             exit 1
-          }
+          fi
           echo "::add-mask::$VPS_HOST"
           key_file="$(mktemp)"
           trap 'rm -f "$key_file"' EXIT
