@@ -116,7 +116,7 @@ export function Dashboard({inventory,transactions,resellers,audit,ops,role,user,
       <div className="metric-card"><div className="metric-label"><Users size={13}/>Clients actifs</div><div className="metric-value">{active}{(last7||prev7)>0&&<span className={'metric-trend '+(trend>=0?'up':'down')}>{trend>=0?'+':''}{trend}%</span>}</div><div className="metric-foot">{accounts.length} licences · +{monthly} ce mois</div></div>
       <div className="metric-card"><div className="metric-label"><CalendarClock size={13}/>À renouveler</div><div className="metric-value">{expiring}</div><div className="metric-foot">Expiration sous 3 jours</div></div>
       <div className="metric-card"><div className="metric-label"><Wifi size={13}/>Sessions en ligne</div><div className="metric-value">{sessions}<span className="table-secondary" style={{fontSize:13,marginLeft:4}}>/ {capacity}</span></div><div className="metric-foot">{onlineNodes}/{nodes.length} VPS connectés</div></div>
-      <div className="metric-card"><div className="metric-label"><Activity size={13}/>Trafic consommé</div><div className="metric-value">{humanTraffic(measured.length?used:null)}</div><div className="metric-foot">{percent(used,quota)} % de {compact(bytesToGb(quota))} Go alloués · {measured.length}/{accounts.length} mesurées</div></div>
+      <div className="metric-card"><div className="metric-label"><Activity size={13}/>Trafic débité (×2)</div><div className="metric-value">{humanTraffic(measured.length?used:null)}</div><div className="metric-foot">{percent(used,quota)} % de {compact(bytesToGb(quota))} Go alloués · {measured.length}/{accounts.length} mesurées</div></div>
     </div>
 
     <div className="bento">
@@ -165,7 +165,7 @@ export function Dashboard({inventory,transactions,resellers,audit,ops,role,user,
         <div className="stack" style={{gap:10}}>
           <div className="meter"><div className="meter-head"><span>Agents connectés</span><b>{onlineNodes} / {nodes.length}</b></div><div className="progress"><span style={{width:percent(onlineNodes,nodes.length)+'%'}}/></div></div>
           <div className="meter"><div className="meter-head"><span>Sessions utilisées</span><b>{sessions} / {capacity}</b></div><div className="progress"><span style={{width:percent(sessions,capacity)+'%'}}/></div></div>
-          <div className="meter"><div className="meter-head"><span>Quota consommé</span><b>{percent(used,quota)} %</b></div><div className={'progress '+(percent(used,quota)>85?'warning':'')}><span style={{width:percent(used,quota)+'%'}}/></div></div>
+          <div className="meter"><div className="meter-head"><span>Quota débité (×2)</span><b>{percent(used,quota)} %</b></div><div className={'progress '+(percent(used,quota)>85?'warning':'')}><span style={{width:percent(used,quota)+'%'}}/></div></div>
           {isSuper&&<div className="service-line"><span>Stockage</span><strong>{ops?.storage||'—'}</strong></div>}
         </div>
       </section>}
