@@ -106,7 +106,7 @@ try{
   const sale=sales.find(r=>r.status===201);assert.equal(sale.status,201);
   assert.equal((await call('admin/ssh/accounts',{...saleBody,config:{...saleBody.config,username:'seller_overflow'}},sellerSession)).status,409,
     'reseller cannot create a second customer licence after using its only assigned place');
-  const sellerStatus=(await call('admin/resellers',undefined,sellerSession)).body.find(r=>r.id===seller.body.id);
+  const sellerStatus=(await call('admin/resellers',undefined,admin)).body.find(r=>r.id===seller.body.id);
   assert.deepEqual([sellerStatus.placesUsed,sellerStatus.placesAvailable],[1,0],
     'reseller workspace displays consumed and remaining customer places');assert.equal(sale.body.quotaBytes,1024**3);assert.equal(sale.body.connection.wire,'http-connect');
   assert.equal((await call('auth/me',undefined,sellerSession)).body.credits,3);
@@ -199,7 +199,7 @@ try{
   const managedId=created.body.id;
   const managedOverflow=await call('admin/ssh/managed',{nodeId:managedNode.body.id,label:'Overflow customer',username:'abv_managed02',password:'StrongPass_456',days:7,quotaGb:0.5,maxConnections:1},importerSession);
   assert.equal(managedOverflow.status,409,'managed SSH-WSS licence creation must enforce the reseller place limit');
-  const importerPlaceStatus=(await call('admin/resellers',undefined,importerSession)).body.find(r=>r.id===importer.body.id);
+  const importerPlaceStatus=(await call('admin/resellers',undefined,admin)).body.find(r=>r.id===importer.body.id);
   assert.deepEqual([importerPlaceStatus.placesUsed,importerPlaceStatus.placesAvailable],[2,0],
     'supplier imports and managed SSH-WSS licences both consume customer places');
   assert.equal((await call(`admin/ssh/accounts/${managedId}/config`,{transport:'wss'},importerSession)).status,409,'never export a managed account before node confirmation');
