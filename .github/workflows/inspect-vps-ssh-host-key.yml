@@ -1,0 +1,45 @@
+name: Inspect VPS SSH host identity
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/inspect-vps-ssh-host-key.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fingerprint:
+    name: Read SSH host fingerprint (no login, no changes)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Read the VPS Ed25519 host key
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_PORT: ${{ vars.VPS_PORT }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${VPS_HOST:-}" ]]; then
+            echo "::error::GitHub secret VPS_HOST is empty."
+            exit 1
+          fi
+          port="${VPS_PORT:-22}"
+          [[ "$port" =~ ^[0-9]{1,5}$ ]] && (( port >= 1 && port <= 65535 )) || {
+            echo "::error::VPS_PORT is invalid."
+            exit 1
+          }
+          echo "::add-mask::$VPS_HOST"
+          key_file="$(mktemp)"
+          trap 'rm -f "$key_file"' EXIT
+          ssh-keyscan -T 12 -p "$port" -t ed25519 "$VPS_HOST" 2>/dev/null > "$key_file"
+          test -s "$key_file" || {
+            echo "::error::No Ed25519 SSH host key was returned. Check VPS_HOST, VPS_PORT and SSH availability."
+            exit 1
+          }
+          echo "Observed SSH host fingerprint (verify independently in the Contabo console):"
+          ssh-keygen -lf "$key_file" -E sha256
+          echo "Host key type(s):"
+          awk '{print $2}' "$key_file" | sort -u
