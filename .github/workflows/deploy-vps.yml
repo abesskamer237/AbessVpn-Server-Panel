@@ -237,7 +237,7 @@ jobs:
           fi
           test -s "$HOME/.ssh/known_hosts"
           ssh-keygen -lf "$HOME/.ssh/known_hosts" -E sha256 |
-            grep -Fq 'SHA256:LgoMnkXsbf7RYOw5LRm0ErLVQ6n0JDJBJIAltFxOChc' || {
+            grep -Fq 'SHA256:bbOkBVBY0XxyMLJVAjDmJWLM56VIsyC4+5iaTEopNQM' || {
               echo "::error::VPS SSH host key differs from previously verified installation." >&2
               exit 1
             }
