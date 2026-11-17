@@ -2,8 +2,22 @@
 # Reversible TCP defaults; no service restarts or live routing changes.
 set -euo pipefail
 [[ "$EUID" -eq 0 ]] || { echo 'Root required' >&2; exit 1; }
-engine_before="$(systemctl show -p MainPID --value willy-ssh-ws.service)"
-[[ "$engine_before" =~ ^[1-9][0-9]*$ ]]
+forwarding_unit=""
+for candidate in abess-ssh-ws-sshd.service willy-ssh-ws.service; do
+  if systemctl is-active --quiet "$candidate"; then
+    forwarding_unit="$candidate"
+    break
+  fi
+done
+[[ -n "$forwarding_unit" ]] || {
+  echo 'No supported ABESS SSH forwarding service is active.' >&2
+  exit 1
+}
+engine_before="$(systemctl show -p MainPID --value "$forwarding_unit")"
+[[ "$engine_before" =~ ^[1-9][0-9]*$ ]] || {
+  echo "Cannot read the active forwarding service PID: $forwarding_unit" >&2
+  exit 1
+}
 backup_dir="/var/lib/abess-network-tuning"
 install -d -m 0700 "$backup_dir"
 if [[ ! -e "$backup_dir/original.conf" ]]; then
@@ -65,7 +79,7 @@ finally:
 PYENV
   echo "PUBLIC_TLS_TCP_TUNING previous=$previous_public_cc active=$public_cc mtu_probing=1 caddy_pid_unchanged=true"
 fi
-[[ "$(systemctl show -p MainPID --value willy-ssh-ws.service)" == "$engine_before" ]]
-echo "TCP_TUNING previous=$original_cc active=$(sysctl -n net.ipv4.tcp_congestion_control) mtu_probing=$(sysctl -n net.ipv4.tcp_mtu_probing) forwarding_pid_unchanged=true"
+[[ "$(systemctl show -p MainPID --value "$forwarding_unit")" == "$engine_before" ]]
+echo "TCP_TUNING previous=$original_cc active=$(sysctl -n net.ipv4.tcp_congestion_control) mtu_probing=$(sysctl -n net.ipv4.tcp_mtu_probing) forwarding_service=$forwarding_unit forwarding_pid_unchanged=true"
 echo 'TCP_TUNING_SCOPE=new_connections; existing_tunnels_preserved=true'
 echo 'TCP_ROLLBACK=sysctl -p /var/lib/abess-network-tuning/original.conf; rm -f /etc/sysctl.d/90-abess-tcp.conf'
